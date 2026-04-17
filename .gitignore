@@ -1,0 +1,23 @@
+node_modules/
+dist/
+*.log
+
+# Test results
+test-results/
+
+# IDE
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+
+# Server
+server/.gradle/
+server/build/
+
+# Tauri
+tauri/src-tauri/target/
+
+# Coverage
+coverage/

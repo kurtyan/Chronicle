@@ -1,0 +1,17 @@
+# Generated from web build
+public/
+
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Data
+data/
+
+# Test results
+test-results/
+
+# Logs
+*.log
