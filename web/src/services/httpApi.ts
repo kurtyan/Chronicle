@@ -4,9 +4,8 @@ import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession
 
 // Server base URL — in dev mode Vite proxies /api, so use relative path.
 // In production Tauri build, connect directly to the local server.
-const SERVER_URL = import.meta.env?.PROD
-  ? 'http://localhost:8080'
-  : ''
+const isProd = typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD === true
+const SERVER_URL = isProd ? 'http://localhost:8080' : ''
 
 const client = axios.create({ baseURL: SERVER_URL })
 

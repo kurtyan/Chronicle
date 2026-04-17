@@ -26,7 +26,7 @@ export function BoardPage() {
   const { t } = useI18n()
   const {
     tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
-    statusFilter, isTodayFilter, savedFilterTypes, draftTask, currentSession,
+    statusFilter, isTodayFilter, draftTask, currentSession,
     loadTodos, setActiveTask, updateTask, deleteTask, markDone,
     submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
     startDraft, commitDraft, cancelDraft,
