@@ -75,9 +75,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       } else if (statusFilter === 'DROPPED') {
         tasks = await api.fetchTodos(undefined, 'DROPPED')
       } else {
-        // statusFilter === null: show non-done/non-dropped
-        const typesParam = filterTypes.length > 0 ? filterTypes.join(',') : undefined
-        tasks = await api.fetchTodos(typesParam, 'PENDING,DOING')
+        // statusFilter === null: show non-done/non-dropped with OR type filter
+        let tasks: Task[]
+        if (filterTypes.length === 0) {
+          // All types
+          tasks = await api.fetchTodos(undefined, 'PENDING,DOING')
+        } else if (filterTypes.length === 1) {
+          // Single type — direct call
+          tasks = await api.fetchTodos(filterTypes[0], 'PENDING,DOING')
+        } else {
+          // Multiple types — fetch each separately and merge (OR semantics)
+          const results = await Promise.all(
+            filterTypes.map((type) => api.fetchTodos(type, 'PENDING,DOING'))
+          )
+          const merged = results.flat()
+          const ids = new Set<string>()
+          tasks = merged.filter((t) => {
+            if (ids.has(t.id)) return false
+            ids.add(t.id)
+            return true
+          }).sort((a, b) => b.updatedAt - a.updatedAt)
+        }
+        set({ tasks, loading: false })
+        return
       }
       set({ tasks, loading: false })
     } catch (e: any) {

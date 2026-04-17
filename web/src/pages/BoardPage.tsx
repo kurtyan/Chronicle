@@ -3,7 +3,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import type { Task, TaskType, TaskEntry } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { X, AlertTriangle, ChevronLeft, Calendar } from 'lucide-react'
+import { X, AlertTriangle } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
@@ -26,7 +26,7 @@ export function BoardPage() {
   const { t } = useI18n()
   const {
     tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
-    statusFilter, isTodayFilter, draftTask, currentSession,
+    statusFilter, isTodayFilter, savedFilterTypes, draftTask, currentSession,
     loadTodos, setActiveTask, updateTask, deleteTask, markDone,
     submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
     startDraft, commitDraft, cancelDraft,
@@ -95,6 +95,32 @@ export function BoardPage() {
 
   // Expanded filter bar (new + done + dropped slide)
   const [expandedFilter, setExpandedFilter] = useState(false)
+  const autoCollapseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function clearAutoCollapseTimer() {
+    if (autoCollapseRef.current) {
+      clearTimeout(autoCollapseRef.current)
+      autoCollapseRef.current = null
+    }
+  }
+
+  function resetAutoCollapseTimer() {
+    clearAutoCollapseTimer()
+    // Only auto-collapse when no status filter is selected
+    if (statusFilter === null) {
+      autoCollapseRef.current = setTimeout(() => setExpandedFilter(false), 3000)
+    }
+  }
+
+  // Auto-collapse only when no status filter is selected
+  useEffect(() => {
+    if (expandedFilter && statusFilter === null) {
+      autoCollapseRef.current = setTimeout(() => setExpandedFilter(false), 3000)
+    } else {
+      clearAutoCollapseTimer()
+    }
+    return () => clearAutoCollapseTimer()
+  }, [expandedFilter, statusFilter])
 
   // Log editing state (persists across task switches)
   const [logContent, setLogContent] = useState('')
@@ -356,8 +382,8 @@ export function BoardPage() {
   // ==================== Handlers ====================
 
   function collapseWithDelay() {
-    const timer = setTimeout(() => setExpandedFilter(false), 1000)
-    // Store timer for potential cleanup
+    clearAutoCollapseTimer()
+    const timer = setTimeout(() => setExpandedFilter(false), 3000)
     ;(window as any).__filterCollapseTimer = timer
   }
 
@@ -569,19 +595,11 @@ export function BoardPage() {
         />
         {/* Header: filter bar */}
         <div className="h-10 px-3 border-b flex items-center justify-between">
-          <div className="flex gap-1 items-center min-w-0 flex-1">
-            {/* Today filter — standalone, mutually exclusive with type filters */}
-            {isTodayFilter ? (
-              <button
-                className="text-xs px-2 py-0.5 rounded bg-blue-500 text-white transition flex items-center gap-1"
-                onClick={() => setTodayFilter(false)}
-              >
-                <Calendar className="w-3 h-3" />
-                {t('task.today')}
-              </button>
-            ) : (
+          {/* Left: type buttons + Today */}
+          <div className="flex items-center gap-1">
+            {/* When in Today view, only show Today button */}
+            {!isTodayFilter && (
               <>
-                {/* Type filters — multi-select */}
                 {(['TODO', 'TOREAD', 'DAILY_IMPROVE'] as TaskType[]).map((typeKey) => (
                   <button
                     key={typeKey}
@@ -595,83 +613,105 @@ export function BoardPage() {
                     {t(`type.${typeKey.toLowerCase()}`)}
                   </button>
                 ))}
-
-                {/* Status filter expansion — New + Done + Dropped slide */}
-                <div className="flex gap-1 ml-2 overflow-hidden relative">
-                  {/* Collapse arrow or expanded buttons */}
-                  {expandedFilter ? (
-                    <>
-                      <button
-                        className="text-xs px-2 py-0.5 rounded transition hover:bg-muted text-muted-foreground whitespace-nowrap"
-                        onClick={handleNewTask}
-                      >
-                        {t('task.newLabel')}
-                      </button>
-                      <button
-                        className={`text-xs px-2 py-0.5 rounded transition whitespace-nowrap ${
-                          statusFilter === 'DONE'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'hover:bg-muted text-muted-foreground'
-                        }`}
-                        onClick={() => {
-                          if (statusFilter === 'DONE') {
-                            setStatusFilter(null)
-                            collapseWithDelay()
-                          } else {
-                            setExpandedFilter(true)
-                            setStatusFilter('DONE')
-                          }
-                        }}
-                      >
-                        {t('filter.done')}
-                      </button>
-                      <button
-                        className={`text-xs px-2 py-0.5 rounded transition whitespace-nowrap ${
-                          statusFilter === 'DROPPED'
-                            ? 'bg-primary text-primary-foreground'
-                            : 'hover:bg-muted text-muted-foreground'
-                        }`}
-                        onClick={() => {
-                          if (statusFilter === 'DROPPED') {
-                            setStatusFilter(null)
-                            collapseWithDelay()
-                          } else {
-                            setExpandedFilter(true)
-                            setStatusFilter('DROPPED')
-                          }
-                        }}
-                      >
-                        {t('filter.dropped')}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        className="text-xs px-1 py-0.5 rounded hover:bg-muted text-muted-foreground transition"
-                        onClick={() => setExpandedFilter(true)}
-                        title={t('task.expandFilters')}
-                      >
-                        <ChevronLeft className="w-3 h-3" />
-                      </button>
-                    </>
-                  )}
-                </div>
               </>
+            )}
+            {isTodayFilter ? (
+              <button
+                className="text-xs px-2 py-0.5 rounded bg-blue-500 text-white transition"
+                onClick={() => setTodayFilter(false)}
+              >
+                {t('task.today')}
+              </button>
+            ) : (
+              <button
+                className="text-xs px-2 py-0.5 rounded transition hover:bg-muted text-muted-foreground"
+                onClick={() => setTodayFilter(true)}
+              >
+                {t('task.today')}
+              </button>
             )}
           </div>
 
-          {/* Today toggle button (when not in today view) */}
-          {!isTodayFilter && (
-            <button
-              className={`text-xs px-2 py-0.5 rounded transition flex items-center gap-1 ${
-                expandedFilter ? '' : 'hover:bg-muted text-muted-foreground'
-              }`}
-              onClick={() => setTodayFilter(true)}
-              title={t('task.today')}
+          {/* Status filter expansion — animated NEW | < / New-Done-Dropped */}
+          <div
+            className="overflow-hidden transition-all duration-300 ease-in-out ml-2"
+            style={{ maxWidth: expandedFilter ? '260px' : '80px' }}
+          >
+            <div
+              className="flex gap-1 whitespace-nowrap relative"
+              onClick={() => resetAutoCollapseTimer()}
             >
-              <Calendar className="w-3 h-3" />
-            </button>
-          )}
+              {/* Collapsed: NEW | < */}
+              <span
+                className={`inline-flex shrink-0 transition-opacity duration-200 ${
+                  !expandedFilter ? 'opacity-100' : 'opacity-0 pointer-events-none absolute'
+                }`}
+              >
+                <button
+                  className="text-xs px-2 py-0.5 rounded-l border border-border transition hover:bg-muted text-muted-foreground whitespace-nowrap"
+                  onClick={handleNewTask}
+                >
+                  {t('task.newLabel')}
+                </button>
+                <button
+                  className="text-xs px-1.5 py-0.5 rounded-r border border-l-0 border-border transition hover:bg-muted text-muted-foreground"
+                  onClick={() => setExpandedFilter(true)}
+                >
+                  &lt;
+                </button>
+              </span>
+
+              {/* Expanded: New | Done | Dropped */}
+              <span
+                className={`inline-flex shrink-0 transition-opacity duration-200 ${
+                  expandedFilter ? 'opacity-100' : 'opacity-0 pointer-events-none absolute'
+                }`}
+              >
+                <button
+                  className="text-xs px-2 py-0.5 rounded transition hover:bg-muted text-muted-foreground whitespace-nowrap"
+                  onClick={handleNewTask}
+                >
+                  {t('task.newLabel')}
+                </button>
+                <button
+                  className={`text-xs px-2 py-0.5 rounded transition whitespace-nowrap ${
+                    statusFilter === 'DONE'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'hover:bg-muted text-muted-foreground'
+                  }`}
+                  onClick={() => {
+                    if (statusFilter === 'DONE') {
+                      setStatusFilter(null)
+                      clearAutoCollapseTimer()
+                      collapseWithDelay()
+                    } else {
+                      setStatusFilter('DONE')
+                    }
+                  }}
+                >
+                  {t('filter.done')}
+                </button>
+                <button
+                  className={`text-xs px-2 py-0.5 rounded transition whitespace-nowrap ${
+                    statusFilter === 'DROPPED'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'hover:bg-muted text-muted-foreground'
+                  }`}
+                  onClick={() => {
+                    if (statusFilter === 'DROPPED') {
+                      setStatusFilter(null)
+                      clearAutoCollapseTimer()
+                      collapseWithDelay()
+                    } else {
+                      setStatusFilter('DROPPED')
+                    }
+                  }}
+                >
+                  {t('filter.dropped')}
+                </button>
+              </span>
+            </div>
+          </div>
         </div>
         {/* Task list */}
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
