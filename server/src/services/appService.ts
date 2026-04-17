@@ -102,41 +102,22 @@ export class AppService {
     startOfDay.setHours(0, 0, 0, 0)
     const ts = startOfDay.getTime()
 
-    const db = getDb()
-    const todayTasks = db.exec(
-      `SELECT * FROM tasks WHERE created_at >= ${ts} ORDER BY created_at DESC`
-    )
+    const tasks = getAllTasks()
+    const todayTasks = tasks.filter(t => t.createdAt >= ts)
 
-    const rows: Task[] = todayTasks.length > 0 ? todayTasks[0].columns.map((col, i) => {
-      const obj: any = {}
-      todayTasks[0].columns.forEach((c, j) => { obj[c] = todayTasks[0].values[i][j] })
-      return obj
-    }).map((row: any) => ({
-      id: row.id,
-      title: row.title,
-      type: row.type,
-      priority: row.priority,
-      tags: row.tags ? JSON.parse(row.tags) : [],
-      status: row.status,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      startedAt: row.started_at,
-      completedAt: row.completed_at,
-      dueDate: row.due_date,
-    })) : []
+    const completedResult = getDb().prepare(
+      'SELECT COUNT(*) as count FROM tasks WHERE completed_at >= ?'
+    ).get(ts) as { count: number }
 
-    const completedResult = db.exec(
-      `SELECT COUNT(*) as count FROM tasks WHERE completed_at >= ${ts}`
-    )
-    const inProgressResult = db.exec(
-      `SELECT COUNT(*) as count FROM tasks WHERE status = 'DOING'`
-    )
+    const inProgressResult = getDb().prepare(
+      "SELECT COUNT(*) as count FROM tasks WHERE status = 'DOING'"
+    ).get() as { count: number }
 
     return {
-      totalToday: todayTasks.length > 0 ? todayTasks[0].values.length : 0,
-      completedToday: completedResult[0]?.values[0][0] ?? 0,
-      inProgress: inProgressResult[0]?.values[0][0] ?? 0,
-      tasks: rows,
+      totalToday: todayTasks.length,
+      completedToday: completedResult.count,
+      inProgress: inProgressResult.count,
+      tasks: todayTasks,
     }
   }
 
@@ -145,25 +126,19 @@ export class AppService {
     byPriority: Record<string, number>
     totalTasks: number
   }> {
-    const db = getDb()
-    const result = db.exec('SELECT type, priority FROM tasks')
+    const rows = getDb().prepare('SELECT type, priority FROM tasks').all() as { type: string; priority: string }[]
     const byType: Record<string, number> = {}
     const byPriority: Record<string, number> = {}
 
-    if (result.length > 0) {
-      const cols = result[0].columns
-      for (const row of result[0].values) {
-        const type = row[cols.indexOf('type')] as string
-        const priority = row[cols.indexOf('priority')] as string
-        byType[type] = (byType[type] || 0) + 1
-        byPriority[priority] = (byPriority[priority] || 0) + 1
-      }
+    for (const row of rows) {
+      byType[row.type] = (byType[row.type] || 0) + 1
+      byPriority[row.priority] = (byPriority[row.priority] || 0) + 1
     }
 
     return {
       byType,
       byPriority,
-      totalTasks: result.length > 0 ? result[0].values.length : 0,
+      totalTasks: rows.length,
     }
   }
 }

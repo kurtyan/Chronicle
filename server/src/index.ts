@@ -4,6 +4,9 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { AppService } from './services/appService'
 import { initDb } from './db'
+import { getConfig } from './config'
+import { startBackupService } from './services/backupService'
+import { exportDatabase, importDatabase, getSettingsInfo } from './services/settingsService'
 import fs from 'fs'
 
 const app = new Hono()
@@ -108,6 +111,38 @@ app.get('/api/reports/summary', async (c) => {
   return c.json(await service.fetchSummary())
 })
 
+// --- Settings API ---
+app.get('/api/settings/export', async (c) => {
+  const { data, path: dbPath } = exportDatabase()
+  const fileName = dbPath.split('/').pop() ?? 'tasks.db'
+  c.header('Content-Disposition', `attachment; filename="${fileName}"`)
+  c.header('Content-Type', 'application/octet-stream')
+  return c.body(new Uint8Array(data))
+})
+
+app.post('/api/settings/import', async (c) => {
+  try {
+    const formData = await c.req.formData()
+    const file = formData.get('file')
+    if (!file || typeof file === 'string') {
+      return c.json({ error: 'No file uploaded' }, 400)
+    }
+
+    // Handle both File and Blob types
+    const arrayBuffer = await file.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+
+    const result = await importDatabase(buffer)
+    return c.json(result)
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Import failed' }, 400)
+  }
+})
+
+app.get('/api/settings/info', async (c) => {
+  return c.json(getSettingsInfo())
+})
+
 // --- Static files with SPA fallback ---
 app.use('/assets/*', serveStatic({ root: './public' }))
 app.use('/favicon.ico', serveStatic({ path: './public/favicon.ico' }))
@@ -116,9 +151,12 @@ app.get('*', (c) => {
 })
 
 // --- Start ---
-const port = 8080
+const config = getConfig()
+const port = config.server.port
+const host = config.server.host
 
-initDb().then(() => {
-  serve({ fetch: app.fetch, port })
-  console.log(`Server running at http://localhost:${port}`)
-})
+initDb()
+startBackupService()
+
+serve({ fetch: app.fetch, port, hostname: host })
+console.log(`Server running at http://${host}:${port}`)

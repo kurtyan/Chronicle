@@ -129,4 +129,21 @@ export const translations: Record<string, TranslationEntry> = {
   'report.noSessions': { 'zh-CN': '暂无工作记录', en: 'No work sessions' },
   'report.workPeriod': { 'zh-CN': '工作时间', en: 'Work Period' },
   'report.trackedTask': { 'zh-CN': '追踪任务', en: 'Tracked Task' },
+
+  // Settings
+  'sidebar.settings': { 'zh-CN': '设置', en: 'Settings' },
+  'settings.title': { 'zh-CN': '设置', en: 'Settings' },
+  'settings.databaseInfo': { 'zh-CN': '数据库信息', en: 'Database Info' },
+  'settings.dbPath': { 'zh-CN': '数据库路径', en: 'Database Path' },
+  'settings.dbSize': { 'zh-CN': '数据库大小', en: 'Database Size' },
+  'settings.lastBackup': { 'zh-CN': '上次备份', en: 'Last Backup' },
+  'settings.never': { 'zh-CN': '从未', en: 'Never' },
+  'settings.export': { 'zh-CN': '导出数据库', en: 'Export Database' },
+  'settings.import': { 'zh-CN': '导入数据库', en: 'Import Database' },
+  'settings.exporting': { 'zh-CN': '导出中...', en: 'Exporting...' },
+  'settings.importing': { 'zh-CN': '导入中...', en: 'Importing...' },
+  'settings.exportSuccess': { 'zh-CN': '导出成功', en: 'Export successful' },
+  'settings.importSuccess': { 'zh-CN': '导入成功', en: 'Import successful' },
+  'settings.exportError': { 'zh-CN': '导出失败', en: 'Export failed' },
+  'settings.importError': { 'zh-CN': '导入失败', en: 'Import failed' },
 }

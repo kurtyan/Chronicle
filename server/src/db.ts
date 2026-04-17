@@ -1,34 +1,16 @@
-import initSqlJs, { type Database } from 'sql.js'
-import path from 'path'
-import fs from 'fs'
+import Database from 'better-sqlite3'
+import { getDbPath, ensureDataDir } from './config'
 
-const dbDir = path.join(process.cwd(), 'data')
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true })
+let db: Database.Database | null = null
 
-const dbPath = path.join(dbDir, 'tasks.db')
+export function initDb() {
+  ensureDataDir()
+  const dbPath = getDbPath()
 
-let db: Database
+  db = new Database(dbPath)
+  db.pragma('journal_mode = WAL')
 
-export async function initDb() {
-  const SQL = await initSqlJs()
-
-  if (fs.existsSync(dbPath)) {
-    // Migrate: add updated_at column if missing
-    db = new SQL.Database(new Uint8Array(fs.readFileSync(dbPath)))
-    try {
-      db.run('ALTER TABLE tasks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0')
-      db.run('UPDATE tasks SET updated_at = created_at WHERE updated_at = 0')
-      saveDb()
-      console.log('Migration: added updated_at column')
-    } catch {
-      // Column already exists or no tasks table yet
-    }
-    return
-  }
-
-  db = new SQL.Database()
-
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -44,7 +26,7 @@ export async function initDb() {
     )
   `)
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_entries (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -55,7 +37,7 @@ export async function initDb() {
     )
   `)
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS work_sessions (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -65,16 +47,23 @@ export async function initDb() {
     )
   `)
 
-  saveDb()
   console.log('Database initialized:', dbPath)
 }
 
-export function saveDb() {
-  const data = db.export()
-  const buffer = Buffer.from(data)
-  fs.writeFileSync(dbPath, buffer)
+export function getDb(): Database.Database {
+  if (!db) {
+    throw new Error('Database not initialized. Call initDb() first.')
+  }
+  return db
 }
 
-export function getDb() {
-  return db
+export function getDbFilePath(): string {
+  return getDbPath()
+}
+
+export function closeDb(): void {
+  if (db) {
+    db.close()
+    db = null
+  }
 }

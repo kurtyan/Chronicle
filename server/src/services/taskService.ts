@@ -1,4 +1,4 @@
-import { getDb, saveDb } from '../db'
+import { getDb } from '../db'
 
 export interface Task {
   id: string
@@ -49,27 +49,15 @@ function rowToTaskEntry(row: any): TaskEntry {
 }
 
 function queryOne(sql: string, params: any[] = []): any | null {
-  const db = getDb()
-  const stmt = db.prepare(sql)
-  stmt.bind(params)
-  const result = stmt.step() ? stmt.getAsObject() : null
-  stmt.free()
-  return result
+  return getDb().prepare(sql).get(...params)
 }
 
 function queryAll(sql: string, params: any[] = []): any[] {
-  const db = getDb()
-  const stmt = db.prepare(sql)
-  stmt.bind(params)
-  const rows: any[] = []
-  while (stmt.step()) rows.push(stmt.getAsObject())
-  stmt.free()
-  return rows
+  return getDb().prepare(sql).all(...params)
 }
 
 function run(sql: string, params: any[] = []) {
-  getDb().run(sql, params)
-  saveDb()
+  getDb().prepare(sql).run(...params)
 }
 
 export function getAllTasks(filters?: { type?: string; priority?: string; status?: string[] }): Task[] {
@@ -189,17 +177,10 @@ export function markTaskDone(id: string): Task | null {
 }
 
 export function deleteTask(id: string): boolean {
-  const db = getDb()
-  // Delete entries first
-  db.run('DELETE FROM task_entries WHERE task_id = ?', [id])
-  const stmt = db.prepare('DELETE FROM tasks WHERE id = ?')
-  stmt.bind([id])
-  stmt.step()
-  stmt.free()
-  saveDb()
-
-  const rows = db.exec('SELECT changes() as count')
-  return rows.length > 0 && rows[0].values[0][0] > 0
+  const result = getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id)
+  // Also delete entries
+  getDb().prepare('DELETE FROM task_entries WHERE task_id = ?').run(id)
+  return result.changes > 0
 }
 
 // --- Task Entries ---

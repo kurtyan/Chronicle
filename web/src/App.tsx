@@ -1,7 +1,8 @@
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { BoardPage } from './pages/BoardPage'
 import { ReportPage } from './pages/ReportPage'
-import { ListTodo, BarChart3, Square } from 'lucide-react'
+import { SettingsPage } from './pages/SettingsPage'
+import { ListTodo, BarChart3, Settings, Square } from 'lucide-react'
 import { useI18n } from './i18n/context'
 
 function Sidebar() {
@@ -12,6 +13,7 @@ function Sidebar() {
   const navItems = [
     { path: '/', icon: <ListTodo className="w-5 h-5" />, label: t('sidebar.board') },
     { path: '/report', icon: <BarChart3 className="w-5 h-5" />, label: t('sidebar.report') },
+    { path: '/settings', icon: <Settings className="w-5 h-5" />, label: t('sidebar.settings') },
   ]
 
   return (
@@ -48,6 +50,7 @@ function Layout() {
         <Routes>
           <Route path="/" element={<BoardPage />} />
           <Route path="/report" element={<ReportPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
     </div>
