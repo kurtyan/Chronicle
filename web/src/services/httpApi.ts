@@ -2,10 +2,12 @@ import axios from 'axios'
 import type { ApiInterface } from './apiTypes'
 import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession } from '@/types'
 
-// Server base URL — in dev mode Vite proxies /api, so use relative path.
-// In production Tauri build, connect directly to the local server.
-const isProd = typeof import.meta !== 'undefined' && (import.meta as any).env?.PROD === true
-const SERVER_URL = isProd ? 'http://localhost:8080' : ''
+// Server base URL:
+// - Tauri production build: connects to localhost:8080 (detected via window.__TAURI__)
+// - Web served by the server itself: uses relative path, works on whatever port the server uses.
+// - Dev mode (Vite): relative path, proxied to localhost:8080 by Vite.
+const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI__
+const SERVER_URL = isTauri ? 'http://localhost:8080' : ''
 
 const client = axios.create({ baseURL: SERVER_URL })
 
