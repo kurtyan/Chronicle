@@ -1,0 +1,11 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for the app",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "http:default",
+    "fs:allow-appdata-read",
+    "fs:allow-appdata-write"
+  ]
+}
