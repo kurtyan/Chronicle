@@ -1,23 +1,16 @@
 import type { ApiInterface } from './apiTypes'
 import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession } from '@/types'
 
-// Dev mode (Vite dev server, import.meta.env.DEV): always use HTTP so web and Tauri share the same backend.
-// Production Tauri build (!import.meta.env.DEV + __TAURI_INTERNALS__): use embedded sql.js + Tauri FS.
-const isDev = typeof import.meta !== 'undefined' && import.meta.env?.DEV === true
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
-const useEmbedded = !isDev && isTauri
+// Deployment: server API + Tauri UI.
+// Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
+// The embedded sql.js path is no longer used.
 
 let _api: ApiInterface | null = null
 
 async function getApi(): Promise<ApiInterface> {
   if (!_api) {
-    if (useEmbedded) {
-      const { embeddedApi } = await import('./embeddedApi')
-      _api = embeddedApi
-    } else {
-      const { httpApi } = await import('./httpApi')
-      _api = httpApi
-    }
+    const { httpApi } = await import('./httpApi')
+    _api = httpApi
   }
   return _api
 }
