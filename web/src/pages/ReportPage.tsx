@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { fetchTodayReport, fetchSummary, fetchSessions } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight } from 'lucide-react'
@@ -46,12 +46,32 @@ export function ReportPage() {
   const [sessionsLoading, setSessionsLoading] = useState(false)
 
   // Classic report data
-  useEffect(() => {
+  const loadData = useCallback(() => {
+    setLoading(true)
     Promise.all([fetchTodayReport(), fetchSummary()])
       .then(([r, s]) => { setReport(r); setSummary(s) })
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  // Cmd+R: refresh report
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+      const mod = isMac ? e.metaKey : e.ctrlKey
+      if (mod && e.key === 'r') {
+        e.preventDefault()
+        e.stopPropagation()
+        loadData()
+      }
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [loadData])
 
   // Fetch sessions when time view or date changes
   useEffect(() => {

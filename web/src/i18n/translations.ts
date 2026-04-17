@@ -146,4 +146,8 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.importSuccess': { 'zh-CN': '导入成功', en: 'Import successful' },
   'settings.exportError': { 'zh-CN': '导出失败', en: 'Export failed' },
   'settings.importError': { 'zh-CN': '导入失败', en: 'Import failed' },
+  'settings.importWarning': { 'zh-CN': '确认导入数据库？', en: 'Confirm Database Import?' },
+  'settings.importWarningDesc': { 'zh-CN': '当前所有数据将被替换，并自动创建备份。', en: 'All current data will be replaced. A backup will be created automatically.' },
+  'settings.importConfirm': { 'zh-CN': '确认导入', en: 'Confirm Import' },
+  'common.cancel': { 'zh-CN': '取消', en: 'Cancel' },
 }

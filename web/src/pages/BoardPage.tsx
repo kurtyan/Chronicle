@@ -350,6 +350,14 @@ export function BoardPage() {
         return
       }
 
+      // Cmd+R: refresh task list
+      if (mod && e.key === 'r') {
+        e.preventDefault()
+        e.stopPropagation()
+        loadTodos()
+        return
+      }
+
       // Cmd+W: blur editor (when focused inside RichEditor) OR cancel done/dropped filter
       if (mod && e.key === 'w') {
         if (isInEditor) {

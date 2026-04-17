@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
-import { Database, Download, Upload, AlertCircle, CheckCircle } from 'lucide-react'
+import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { save } from '@tauri-apps/plugin-dialog'
+import { writeFile } from '@tauri-apps/plugin-fs'
 
 interface SettingsInfo {
   dbPath: string
@@ -27,6 +30,8 @@ export function SettingsPage() {
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [pendingImportFile, setPendingImportFile] = useState<File | null>(null)
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false)
 
   useEffect(() => {
     fetch('/api/settings/info')
@@ -41,15 +46,30 @@ export function SettingsPage() {
     try {
       const res = await fetch('/api/settings/export')
       if (!res.ok) throw new Error('Export failed')
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'tasks.db'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      const buffer = await res.arrayBuffer()
+
+      // Try native save dialog first (Tauri), fallback to browser download
+      try {
+        const filePath = await save({
+          title: 'Export Database',
+          defaultPath: 'tasks.db',
+          filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+        })
+        if (!filePath) { setExporting(false); return }
+        await writeFile(filePath, new Uint8Array(buffer))
+      } catch {
+        // Fallback: browser download
+        const blob = new Blob([buffer], { type: 'application/octet-stream' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'tasks.db'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      }
+
       setMessage({ type: 'success', text: t('settings.exportSuccess') })
     } catch {
       setMessage({ type: 'error', text: t('settings.exportError') })
@@ -61,21 +81,22 @@ export function SettingsPage() {
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    setPendingImportFile(file)
+    setShowConfirmDialog(true)
+    e.target.value = ''
+  }
 
+  const confirmImport = async () => {
+    if (!pendingImportFile) return
+    setShowConfirmDialog(false)
     setImporting(true)
     setMessage(null)
     try {
       const formData = new FormData()
-      formData.set('file', file)
-
-      const res = await fetch('/api/settings/import', {
-        method: 'POST',
-        body: formData,
-      })
+      formData.set('file', pendingImportFile)
+      const res = await fetch('/api/settings/import', { method: 'POST', body: formData })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Import failed')
-
-      // Refresh info
       const infoRes = await fetch('/api/settings/info')
       setInfo(await infoRes.json())
       setMessage({ type: 'success', text: t('settings.importSuccess') })
@@ -83,7 +104,7 @@ export function SettingsPage() {
       setMessage({ type: 'error', text: err.message || t('settings.importError') })
     } finally {
       setImporting(false)
-      e.target.value = ''
+      setPendingImportFile(null)
     }
   }
 
@@ -156,6 +177,33 @@ export function SettingsPage() {
           {message.text}
         </div>
       )}
+
+      {/* Import Confirmation Dialog */}
+      <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="w-5 h-5" />
+              <DialogTitle>{t('settings.importWarning')}</DialogTitle>
+            </div>
+            <DialogDescription>{t('settings.importWarningDesc')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              onClick={() => setShowConfirmDialog(false)}
+              className="px-4 py-2 rounded-md border hover:bg-muted transition"
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              onClick={confirmImport}
+              className="px-4 py-2 rounded-md bg-destructive text-destructive-foreground hover:opacity-90 transition"
+            >
+              {t('settings.importConfirm')}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
