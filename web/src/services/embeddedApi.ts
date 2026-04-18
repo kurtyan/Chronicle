@@ -432,6 +432,28 @@ export class EmbeddedApiProvider implements ApiInterface {
       totalTasks: result.length > 0 ? result[0].values.length : 0,
     }
   }
+
+  async fetchRangeStats(start: number, end: number): Promise<{
+    total: number
+    completed: number
+    inProgress: number
+  }> {
+    await this.ensureDb()
+    const totalResult = this.db!.exec(
+      `SELECT COUNT(*) as count FROM tasks WHERE created_at >= ${start} AND created_at <= ${end}`
+    )
+    const completedResult = this.db!.exec(
+      `SELECT COUNT(*) as count FROM tasks WHERE completed_at IS NOT NULL AND completed_at >= ${start} AND completed_at <= ${end}`
+    )
+    const inProgressResult = this.db!.exec(
+      `SELECT COUNT(DISTINCT t.id) as count FROM tasks t INNER JOIN work_sessions ws ON ws.task_id = t.id WHERE ws.started_at >= ${start} AND ws.started_at <= ${end} AND t.status != 'DONE' AND t.status != 'DROPPED'`
+    )
+    return {
+      total: totalResult.length > 0 ? Number(totalResult[0].values[0][0]) : 0,
+      completed: completedResult.length > 0 ? Number(completedResult[0].values[0][0]) : 0,
+      inProgress: inProgressResult.length > 0 ? Number(inProgressResult[0].values[0][0]) : 0,
+    }
+  }
 }
 
 export const embeddedApi = new EmbeddedApiProvider()

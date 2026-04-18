@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
-import { fetchTodayReport, fetchSummary, fetchSessions } from '@/services/api'
+import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { Task, WorkSession } from '@/types'
@@ -32,7 +32,7 @@ function formatDuration(ms: number): string {
 
 export function ReportPage() {
   const { t, dateLocale } = useI18n()
-  const [report, setReport] = useState<ReportData | null>(null)
+  const [_report, setReport] = useState<ReportData | null>(null)
   const [summary, setSummary] = useState<SummaryData | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -44,6 +44,9 @@ export function ReportPage() {
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [sessionTasks, setSessionTasks] = useState<Record<string, Task>>({})
   const [sessionsLoading, setSessionsLoading] = useState(false)
+
+  // Date-range stats (updates with selected date/view)
+  const [dateRangeStats, setDateRangeStats] = useState({ total: 0, completed: 0, inProgress: 0 })
 
   // Classic report data
   const loadData = useCallback(() => {
@@ -73,7 +76,7 @@ export function ReportPage() {
     return () => window.removeEventListener('keydown', handler, true)
   }, [loadData])
 
-  // Fetch sessions when time view or date changes
+  // Fetch sessions + compute date-range stats when time view or date changes
   useEffect(() => {
     const abortController = new AbortController()
     setSessionsLoading(true)
@@ -90,10 +93,6 @@ export function ReportPage() {
       const weekStart = dfStartOfWeek(selectedDate, { weekStartsOn: 1 })
       weekStart.setHours(0, 0, 0, 0)
       start = weekStart.getTime()
-      const weekEnd = addDays(weekStart, 1)
-      weekEnd.setHours(23, 59, 59, 999)
-      end = weekEnd.getTime()
-      // Actually, we need the full week
       end = addDays(weekStart, 7).getTime() - 1
     } else {
       const monthStart = startOfMonth(selectedDate)
@@ -106,6 +105,7 @@ export function ReportPage() {
 
     let isStale = false
 
+    // Fetch sessions
     fetchSessions(start, end).then(sessions => {
       if (isStale || abortController.signal.aborted) return
       setSessions(sessions)
@@ -135,6 +135,17 @@ export function ReportPage() {
         setSessionsLoading(false)
       }
     })
+
+    // Fetch date-range stats from server
+    fetchRangeStats(start, end).then(stats => {
+      if (isStale || abortController.signal.aborted) return
+      setDateRangeStats({ total: stats.total, completed: stats.completed, inProgress: stats.inProgress })
+    })
+      .catch(() => {
+        if (!isStale && !abortController.signal.aborted) {
+          setDateRangeStats({ total: 0, completed: 0, inProgress: 0 })
+        }
+      })
 
     return () => {
       isStale = true
@@ -253,60 +264,59 @@ export function ReportPage() {
   const today = format(new Date(), 'PPP EEEE', { locale: dateLocale })
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 p-4">
       <h1 className="text-2xl font-bold">{t('report.title')}</h1>
       <p className="text-muted-foreground">{today}</p>
 
-      {/* Classic stats cards */}
+      {/* Date view tabs + navigation - moved to top */}
+      <div className="flex items-center gap-4">
+        <div className="flex gap-1">
+          {([
+            { key: 'day' as TimeView, label: 'day' },
+            { key: 'week' as TimeView, label: 'week' },
+            { key: 'month' as TimeView, label: 'month' },
+          ]).map(({ key, label }) => (
+            <button
+              key={key}
+              className={`text-xs px-3 py-1.5 rounded transition ${
+                timeView === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
+              }`}
+              onClick={() => setTimeView(key)}
+            >
+              {t(`report.${label}`)}
+            </button>
+          ))}
+        </div>
+
+        {/* Date navigation */}
+        <div className="flex items-center gap-2">
+          <button className="p-1 rounded hover:bg-muted transition" onClick={navigateLeft}>
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <button
+            className={`text-sm font-medium px-2 py-0.5 rounded transition ${
+              dateDisplay.isToday ? 'bg-muted/50' : 'hover:bg-muted'
+            }`}
+            onClick={navigateReset}
+          >
+            {dateDisplay.text}
+          </button>
+          <button className="p-1 rounded hover:bg-muted transition" onClick={navigateRight}>
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Classic stats cards - now show date-range data */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard icon={<ListTodo className="w-5 h-5" />} label={t('report.todayTotal')} value={report?.totalToday ?? 0} />
-        <StatCard icon={<CheckCircle2 className="w-5 h-5" />} label={t('report.completed')} value={report?.completedToday ?? 0} />
-        <StatCard icon={<Clock className="w-5 h-5" />} label={t('report.inProgress')} value={report?.inProgress ?? 0} />
-        <StatCard icon={<BarChart3 className="w-5 h-5" />} label={t('report.total')} value={summary?.totalTasks ?? 0} />
+        <StatCard icon={<ListTodo className="w-5 h-5" />} label="Total" value={dateRangeStats.total} />
+        <StatCard icon={<CheckCircle2 className="w-5 h-5" />} label={t('report.completed')} value={dateRangeStats.completed} />
+        <StatCard icon={<Clock className="w-5 h-5" />} label={t('report.inProgress')} value={dateRangeStats.inProgress} />
+        <StatCard icon={<BarChart3 className="w-5 h-5" />} label="Overall Tasks" value={summary?.totalTasks ?? 0} />
       </div>
 
       {/* ==================== Work Session Section ==================== */}
       <div className="border rounded-lg flex flex-col" style={{ maxHeight: '600px' }}>
-        {/* Tab bar */}
-        <div className="px-4 py-3 border-b flex items-center gap-4 flex-shrink-0">
-          {/* View tabs */}
-          <div className="flex gap-1">
-            {([
-              { key: 'day' as TimeView, label: 'day' },
-              { key: 'week' as TimeView, label: 'week' },
-              { key: 'month' as TimeView, label: 'month' },
-            ]).map(({ key, label }) => (
-              <button
-                key={key}
-                className={`text-xs px-3 py-1.5 rounded transition ${
-                  timeView === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
-                }`}
-                onClick={() => setTimeView(key)}
-              >
-                {t(`report.${label}`)}
-              </button>
-            ))}
-          </div>
-
-          {/* Date navigation */}
-          <div className="flex items-center gap-2">
-            <button className="p-1 rounded hover:bg-muted transition" onClick={navigateLeft}>
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <button
-              className={`text-sm font-medium px-2 py-0.5 rounded transition ${
-                dateDisplay.isToday ? 'bg-muted/50' : 'hover:bg-muted'
-              }`}
-              onClick={navigateReset}
-            >
-              {dateDisplay.text}
-            </button>
-            <button className="p-1 rounded hover:bg-muted transition" onClick={navigateRight}>
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
         {/* Stats overview */}
         <div className="px-4 py-3 border-b grid grid-cols-3 gap-4 flex-shrink-0">
           <div>

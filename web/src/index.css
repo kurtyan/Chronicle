@@ -4,11 +4,11 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
+    --background: 45 30% 97%;
     --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
+    --card: 45 25% 99%;
     --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
+    --popover: 45 25% 99%;
     --popover-foreground: 222.2 84% 4.9%;
     --primary: 222.2 47.4% 11.2%;
     --primary-foreground: 210 40% 98%;
@@ -25,6 +25,30 @@
     --ring: 222.2 84% 4.9%;
     --radius: 0.5rem;
   }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --background: 220 15% 10%;
+      --foreground: 210 20% 85%;
+      --card: 220 15% 14%;
+      --card-foreground: 210 20% 85%;
+      --popover: 220 15% 14%;
+      --popover-foreground: 210 20% 85%;
+      --primary: 210 20% 85%;
+      --primary-foreground: 220 15% 10%;
+      --secondary: 220 15% 20%;
+      --secondary-foreground: 210 20% 85%;
+      --muted: 220 15% 20%;
+      --muted-foreground: 215 20% 60%;
+      --accent: 220 15% 20%;
+      --accent-foreground: 210 20% 85%;
+      --destructive: 0 63% 50%;
+      --destructive-foreground: 210 40% 98%;
+      --border: 220 15% 25%;
+      --input: 220 15% 25%;
+      --ring: 210 40% 65%;
+    }
+  }
 }
 
 @layer base {
@@ -33,6 +57,8 @@
   }
   body {
     @apply bg-background text-foreground;
+    background-image: radial-gradient(circle at 1px 1px, hsl(var(--muted-foreground) / 0.03) 1px, transparent 0);
+    background-size: 24px 24px;
   }
 }
 

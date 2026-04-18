@@ -1,7 +1,7 @@
 {
-  "productName": "Task Manager",
+  "productName": "Chronicle",
   "version": "1.0.0",
-  "identifier": "com.taskmanager.app",
+  "identifier": "com.chronicle.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -15,7 +15,7 @@
     },
     "windows": [
       {
-        "title": "Task Manager",
+        "title": "Chronicle",
         "width": 1200,
         "height": 800,
         "minWidth": 800,

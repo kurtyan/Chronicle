@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::fs::{OpenOptions, create_dir_all};
+use std::io::Write;
 use tauri::Manager;
 
 #[tauri::command]
@@ -15,18 +17,35 @@ fn get_server_url() -> Result<String, String> {
     Ok(format!("http://{}:{}", host, port))
 }
 
+#[tauri::command]
+fn get_client_log() -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let log_path = format!("{}/.chronicle/logs/client.log", home);
+    std::fs::read_to_string(&log_path)
+        .map_err(|e| format!("Failed to read log: {}", e))
+}
+
+fn init_client_log() {
+    if let Ok(home) = std::env::var("HOME") {
+        let log_dir = format!("{}/.chronicle/logs", home);
+        let _ = create_dir_all(&log_dir);
+        let log_path = format!("{}/client.log", log_dir);
+        // Truncate existing log
+        if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(&log_path) {
+            let _ = writeln!(f, "Chronicle client log initialized");
+        }
+    }
+}
+
 fn main() {
+    init_client_log();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
-        .invoke_handler(tauri::generate_handler![get_server_url])
+        .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![get_server_url, get_client_log])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 

@@ -1,5 +1,10 @@
 import { getDb } from '../db'
 
+function generateTaskId(): string {
+  const row = getDb().prepare('SELECT COUNT(*) as count FROM tasks').get() as { count: number }
+  return `T${String(row.count + 1).padStart(10, '0')}`
+}
+
 export interface Task {
   id: string
   title: string
@@ -94,7 +99,7 @@ export function createTask(data: {
   body?: string
 }): Task {
   const now = Date.now()
-  const id = crypto.randomUUID()
+  const id = generateTaskId()
   const status = data.status ?? 'PENDING'
 
   run(

@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
-import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle } from 'lucide-react'
+import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
-import { writeFile } from '@tauri-apps/plugin-fs'
+import { writeFile, readTextFile } from '@tauri-apps/plugin-fs'
+import { isTauriEnv, apiBase, ensureApiReady } from '@/services/httpApi'
 
 interface SettingsInfo {
   dbPath: string
@@ -24,6 +25,13 @@ function formatTimestamp(ts: number | null): string {
   return new Date(ts).toLocaleString()
 }
 
+// API base URL helper for Tauri vs non-Tauri
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const base = isTauriEnv ? await ensureApiReady() : ''
+  const url = `${base}${path}`
+  return fetch(url, init)
+}
+
 export function SettingsPage() {
   const { t } = useI18n()
   const [info, setInfo] = useState<SettingsInfo | null>(null)
@@ -32,19 +40,31 @@ export function SettingsPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  const [showLog, setShowLog] = useState(false)
+  const [clientLog, setClientLog] = useState('')
+  const [logLoading, setLogLoading] = useState(false)
 
   useEffect(() => {
-    fetch('/api/settings/info')
+    apiFetch('/api/settings/info')
       .then(r => r.json())
       .then(setInfo)
       .catch(() => {})
   }, [])
 
+  useEffect(() => {
+    if (!showLog || !isTauriEnv) return
+    setLogLoading(true)
+    const { invoke } = (window as any).__TAURI__.core
+    invoke<string>('get_client_log')
+      .then(log => { setClientLog(log); setLogLoading(false) })
+      .catch(() => { setClientLog(t('settings.logUnavailable')); setLogLoading(false) })
+  }, [showLog])
+
   const handleExport = async () => {
     setExporting(true)
     setMessage(null)
     try {
-      const res = await fetch('/api/settings/export')
+      const res = await apiFetch('/api/settings/export')
       if (!res.ok) throw new Error('Export failed')
       const buffer = await res.arrayBuffer()
 
@@ -94,10 +114,10 @@ export function SettingsPage() {
     try {
       const formData = new FormData()
       formData.set('file', pendingImportFile)
-      const res = await fetch('/api/settings/import', { method: 'POST', body: formData })
+      const res = await apiFetch('/api/settings/import', { method: 'POST', body: formData })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Import failed')
-      const infoRes = await fetch('/api/settings/info')
+      const infoRes = await apiFetch('/api/settings/info')
       setInfo(await infoRes.json())
       setMessage({ type: 'success', text: t('settings.importSuccess') })
     } catch (err: any) {
@@ -175,6 +195,33 @@ export function SettingsPage() {
             <AlertCircle className="w-4 h-4" />
           )}
           {message.text}
+        </div>
+      )}
+
+      {/* Client Log (Tauri only) */}
+      {isTauriEnv && (
+        <div className="bg-card rounded-lg border p-4 mb-6">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Terminal className="w-5 h-5 text-muted-foreground" />
+              <h2 className="text-lg font-medium">Client Log</h2>
+            </div>
+            <button
+              onClick={() => setShowLog(v => !v)}
+              className="text-xs px-2 py-1 rounded border hover:bg-muted transition"
+            >
+              {showLog ? 'Close' : 'View Log'}
+            </button>
+          </div>
+          {showLog && (
+            <textarea
+              readOnly
+              value={clientLog}
+              rows={12}
+              className="w-full text-xs font-mono bg-background border rounded p-2 resize-none"
+              placeholder={logLoading ? 'Loading...' : 'No log available'}
+            />
+          )}
         </div>
       )}
 

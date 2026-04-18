@@ -325,7 +325,7 @@ export function RichEditor({
         .ProseMirror p.is-editor-empty:first-child::before {
           content: attr(data-placeholder);
           float: left;
-          color: #adb5bd;
+          color: hsl(var(--muted-foreground));
           pointer-events: none;
           height: 0;
         }

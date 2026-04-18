@@ -67,7 +67,10 @@ const serverPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'server/package
 const productionPkg = {
   name: serverPkg.name,
   version: serverPkg.version || '1.0.0',
-  private: true,
+  description: 'Chronicle Task Manager - Local-first task tracking server',
+  bin: {
+    'chronicle': 'dist/index.js'
+  },
   scripts: {
     start: 'node dist/index.js',
   },
@@ -92,6 +95,7 @@ node dist/index.js
 `
   : `#!/bin/bash
 cd "$(dirname "$0")"
+chmod +x dist/index.js
 npm install --production
 node dist/index.js
 `

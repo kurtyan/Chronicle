@@ -20,6 +20,18 @@ export default defineConfig(({ command }) => ({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
+        configure: (proxy, _options) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            // Force streaming headers for SSE
+            proxyReq.setHeader('Connection', 'keep-alive')
+            proxyReq.setHeader('X-Accel-Buffering', 'no')
+            // Forward upgrade headers for streaming
+            if (req.headers.accept?.includes('text/event-stream')) {
+              proxyReq.setHeader('Accept', 'text/event-stream')
+              proxyReq.setHeader('Cache-Control', 'no-cache')
+            }
+          })
+        },
       },
     },
   } : undefined,

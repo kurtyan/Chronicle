@@ -110,10 +110,15 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
     )
   }
 
+  const handleContainerClick = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('a')) return
+    handleEdit()
+  }
+
   return (
     <div
       className="py-2 cursor-pointer hover:bg-muted/40 rounded transition group"
-      onClick={handleEdit}
+      onClick={handleContainerClick}
     >
       <div className="flex items-center gap-2 mb-2">
         <span className="text-xs text-muted-foreground">

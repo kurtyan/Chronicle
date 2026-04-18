@@ -66,8 +66,15 @@ export class AppService {
 
   // --- Work Sessions ---
 
-  async takeOverTask(taskId: string): Promise<WorkSession> {
-    return startWorkSession(taskId)
+  async takeOverTask(taskId: string): Promise<{ session: WorkSession; task: Task | null }> {
+    // Auto-start: PENDING → DOING
+    let changedTask: Task | null = null
+    const task = getTaskById(taskId)
+    if (task?.status === 'PENDING') {
+      changedTask = await updateTask(taskId, { status: 'DOING' })
+    }
+    const session = startWorkSession(taskId)
+    return { session, task: changedTask }
   }
 
   async doAfk(): Promise<void> {
@@ -139,6 +146,36 @@ export class AppService {
       byType,
       byPriority,
       totalTasks: rows.length,
+    }
+  }
+
+  async fetchRangeStats(start: number, end: number): Promise<{
+    total: number
+    completed: number
+    inProgress: number
+  }> {
+    // Total tasks created in range
+    const totalResult = getDb().prepare(
+      'SELECT COUNT(*) as count FROM tasks WHERE created_at >= ? AND created_at <= ?'
+    ).get(start, end) as { count: number }
+
+    // Tasks completed in range (completed_at falls within range)
+    const completedResult = getDb().prepare(
+      'SELECT COUNT(*) as count FROM tasks WHERE completed_at IS NOT NULL AND completed_at >= ? AND completed_at <= ?'
+    ).get(start, end) as { count: number }
+
+    // In progress: tasks with sessions in range, not yet DONE
+    const inProgressResult = getDb().prepare(
+      `SELECT COUNT(DISTINCT t.id) as count FROM tasks t
+       INNER JOIN work_sessions ws ON ws.task_id = t.id
+       WHERE ws.started_at >= ? AND ws.started_at <= ?
+       AND t.status != 'DONE' AND t.status != 'DROPPED'`
+    ).get(start, end) as { count: number }
+
+    return {
+      total: totalResult.count,
+      completed: completedResult.count,
+      inProgress: inProgressResult.count,
     }
   }
 }

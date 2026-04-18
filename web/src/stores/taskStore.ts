@@ -108,8 +108,18 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   setActiveTask: async (id) => {
     set({ activeTaskId: id, entryLoading: true })
     try {
-      const entries = id ? await api.fetchTaskEntries(id) : []
-      set({ entries, entryLoading: false })
+      const [task, entries] = id
+        ? await Promise.all([api.getTaskById(id), api.fetchTaskEntries(id)])
+        : [null, []]
+      if (task) {
+        set((state) => ({
+          tasks: state.tasks.map((t) => (t.id === id ? task : t)),
+          entries,
+          entryLoading: false,
+        }))
+      } else {
+        set({ entries, entryLoading: false })
+      }
     } catch {
       set({ entries: [], entryLoading: false })
     }
@@ -148,7 +158,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const updated = await api.markTaskDone(id)
     if (!updated) return null
     set((state) => ({
-      tasks: state.tasks.map((t) => (t.id === id ? updated : t)).sort((a, b) => b.updatedAt - a.updatedAt),
+      tasks: (state.statusFilter === 'DONE'
+        ? state.tasks.map((t) => (t.id === id ? updated : t))
+        : state.tasks.filter((t) => t.id !== id)
+      ).sort((a, b) => b.updatedAt - a.updatedAt),
+      activeTaskId: state.activeTaskId === id ? null : state.activeTaskId,
+      entries: state.activeTaskId === id ? [] : state.entries,
     }))
     return updated
   },
@@ -221,17 +236,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   cancelDraft: () => set({ draftTask: null }),
 
   takeOver: async (taskId) => {
-    // If task is PENDING, update status to DOING
-    const task = get().tasks.find((t) => t.id === taskId)
-    if (task?.status === 'PENDING') {
-      const updated = await api.updateTask(taskId, { status: 'DOING' })
-      if (updated) {
-        set((state) => ({
-          tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
-        }))
-      }
-    }
     const session = await api.takeOverTask(taskId)
+    // Server now handles PENDING→DOING in takeOverTask, re-fetch updated task
+    const updated = await api.getTaskById(taskId)
+    if (updated) {
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+      }))
+    }
     set({ currentSession: session })
     return session
   },
@@ -250,7 +262,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       set({ currentSession: null })
     }
 
+    // Server handles PENDING→DOING in takeOverTask
     const session = await api.takeOverTask(taskId)
+    // Re-fetch updated task for status
+    const updated = await api.getTaskById(taskId)
+    if (updated) {
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+      }))
+    }
     set({ currentSession: session })
   },
 

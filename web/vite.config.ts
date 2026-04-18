@@ -12,6 +12,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api/events': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            proxyReq.setHeader('Connection', 'keep-alive');
+            proxyReq.setHeader('Cache-Control', 'no-cache');
+          });
+        },
+      },
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,

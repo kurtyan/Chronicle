@@ -27,4 +27,9 @@ export interface ApiInterface {
     byPriority: Record<string, number>
     totalTasks: number
   }>
+  fetchRangeStats(start: number, end: number): Promise<{
+    total: number
+    completed: number
+    inProgress: number
+  }>
 }

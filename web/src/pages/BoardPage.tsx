@@ -3,7 +3,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import type { Task, TaskType, TaskEntry } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { X, AlertTriangle } from 'lucide-react'
+import { X, AlertTriangle, Copy } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
@@ -80,7 +80,7 @@ export function BoardPage() {
     })
   }, [activeTaskId, entries])
 
-  const [taskListWidth, setTaskListWidth] = useState(256)
+  const [taskListWidth, setTaskListWidth] = useState(() => Math.round(window.innerWidth * 0.3))
   const isResizing = useRef(false)
   const startX = useRef(0)
   const startWidth = useRef(0)
@@ -253,6 +253,9 @@ export function BoardPage() {
       const isInEditor = activeEl?.closest('[data-rich-editor="true"]') !== null
       const isEditing = isInput || isInEditor
 
+      // Allow Cmd+Plus/Minus/0 for zoom to pass through
+      if (mod && ['+', '-', '=', '0'].includes(e.key)) return
+
       // Ctrl+Enter: Submit (only when NOT editing an entry)
       if (e.ctrlKey && e.key === 'Enter' && !s.editingEntryId) {
         e.preventDefault()
@@ -350,11 +353,15 @@ export function BoardPage() {
         return
       }
 
-      // Cmd+R: refresh task list
+      // Cmd+R: refresh task list and active task detail
       if (mod && e.key === 'r') {
         e.preventDefault()
         e.stopPropagation()
         loadTodos()
+        const currentTaskId = stateRef.current.activeTaskId
+        if (currentTaskId && currentTaskId !== DRAFT_ID) {
+          setActiveTask(currentTaskId)
+        }
         return
       }
 
@@ -460,9 +467,11 @@ export function BoardPage() {
   // ==================== Resize ====================
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
     isResizing.current = true
     startX.current = e.clientX
     startWidth.current = taskListWidth
+    document.body.style.userSelect = 'none'
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!isResizing.current) return
@@ -473,6 +482,7 @@ export function BoardPage() {
 
     const onMouseUp = () => {
       isResizing.current = false
+      document.body.style.userSelect = ''
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
@@ -554,19 +564,42 @@ export function BoardPage() {
     setEditingTitle(false)
   }
 
+  const compositionJustEnded = useRef(false)
+  const handleCompositionEnd = () => {
+    compositionJustEnded.current = true
+    setTimeout(() => { compositionJustEnded.current = false }, 200)
+  }
+
   const handleTitleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.nativeEvent as KeyboardEvent).isComposing) return
+    if (compositionJustEnded.current) {
+      e.preventDefault()
+      return
+    }
     if (e.key === 'Enter') handleTitleSave()
     if (e.key === 'Escape') setEditingTitle(false)
   }
 
+  const focusEditor = () => {
+    // Try TipTap's editor instance first, then fall back to contenteditable element
+    const proseMirror = document.querySelector('.ProseMirror') as HTMLElement | null
+    if (proseMirror) proseMirror.focus()
+  }
+
   const handleDraftTitleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if ((event.nativeEvent as KeyboardEvent).isComposing) return
+    if (compositionJustEnded.current) {
+      event.preventDefault()
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      requestAnimationFrame(() => focusEditor())
+      return
+    }
     if (event.key === 'Enter' || event.key === 'ArrowDown') {
       event.preventDefault()
-      // Focus the RichEditor (TipTap's ProseMirror element)
-      const proseMirror = document.querySelector('[data-rich-editor="true"] .ProseMirror') as HTMLElement | null
-      if (proseMirror) {
-        proseMirror.focus()
-      }
+      focusEditor()
     }
   }
 
@@ -871,6 +904,7 @@ export function BoardPage() {
                       value={draftTitle}
                       onChange={(e) => handleDraftTitleChange(e.target.value)}
                       onKeyDown={handleDraftTitleKeyDown}
+                      onCompositionEnd={handleCompositionEnd}
                       placeholder={t('task.titlePlaceholder')}
                       autoFocus
                     />
@@ -1020,11 +1054,11 @@ export function BoardPage() {
                     </div>
                   </div>
 
-                  {/* Title */}
-                  <div className="px-[10px] py-2">
+                  {/* Title with task ID */}
+                  <div className="px-[10px] py-2 flex items-start gap-3">
                     {editingTitle ? (
                       <input
-                        className="text-xl font-bold w-full bg-transparent border-b border-primary focus:outline-none"
+                        className="text-xl font-bold flex-1 bg-transparent border-b border-primary focus:outline-none"
                         value={titleInput}
                         onChange={(e) => {
                           setTitleInput(e.target.value)
@@ -1036,12 +1070,24 @@ export function BoardPage() {
                       />
                     ) : (
                       <h1
-                        className="text-xl font-bold cursor-pointer hover:text-muted-foreground transition"
+                        className="text-xl font-bold cursor-pointer hover:text-muted-foreground transition flex-1"
                         onClick={handleTitleEdit}
                       >
                         {activeTask.title}
                       </h1>
                     )}
+                    <div className="flex items-center gap-1 shrink-0 mt-1">
+                      <span className="text-xs text-muted-foreground/60 font-mono" title={activeTask.id}>
+                        {activeTask.id}
+                      </span>
+                      <button
+                        className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded"
+                        onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(activeTask.id) }}
+                        title="Copy ID"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                 </div>
 

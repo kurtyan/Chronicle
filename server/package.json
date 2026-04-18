@@ -1,9 +1,12 @@
 {
-  "name": "task-manager-server",
+  "name": "chronicle",
   "private": true,
+  "bin": {
+    "chronicle": "dist/index.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format cjs --minify --clean",
+    "build": "tsup src/index.ts --format cjs --minify --clean --banner.js '#!/usr/bin/env node'",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -14,7 +17,8 @@
     "@tiptap/react": "^3.22.3",
     "@tiptap/starter-kit": "^3.22.3",
     "better-sqlite3": "^12.9.0",
-    "hono": "^4.4.0"
+    "hono": "^4.4.0",
+    "pino": "^9.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

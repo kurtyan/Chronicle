@@ -76,3 +76,10 @@ export async function fetchSummary(): Promise<{
 }> {
   return (await getApi()).fetchSummary()
 }
+export async function fetchRangeStats(start: number, end: number): Promise<{
+  total: number
+  completed: number
+  inProgress: number
+}> {
+  return (await getApi()).fetchRangeStats(start, end)
+}

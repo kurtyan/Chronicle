@@ -7,6 +7,7 @@ export interface ChronicleConfig {
     host: string
     port: number
     database: string
+    logPath?: string
   }
   lauri: {
     serverHost: string

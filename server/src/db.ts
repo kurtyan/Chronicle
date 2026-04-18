@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import { getDbPath, ensureDataDir } from './config'
+import { getLogger } from './logging'
 
 let db: Database.Database | null = null
 
@@ -47,7 +48,7 @@ export function initDb() {
     )
   `)
 
-  console.log('Database initialized:', dbPath)
+  getLogger().info(`Database initialized: ${dbPath}`)
 }
 
 export function getDb(): Database.Database {
