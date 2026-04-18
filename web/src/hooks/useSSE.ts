@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
-import { clientId, isTauriEnv, apiBase, ensureApiReady } from '@/services/httpApi'
+import { clientId } from '@/services/httpApi'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
@@ -96,15 +96,16 @@ function createFetchSSE(
         console.log('[SSE] Reconnecting in', delay, 'ms')
 
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, delay)
-          const checkAbort = () => {
+          const timer = setTimeout(() => {
+            clearInterval(interval)
+            resolve()
+          }, delay)
+          const interval = setInterval(() => {
             if (controller.signal.aborted) {
               clearTimeout(timer)
               resolve()
             }
-          }
-          const interval = setInterval(checkAbort, 100)
-          timer.finally(() => clearInterval(interval))
+          }, 100)
         })
       }
     }

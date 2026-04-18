@@ -3,8 +3,8 @@ import { useI18n } from '../i18n/context'
 import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
-import { writeFile, readTextFile } from '@tauri-apps/plugin-fs'
-import { isTauriEnv, apiBase, ensureApiReady } from '@/services/httpApi'
+import { writeFile } from '@tauri-apps/plugin-fs'
+import { isTauriEnv, ensureApiReady } from '@/services/httpApi'
 
 interface SettingsInfo {
   dbPath: string
@@ -54,9 +54,8 @@ export function SettingsPage() {
   useEffect(() => {
     if (!showLog || !isTauriEnv) return
     setLogLoading(true)
-    const { invoke } = (window as any).__TAURI__.core
-    invoke<string>('get_client_log')
-      .then(log => { setClientLog(log); setLogLoading(false) })
+    ;(window as any).__TAURI__.core.invoke('get_client_log')
+      .then((log: string) => { setClientLog(log); setLogLoading(false) })
       .catch(() => { setClientLog(t('settings.logUnavailable')); setLogLoading(false) })
   }, [showLog])
 

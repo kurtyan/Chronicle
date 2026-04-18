@@ -6,7 +6,7 @@ import { ListTodo, BarChart3, Settings } from 'lucide-react'
 import { useI18n } from './i18n/context'
 import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { useSSE, type ConnectionState } from './hooks/useSSE'
+import { useSSE } from './hooks/useSSE'
 import { isTauriEnv, apiBase } from './services/httpApi'
 
 // Open links in system browser when running in Tauri
