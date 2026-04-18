@@ -1,4 +1,4 @@
-# Task Manager
+# Chronicle
 
 A local-first task management app with a Tauri desktop shell and a local Hono + SQLite server.
 
@@ -6,7 +6,7 @@ A local-first task management app with a Tauri desktop shell and a local Hono + 
 
 ```
 ┌─────────────────────┐
-│  Tauri Desktop App  │  ← Native window (macOS .app / Linux binary)
+│  Tauri Desktop App  │  ← Native window (macOS .app / Linux .deb)
 │  React + Vite UI    │  ← Connects to localhost:8080
 └────────┬────────────┘
          │ HTTP localhost:8080
@@ -42,26 +42,38 @@ cd server && npm install && npm run dev
 ### Web UI (hot reload, proxies `/api` to server)
 
 ```bash
-cd tauri && npm install && npm run dev
+cd web && npm install && npm run dev
 ```
 
 ### Tauri desktop (native window, hot reload)
 
 ```bash
-cd tauri && npm run tauri:dev
+cd tauri && npm install && npm run tauri:dev
 ```
 
 ---
 
 ## Build
 
-### Server artifact (standalone)
+### Full build (frontend + server artifact)
 
 ```bash
-node build.js            # outputs to ./dist/task-manager/
+npm run build            # outputs to ./dist/task-manager/
+npm run build:out        # same, explicit path
 ```
 
-Bundles the minified server, web assets, and installs only production dependencies. Run with `./start.sh`.
+The build script (`build.js`) performs four steps:
+
+1. Installs deps and builds the web frontend (`web/`) → outputs to `server/public/`
+2. Installs deps and bundles the server (`server/`) → single minified `server/dist/index.js` via `tsup`
+3. Creates the artifact directory with server bundle, web assets, a trimmed `package.json`, and a platform-specific startup script
+4. Installs production-only dependencies in the artifact
+
+### Server-only rebuild
+
+```bash
+cd server && npm run build   # bundles to server/dist/index.js
+```
 
 ### Tauri desktop app
 
@@ -70,8 +82,8 @@ cd tauri && npm run tauri:build
 ```
 
 Outputs:
-- **macOS**: `tauri/src-tauri/target/release/bundle/macos/Task Manager.app`
-- **macOS DMG**: `tauri/src-tauri/target/release/bundle/dmg/Task Manager_*.dmg`
+- **macOS**: `tauri/src-tauri/target/release/bundle/macos/Chronicle.app`
+- **macOS DMG**: `tauri/src-tauri/target/release/bundle/dmg/Chronicle_*.dmg`
 - **Linux**: `.deb` + AppImage in `tauri/src-tauri/target/release/bundle/`
 
 ---
@@ -90,7 +102,7 @@ Outputs:
 2. **Build**
 
    ```bash
-   node build.js          # server artifact
+   npm run build              # full build: frontend + server artifact
    cd tauri && npm run tauri:build   # desktop app (requires Rust)
    ```
 
@@ -98,7 +110,7 @@ Outputs:
 
    ```json
    {
-     "server": { "host": "127.0.0.1", "port": 8080, "database": "" },
+     "server": { "host": "127.0.0.1", "port": 8080, "database": "", "logPath": "" },
      "lauri": { "serverHost": "localhost", "serverPort": 8080 }
    }
    ```
@@ -107,6 +119,7 @@ Outputs:
    |---|---|
    | `server.host` / `server.port` | Server bind address |
    | `server.database` | SQLite path (empty = auto `./data/tasks.db`) |
+   | `server.logPath` | Log file path for launchd (empty = auto `~/.chronicle/logs/server.log`) |
    | `lauri.*` | Tauri app connection target |
 
 4. **Start the server**
@@ -117,6 +130,12 @@ Outputs:
 
    The server initializes the DB (WAL mode), starts hourly backups, and serves the web UI at `http://127.0.0.1:8080/`.
 
+   Alternatively, use the npm script:
+
+   ```bash
+   cd dist/task-manager && npm start
+   ```
+
 5. **Verify**
 
    ```bash
@@ -126,10 +145,66 @@ Outputs:
 6. **Open the Tauri app**
 
    ```bash
-   open tauri/src-tauri/target/release/bundle/macos/Task\ Manager.app
+   open tauri/src-tauri/target/release/bundle/macos/Chronicle.app
    ```
 
    The app enforces single-instance — launching a second time focuses the existing window.
+
+---
+
+## macOS Background Service (launchd)
+
+The server can run as a macOS background service managed by `launchd`, so it starts automatically at login and stays running in the background.
+
+### Via Settings UI
+
+Open the Settings page in the Tauri app — there are controls to install, check status, and uninstall the launchd service.
+
+### Via API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/settings/launchd/status` | Check if service is installed |
+| `POST` | `/api/settings/launchd/install` | Install and load launchd service |
+| `POST` | `/api/settings/launchd/uninstall` | Uninstall launchd service |
+| `GET`  | `/api/settings/launchd/plist` | Preview generated plist content |
+
+Example:
+
+```bash
+# Check status
+curl http://localhost:8080/api/settings/launchd/status
+
+# Install service (starts at login, auto-restarts)
+curl -X POST http://localhost:8080/api/settings/launchd/install
+
+# Uninstall service
+curl -X POST http://localhost:8080/api/settings/launchd/uninstall
+```
+
+### What gets installed
+
+A plist file at `~/Library/LaunchAgents/com.chronicle.task-manager.plist` that:
+
+- Runs the bundled server (`dist/index.js`) with the system Node.js
+- Starts at login (`RunAtLoad`) and keeps alive (`KeepAlive`)
+- Logs stdout to `~/.chronicle/logs/server.log`
+- Logs stderr to `~/.chronicle/logs/server-error.log`
+
+### Manual management
+
+```bash
+# Check if loaded
+launchctl list | grep chronicle
+
+# View logs
+tail -f ~/.chronicle/logs/server.log
+tail -f ~/.chronicle/logs/server-error.log
+
+# Manual unload / reload
+launchctl unload ~/Library/LaunchAgents/com.chronicle.task-manager.plist
+launchctl load ~/Library/LaunchAgents/com.chronicle.task-manager.plist
+```
 
 ---
 
@@ -173,7 +248,7 @@ Outputs:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/api/tasks/:id/logs` | Get task entries |
-| `POST` | `/api/tasks/:id/logs` | Submit task entry (`body` or `log`) |
+| `POST` | `/api/tasks/:id/logs` | Submit task entry (`content`, `type` — `log` or `body`) |
 | `PUT`  | `/api/tasks/:id/logs/:entryId` | Update task entry |
 
 ### Work Sessions
@@ -191,6 +266,7 @@ Outputs:
 |--------|------|-------------|
 | `GET` | `/api/reports/today` | Today's report (totals + tasks) |
 | `GET` | `/api/reports/summary` | Summary by type and priority |
+| `GET` | `/api/reports/range-stats` | Stats for a date range (`?start=`, `?end=` unix timestamps) |
 
 ### Settings
 
@@ -199,6 +275,18 @@ Outputs:
 | `GET`  | `/api/settings/export` | Download database file |
 | `POST` | `/api/settings/import` | Import database (validates SQLite magic, auto-backs up current DB) |
 | `GET`  | `/api/settings/info` | DB path, size, last backup time |
+| `GET`  | `/api/settings/launchd/status` | Check launchd service status |
+| `POST` | `/api/settings/launchd/install` | Install launchd service (macOS only) |
+| `POST` | `/api/settings/launchd/uninstall` | Uninstall launchd service |
+| `GET`  | `/api/settings/launchd/plist` | Get generated plist content |
+
+### Real-time Events
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/events` | SSE stream (`?clientId=` for source filtering) |
+
+Events: `task_created`, `task_updated`, `task_deleted`, `entry_created`, `entry_updated`, `session_started`, `session_ended`, `db_imported`.
 
 ---
 
@@ -231,6 +319,7 @@ Outputs:
 
 - Tauri v2, single-instance (re-focuses existing window on second launch)
 - Default window: 1200×800, resizable, min 800×600
+- Prevents accidental close via Cmd+W / Cmd+Q — use the app's exit mechanism
 
 ### Localization
 
@@ -243,8 +332,8 @@ Outputs:
 | Layer | Technology |
 |-------|------------|
 | Frontend | React 18, Zustand, Tailwind CSS, TipTap, dnd-kit, Radix UI, axios, date-fns |
-| Build | Vite (web), Tauri CLI (native) |
+| Build | Vite (web), Tauri CLI (native), tsup (server) |
 | Backend | Hono (Node.js), better-sqlite3 |
-| Bundling | tsup (server, single-file minified) |
 | Desktop | Tauri v2 (single-instance plugin) |
 | Database | SQLite (WAL mode) |
+| macOS Service | launchd (LaunchAgents) |
