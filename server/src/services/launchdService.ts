@@ -5,7 +5,7 @@ import { execSync } from 'child_process'
 import { getConfig } from '../config'
 import { getLogger } from '../logging'
 
-const plistName = 'com.chronicle.task-manager.plist'
+const plistName = 'com.chronicle.server.plist'
 const plistDir = path.join(os.homedir(), 'Library', 'LaunchAgents')
 const plistPath = path.join(plistDir, plistName)
 
@@ -22,7 +22,7 @@ export function generatePlist(): string {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.chronicle.task-manager</string>
+    <string>com.chronicle.server</string>
     <key>ProgramArguments</key>
     <array>
         <string>${nodePath}</string>

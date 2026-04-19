@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * Build script for task-manager
+ * Build script for Chronicle
  * Usage: node build.js [output-dir]
- * Default output: ./dist/task-manager
+ * Default output: ./dist/chronicle
  */
 
 const { execSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
-const OUTPUT_DIR = process.argv[2] || './dist/task-manager'
+const OUTPUT_DIR = process.argv[2] || './dist/chronicle'
 const ROOT_DIR = __dirname
 
 function run(cmd, cwd) {
@@ -36,7 +36,7 @@ function copyDir(src, dest) {
   }
 }
 
-console.log('=== Building Task Manager ===\n')
+console.log('=== Building Chronicle ===\n')
 
 // Step 1: Build web frontend
 console.log('[1/4] Building web frontend...')
@@ -112,7 +112,7 @@ run('npm install --production', artifactDir)
 // Create a README
 fs.writeFileSync(
   path.join(artifactDir, 'README.md'),
-  `# Task Manager
+  `# Chronicle
 
 ## Start
 \`\`\`bash

@@ -1,13 +1,16 @@
 {
   "name": "chronicle",
-  "private": true,
+  "version": "1.0.0",
+  "description": "Local-first task management server",
   "bin": {
-    "chronicle": "dist/index.js"
+    "chronicle": "dist/index.js",
+    "chronicle-setup": "dist/setup.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsup",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "postinstall": "node -e \"try{require('child_process').execSync('node dist/setup.js',{stdio:'inherit'})}catch(e){}\""
   },
   "dependencies": {
     "@hono/node-server": "^1.11.0",

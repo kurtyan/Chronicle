@@ -58,7 +58,7 @@ cd tauri && npm install && npm run tauri:dev
 ### Full build (frontend + server artifact)
 
 ```bash
-npm run build            # outputs to ./dist/task-manager/
+npm run build            # outputs to ./dist/chronicle/
 npm run build:out        # same, explicit path
 ```
 
@@ -90,16 +90,41 @@ Outputs:
 
 ## Deployment
 
-### On the working machine
+### Option 1: npm install (recommended)
+
+Install the server globally and auto-register as a macOS background service:
+
+```bash
+npm install -g chronicle
+```
+
+This installs the `chronicle` command and automatically sets up launchd so the server starts at login.
+
+**Manual service management:**
+
+```bash
+chronicle-setup          # re-run service installation
+launchctl list | grep chronicle   # check status
+tail -f ~/.chronicle/logs/server.log   # view logs
+```
+
+### Option 2: Build from source
 
 1. **Clone**
 
    ```bash
-   git clone git@github.com:kurtyan/Chronicle.git task-manager
-   cd task-manager
+   git clone git@github.com:kurtyan/Chronicle.git chronicle
+   cd chronicle
    ```
 
 2. **Build**
+
+   ```bash
+   npm run publish:prepare        # builds web + server, creates publishable package
+   cd dist/chronicle-npm && npm publish   # publish to npm (optional)
+   ```
+
+   Or for a local artifact:
 
    ```bash
    npm run build              # full build: frontend + server artifact
@@ -125,7 +150,7 @@ Outputs:
 4. **Start the server**
 
    ```bash
-   cd dist/task-manager && ./start.sh
+   cd dist/chronicle && ./start.sh
    ```
 
    The server initializes the DB (WAL mode), starts hourly backups, and serves the web UI at `http://127.0.0.1:8080/`.
@@ -133,7 +158,7 @@ Outputs:
    Alternatively, use the npm script:
 
    ```bash
-   cd dist/task-manager && npm start
+   cd dist/chronicle && npm start
    ```
 
 5. **Verify**
@@ -184,7 +209,7 @@ curl -X POST http://localhost:8080/api/settings/launchd/uninstall
 
 ### What gets installed
 
-A plist file at `~/Library/LaunchAgents/com.chronicle.task-manager.plist` that:
+A plist file at `~/Library/LaunchAgents/com.chronicle.server.plist` that:
 
 - Runs the bundled server (`dist/index.js`) with the system Node.js
 - Starts at login (`RunAtLoad`) and keeps alive (`KeepAlive`)
@@ -202,8 +227,8 @@ tail -f ~/.chronicle/logs/server.log
 tail -f ~/.chronicle/logs/server-error.log
 
 # Manual unload / reload
-launchctl unload ~/Library/LaunchAgents/com.chronicle.task-manager.plist
-launchctl load ~/Library/LaunchAgents/com.chronicle.task-manager.plist
+launchctl unload ~/Library/LaunchAgents/com.chronicle.server.plist
+launchctl load ~/Library/LaunchAgents/com.chronicle.server.plist
 ```
 
 ---
