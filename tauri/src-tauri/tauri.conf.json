@@ -4,7 +4,7 @@
   "identifier": "com.chronicle.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:5176",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },

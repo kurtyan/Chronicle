@@ -151,4 +151,13 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.importWarningDesc': { 'zh-CN': '当前所有数据将被替换，并自动创建备份。', en: 'All current data will be replaced. A backup will be created automatically.' },
   'settings.importConfirm': { 'zh-CN': '确认导入', en: 'Confirm Import' },
   'common.cancel': { 'zh-CN': '取消', en: 'Cancel' },
+
+  // Search
+  'search.placeholder': { 'zh-CN': '搜索任务标题、内容和标签...', en: 'Search task titles, content, and tags...' },
+  'search.noResults': { 'zh-CN': '未找到匹配的任务', en: 'No matching tasks found' },
+  'search.loading': { 'zh-CN': '搜索中...', en: 'Searching...' },
+  'search.matchTitle': { 'zh-CN': '标题', en: 'Title' },
+  'search.matchBody': { 'zh-CN': '正文', en: 'Body' },
+  'search.matchLog': { 'zh-CN': '记录', en: 'Log' },
+  'search.close': { 'zh-CN': '关闭', en: 'Close' },
 }

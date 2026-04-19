@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
-import type { Task, TaskType, TaskEntry } from '@/types'
+import type { Task, TaskType, TaskEntry, SearchResult } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { X, AlertTriangle, Copy } from 'lucide-react'
+import { X, AlertTriangle, Copy, Search } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import type { WorkSession } from '@/types'
+import { highlightText } from '@/lib/highlight'
 
 const DRAFT_ID = '__draft__'
 
@@ -27,10 +28,12 @@ export function BoardPage() {
   const {
     tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
     statusFilter, isTodayFilter, draftTask, currentSession,
+    searchMode, searchQuery, searchResults, searchTokens,
     loadTodos, setActiveTask, updateTask, deleteTask, markDone,
     submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
     startDraft, commitDraft, cancelDraft,
     takeOver, doAfk, autoTakeOver, doDrop, loadCurrentSession,
+    setSearchMode, doSearch,
   } = useTaskStore()
 
   // Load current session on mount
@@ -42,6 +45,27 @@ export function BoardPage() {
   useEffect(() => {
     loadTodos()
   }, [filterTypes, statusFilter, isTodayFilter])
+
+  // Focus search input when search mode turns on
+  useEffect(() => {
+    if (searchMode) {
+      requestAnimationFrame(() => searchInputRef.current?.focus())
+    } else {
+      setSearchInput('')
+    }
+  }, [searchMode])
+
+  // Sync search input with query when results change
+  useEffect(() => {
+    if (searchQuery && searchMode) {
+      setSearchInput(searchQuery)
+    }
+  }, [searchQuery, searchMode])
+
+  // Reset selection when search results change
+  useEffect(() => {
+    setSearchSelectedIdx(-1)
+  }, [searchResults])
 
   // Scroll active task into view when it changes
   useEffect(() => {
@@ -100,6 +124,11 @@ export function BoardPage() {
   // Expanded filter bar (new + done + dropped slide)
   const [expandedFilter, setExpandedFilter] = useState(false)
   const autoCollapseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Search input state
+  const [searchInput, setSearchInput] = useState('')
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const [searchSelectedIdx, setSearchSelectedIdx] = useState(-1)
 
   function clearAutoCollapseTimer() {
     if (autoCollapseRef.current) {
@@ -189,6 +218,8 @@ export function BoardPage() {
     currentSession,
     statusFilter,
     isTodayFilter,
+    searchMode,
+    searchInput,
   })
   useEffect(() => {
     stateRef.current = {
@@ -207,6 +238,8 @@ export function BoardPage() {
       currentSession,
       statusFilter,
       isTodayFilter,
+      searchMode,
+      searchInput,
     }
   })
 
@@ -289,7 +322,7 @@ export function BoardPage() {
       }
 
       // Arrow Right: focus log editor for currently selected task
-      if (!isEditing && !s.showDropDialog && !s.showCancelConfirm && s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
+      if (!isEditing && !s.showDropDialog && !s.showCancelConfirm && s.activeTaskId && s.activeTaskId !== DRAFT_ID && !s.searchMode) {
         if (e.key === 'ArrowRight') {
           e.preventDefault()
           e.stopPropagation()
@@ -302,7 +335,7 @@ export function BoardPage() {
       }
 
       // Arrow Up/Down
-      if (!isEditing && !s.showDropDialog && !s.showCancelConfirm) {
+      if (!isEditing && !s.showDropDialog && !s.showCancelConfirm && !s.searchMode) {
         if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
           e.preventDefault()
           e.stopPropagation()
@@ -390,7 +423,13 @@ export function BoardPage() {
       if (e.key === 'Escape' && !s.editingEntryId && !isInEditor) {
         e.preventDefault()
         e.stopPropagation()
-        handleEscKey()
+        if (s.searchMode) {
+          if (!s.searchInput) {
+            setSearchMode(false)
+          }
+        } else {
+          handleEscKey()
+        }
         return
       }
     }
@@ -645,7 +684,57 @@ export function BoardPage() {
           className="absolute inset-y-0 -right-1 w-2 cursor-col-resize z-10 hover:bg-primary/5 rounded-l"
           onMouseDown={handleResizeMouseDown}
         />
-        {/* Header: filter bar */}
+        {/* Header: filter bar or search bar */}
+        {searchMode ? (
+          <div className="h-10 px-3 border-b flex items-center gap-2">
+            <Search className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+            <input
+              ref={searchInputRef}
+              className="flex-1 bg-transparent text-xs outline-none text-foreground placeholder:text-muted-foreground"
+              placeholder="搜索任务..."
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  const nextIdx = Math.min(searchSelectedIdx + 1, searchResults.length - 1)
+                  setSearchSelectedIdx(nextIdx)
+                  if (searchResults[nextIdx]) {
+                    setActiveTask(searchResults[nextIdx].taskId)
+                  }
+                  return
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  const prevIdx = Math.max(searchSelectedIdx - 1, 0)
+                  setSearchSelectedIdx(prevIdx)
+                  if (searchResults[prevIdx]) {
+                    setActiveTask(searchResults[prevIdx].taskId)
+                  }
+                  return
+                }
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  if (!searchInput.trim()) return
+                  doSearch(searchInput)
+                  return
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  return
+                }
+              }}
+              autoFocus
+            />
+            <button
+              className="text-xs px-2 py-0.5 rounded border border-border transition hover:bg-muted text-muted-foreground flex-shrink-0"
+              onClick={() => { setSearchInput(''); setSearchMode(false) }}
+            >
+              {t('search.close')}
+            </button>
+          </div>
+        ) : (
         <div className="h-10 px-3 border-b flex items-center justify-between">
           {/* Left: type buttons + Today */}
           <div className="flex items-center gap-1">
@@ -765,8 +854,64 @@ export function BoardPage() {
             </div>
           </div>
         </div>
-        {/* Task list */}
+        )}
+        {/* Task list or search results */}
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {searchMode ? (
+            <>
+              {searchResults.length === 0 && searchQuery && (
+                <div className="text-sm text-muted-foreground text-center py-8">{t('search.noResults')}</div>
+              )}
+              {searchResults.length === 0 && !searchQuery && (
+                <div className="text-sm text-muted-foreground text-center py-8">输入关键词并按回车搜索</div>
+              )}
+              {searchResults.map((r: SearchResult, i: number) => (
+                <div
+                  key={r.taskId}
+                  tabIndex={0}
+                  role="button"
+                  className={`group relative border rounded-lg p-3 cursor-pointer transition ${
+                    r.taskId === activeTaskId ? 'border-primary/50 bg-primary/5 ring-1 ring-primary/30' : i === searchSelectedIdx ? 'border-primary/30 bg-primary/5' : 'border-border hover:bg-muted/50'
+                  }`}
+                  onClick={() => {
+                    setActiveTask(r.taskId)
+                    setSearchSelectedIdx(i)
+                    setFilterTypes([])
+                    setStatusFilter(null)
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      setActiveTask(r.taskId)
+                      setFilterTypes([])
+                      setStatusFilter(null)
+                    }
+                  }}
+                >
+                  <div className="flex items-start gap-2">
+                    <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${priorityColors[r.taskType === 'TODO' ? 'MEDIUM' : r.taskType === 'TOREAD' ? 'HIGH' : 'LOW']}`} />
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-sm font-medium truncate">
+                        {highlightText(r.originalTitle, searchTokens)}
+                      </h4>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <span className="text-xs px-1 py-0.5 rounded bg-muted text-muted-foreground">
+                          {r.matchType === 'task' ? t('search.matchTitle') : r.matchType === 'entry_body' ? t('search.matchBody') : t('search.matchLog')}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {t(`type.${r.taskType.toLowerCase()}`)}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {t(`status.${r.taskStatus.toLowerCase()}`)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
           {loading ? (
             <div className="text-sm text-muted-foreground text-center py-8">{t('board.loading')}</div>
           ) : error ? (
@@ -813,7 +958,9 @@ export function BoardPage() {
                 ))
               )}
             </>
-          )}
+            )}
+          </>
+        )}
         </div>
       </div>
 
@@ -1084,7 +1231,9 @@ export function BoardPage() {
                         className="text-xl font-bold cursor-pointer hover:text-muted-foreground transition flex-1"
                         onClick={handleTitleEdit}
                       >
-                        {activeTask.title}
+                        {searchMode && searchTokens.length > 0
+                          ? highlightText(activeTask.title, searchTokens)
+                          : activeTask.title}
                       </h1>
                     )}
                     <div className="flex items-center gap-1 shrink-0 mt-1">
@@ -1178,6 +1327,7 @@ export function BoardPage() {
                             entry={entry}
                             onSave={(id, newContent) => updateEntry(activeTask.id, id, newContent)}
                             editing={editingEntryId === entry.id}
+                            highlightTokens={searchMode ? searchTokens : undefined}
                             onEditingChange={(editing) => {
                               if (editing) {
                                 setEditingEntryId(entry.id)

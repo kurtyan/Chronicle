@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -453,6 +453,62 @@ export class EmbeddedApiProvider implements ApiInterface {
       completed: completedResult.length > 0 ? Number(completedResult[0].values[0][0]) : 0,
       inProgress: inProgressResult.length > 0 ? Number(inProgressResult[0].values[0][0]) : 0,
     }
+  }
+
+  async searchTasks(query: string, _limit = 50): Promise<{
+    results: SearchResult[]
+    tokens: string[]
+    total: number
+  }> {
+    await this.ensureDb()
+    const trimmed = query.trim()
+    if (!trimmed) return { results: [], tokens: [], total: 0 }
+
+    const like = `%${trimmed}%`
+    const tasks = this.queryAll(
+      'SELECT id, title, type, status, tags FROM tasks WHERE title LIKE ? OR tags LIKE ?',
+      [like, like]
+    ).map((row: any) => ({
+      taskId: row.id,
+      taskTitle: row.title,
+      taskType: row.type as TaskType,
+      taskStatus: row.status as TaskStatus,
+      taskTags: row.tags ? JSON.parse(row.tags) : [],
+      matchType: 'task' as const,
+      matchedContent: '',
+      originalTitle: row.title,
+      matchedOriginal: '',
+      tokens: [trimmed],
+      rank: 0,
+    }))
+
+    const entries = this.queryAll(
+      'SELECT task_id, content, type FROM task_entries WHERE content LIKE ?',
+      [like]
+    ).map((row: any) => ({
+      taskId: row.task_id,
+      taskTitle: '',
+      taskType: 'TODO' as TaskType,
+      taskStatus: 'PENDING' as TaskStatus,
+      taskTags: [] as string[],
+      matchType: (row.type === 'body' ? 'entry_body' : 'entry_log') as SearchResult['matchType'],
+      matchedContent: row.content,
+      originalTitle: '',
+      matchedOriginal: row.content,
+      tokens: [trimmed],
+      rank: 1,
+    }))
+
+    const taskMap = new Map<string, SearchResult>()
+    for (const t of tasks) taskMap.set(t.taskId, t)
+    for (const e of entries) {
+      if (!taskMap.has(e.taskId)) {
+        taskMap.set(e.taskId, e as unknown as SearchResult)
+      }
+    }
+
+    const results = [...taskMap.values()]
+    return { results, tokens: [trimmed], total: results.length }
   }
 }
 

@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -82,4 +82,11 @@ export async function fetchRangeStats(start: number, end: number): Promise<{
   inProgress: number
 }> {
   return (await getApi()).fetchRangeStats(start, end)
+}
+export async function searchTasks(query: string, limit?: number): Promise<{
+  results: SearchResult[]
+  tokens: string[]
+  total: number
+}> {
+  return (await getApi()).searchTasks(query, limit)
 }

@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -159,6 +159,17 @@ export const httpApi: ApiInterface = {
     inProgress: number
   }> {
     const { data } = await (await withClientId()).get('/api/reports/range-stats', { params: { start, end } })
+    return data
+  },
+
+  async searchTasks(query: string, limit = 50): Promise<{
+    results: SearchResult[]
+    tokens: string[]
+    total: number
+  }> {
+    const { data } = await (await withClientId()).get('/api/search', {
+      params: { q: query, limit }
+    })
     return data
   },
 }

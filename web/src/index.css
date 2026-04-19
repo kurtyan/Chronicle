@@ -70,3 +70,11 @@
 .animate-marquee {
   animation: marquee 16s linear infinite;
 }
+
+@layer utilities {
+  .search-highlight {
+    background-color: hsl(45 100% 70% / 0.4);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+}
