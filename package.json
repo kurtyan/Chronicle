@@ -6,7 +6,8 @@
     "build:out": "node build.js ./dist/chronicle",
     "build:all": "node build.js && cd tauri && npm install && npm run tauri:build",
     "publish:prepare": "node publish.js",
-    "publish:npm": "node publish.js --publish"
+    "publish:npm": "node publish.js --publish",
+    "publish:local": "npm run clean && npm run publish:prepare && cd dist/chronicle-npm && rm -f chronicle-*.tgz && npm pack && npm install -g chronicle-*.tgz"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"
