@@ -160,13 +160,20 @@ function cmdStatus() {
     }
   }
 
-  // Data directory
-  const dataDir = path.join(SCRIPT_DIR, 'data')
-  if (fs.existsSync(dataDir)) {
-    const dbPath = path.join(dataDir, 'tasks.db')
-    if (fs.existsSync(dbPath)) {
-      const size = fs.statSync(dbPath).size
-      console.log(`  Database:  ${dbPath} (${(size / 1024).toFixed(1)} KB)`)
+  // Database path from config
+  const configDb = readConfig()?.server?.database
+  if (configDb) {
+    if (fs.existsSync(configDb)) {
+      const size = fs.statSync(configDb).size
+      console.log(`  Database:  ${configDb} (${(size / 1024).toFixed(1)} KB)`)
+    } else {
+      console.log(`  Database:  ${configDb} (not found)`)
+    }
+  } else {
+    const defaultDb = path.join(process.cwd(), 'data', 'tasks.db')
+    if (fs.existsSync(defaultDb)) {
+      const size = fs.statSync(defaultDb).size
+      console.log(`  Database:  ${defaultDb} (${(size / 1024).toFixed(1)} KB)`)
     }
   }
 }
