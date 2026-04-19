@@ -70,18 +70,29 @@ npm run build              # web + server artifact → ./dist/chronicle/
 cd tauri && npm run tauri:build   # macOS .app only (no DMG)
 ```
 
-### Publish to npm
+### Release build & install (one command)
 
 ```bash
-npm run publish:prepare    # builds everything, creates package in dist/chronicle-npm/
-cd dist/chronicle-npm && npm publish   # publish to your npm registry
+npm run publish:local        # clean → build → pack → install globally
+chronicle start              # start server
+chronicle status             # verify
+chronicle stop               # stop
 ```
 
-### Clean
+### Manual steps
 
 ```bash
-npm run clean              # remove all build artifacts
-npm run clean:all          # also remove Tauri target/
+npm run clean
+npm run publish:prepare      # builds web + server, creates package in dist/chronicle-npm/
+cd dist/chronicle-npm
+npm pack                     # creates chronicle-1.0.0.tgz
+npm install -g chronicle-1.0.0.tgz
+```
+
+### Publish to npm registry (optional)
+
+```bash
+npm run publish:npm          # builds and publishes to remote npm
 ```
 
 ---
