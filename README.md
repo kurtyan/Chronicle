@@ -83,8 +83,6 @@ cd tauri && npm run tauri:build
 
 Outputs:
 - **macOS**: `tauri/src-tauri/target/release/bundle/macos/Chronicle.app`
-- **macOS DMG**: `tauri/src-tauri/target/release/bundle/dmg/Chronicle_*.dmg`
-- **Linux**: `.deb` + AppImage in `tauri/src-tauri/target/release/bundle/`
 
 ---
 
@@ -98,13 +96,23 @@ Install the server globally and auto-register as a macOS background service:
 npm install -g chronicle
 ```
 
-This installs the `chronicle` command and automatically sets up launchd so the server starts at login.
+This installs the `chronicle` CLI and automatically sets up launchd so the server starts at login.
 
-**Manual service management:**
+**CLI commands:**
 
 ```bash
-chronicle-setup          # re-run service installation
-launchctl list | grep chronicle   # check status
+chronicle start          # start server in foreground
+chronicle stop           # stop the running server
+chronicle status         # show server and launchd status
+chronicle setup          # install/reinstall launchd background service
+chronicle                # show help
+```
+
+**Service management:**
+
+```bash
+chronicle setup          # re-run service installation
+chronicle status         # check server + launchd status
 tail -f ~/.chronicle/logs/server.log   # view logs
 ```
 

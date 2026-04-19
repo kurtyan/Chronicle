@@ -1,7 +1,7 @@
 [package]
 name = "chronicle-tauri"
 version = "1.0.0"
-description = "Task Manager Desktop App"
+description = "Chronicle Desktop App"
 authors = ["you"]
 edition = "2021"
 

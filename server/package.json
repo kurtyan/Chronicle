@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "description": "Local-first task management server",
   "bin": {
-    "chronicle": "dist/index.js",
-    "chronicle-setup": "dist/setup.js"
+    "chronicle": "dist/cli.js",
+    "chronicle-setup": "dist/setup.js",
+    "chronicle-server": "dist/index.js"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",

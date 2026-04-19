@@ -69,7 +69,7 @@ const publishPkg = {
   description: serverPkg.description,
   bin: serverPkg.bin,
   scripts: {
-    start: 'node dist/index.js',
+    start: 'node dist/cli.js start',
     postinstall: serverPkg.scripts.postinstall,
   },
   dependencies: serverPkg.dependencies,
