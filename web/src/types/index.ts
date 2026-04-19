@@ -63,6 +63,7 @@ export interface SearchResult {
   originalTitle: string
   matchedOriginal: string
   tokens: string[]
+  exactMatch: boolean
   rank: number
 }
 

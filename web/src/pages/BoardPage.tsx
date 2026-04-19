@@ -895,6 +895,9 @@ export function BoardPage() {
                         {highlightText(r.originalTitle, searchTokens)}
                       </h4>
                       <div className="flex items-center gap-1 mt-0.5">
+                        {r.exactMatch && (
+                          <span className="text-xs px-1 py-0.5 rounded bg-primary/10 text-primary font-medium">精确匹配</span>
+                        )}
                         <span className="text-xs px-1 py-0.5 rounded bg-muted text-muted-foreground">
                           {r.matchType === 'task' ? t('search.matchTitle') : r.matchType === 'entry_body' ? t('search.matchBody') : t('search.matchLog')}
                         </span>

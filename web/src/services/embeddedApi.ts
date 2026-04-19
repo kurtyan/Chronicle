@@ -479,6 +479,7 @@ export class EmbeddedApiProvider implements ApiInterface {
       originalTitle: row.title,
       matchedOriginal: '',
       tokens: [trimmed],
+      exactMatch: true,
       rank: 0,
     }))
 
@@ -496,6 +497,7 @@ export class EmbeddedApiProvider implements ApiInterface {
       originalTitle: '',
       matchedOriginal: row.content,
       tokens: [trimmed],
+      exactMatch: false,
       rank: 1,
     }))
 
