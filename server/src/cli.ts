@@ -16,6 +16,7 @@ const SCRIPT_DIR = path.dirname(fs.realpathSync(process.argv[1]))
 const SERVER_INDEX = path.join(SCRIPT_DIR, 'index.js')
 const CONFIG_PATH = path.join(os.homedir(), '.chronicle', 'config.json')
 const PID_FILE = path.join(os.homedir(), '.chronicle', 'chronicle.pid')
+const LOG_DIR = path.join(os.homedir(), '.chronicle', 'logs')
 
 function readConfig() {
   try {
@@ -67,25 +68,30 @@ function cmdStart() {
     return
   }
 
-  console.log(`[chronicle] Starting server at http://${host}:${port}...`)
+  // Ensure log directory exists
+  fs.mkdirSync(LOG_DIR, { recursive: true })
+
+  const outLog = path.join(LOG_DIR, 'server.log')
+  const errLog = path.join(LOG_DIR, 'server-error.log')
+
+  const stdout = fs.openSync(outLog, 'a')
+  const stderr = fs.openSync(errLog, 'a')
+
+  console.log(`[chronicle] Starting server in background at http://${host}:${port}...`)
 
   const child = spawn('node', [SERVER_INDEX], {
-    stdio: 'inherit',
+    detached: true,
+    stdio: ['ignore', stdout, stderr],
     cwd: SCRIPT_DIR,
   })
+
+  child.unref()
 
   // Write PID file
   fs.writeFileSync(PID_FILE, String(child.pid))
 
-  child.on('exit', (code) => {
-    if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE)
-    if (code !== 0 && code !== null) {
-      process.exit(code)
-    }
-  })
-
-  process.on('SIGINT', () => child.kill('SIGINT'))
-  process.on('SIGTERM', () => child.kill('SIGTERM'))
+  console.log(`[chronicle] Server started (PID ${child.pid})`)
+  console.log(`[chronicle] Logs: ${outLog}`)
 }
 
 function cmdStop() {
