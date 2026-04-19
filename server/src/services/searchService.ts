@@ -116,19 +116,24 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
   const tokenized = tokenize(trimmed)
   const tokens = tokenized.split(' ').filter(Boolean)
 
+  // Escape tokens for FTS5: wrap each token in double quotes so special chars (., :, /) are treated literally
+  const ftsQuery = tokens.map(t => `"${t.replace(/"/g, '')}"`).join(' ')
+
   // --- Phase 1: FTS5 tokenized search ---
-  const ftsResults = db.prepare(`
+  const ftsResults = ftsQuery.trim()
+    ? db.prepare(`
     SELECT f.task_id, f.source, f.content, f.rank
     FROM tasks_fts f
     WHERE tasks_fts MATCH ?
     ORDER BY f.rank
     LIMIT ?
-  `).all(tokenized, limit) as Array<{
+  `).all(ftsQuery, limit) as Array<{
     task_id: string
     source: string
     content: string
     rank: number
   }>
+    : []
 
   // --- Phase 2: Exact phrase match (LIKE) on original text ---
   const exactTaskIds = new Set<string>()
