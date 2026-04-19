@@ -12,7 +12,7 @@ const path = require('path')
 const os = require('os')
 const fs = require('fs')
 
-const SCRIPT_DIR = path.dirname(process.argv[1])
+const SCRIPT_DIR = path.dirname(fs.realpathSync(process.argv[1]))
 const SERVER_INDEX = path.join(SCRIPT_DIR, 'index.js')
 const CONFIG_PATH = path.join(os.homedir(), '.chronicle', 'config.json')
 const PID_FILE = path.join(os.homedir(), '.chronicle', 'chronicle.pid')

@@ -42,8 +42,6 @@ console.log('=== Publishing Chronicle ===\n')
 console.log('[1/4] Building web frontend...')
 run('npm install', path.join(ROOT_DIR, 'web'))
 run('npm run build', path.join(ROOT_DIR, 'web'))
-// Vite outputs to web/dist/, copy to server/public/
-copyDir(path.join(ROOT_DIR, 'web', 'dist'), path.join(ROOT_DIR, 'server', 'public'))
 
 // Step 2: Build server
 console.log('\n[2/4] Building server...')
