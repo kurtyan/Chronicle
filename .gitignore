@@ -21,3 +21,6 @@ tauri/src-tauri/target/
 
 # Coverage
 coverage/
+
+# Web test data
+web/data/
