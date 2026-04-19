@@ -17,6 +17,9 @@ const dirs = [
   'server/public',
   'web/dist',
   'web/data',
+  'tauri/src-tauri/target',
+  'tauri/dist',
+  'tauri/node_modules/.vite',
 ]
 
 for (const d of dirs) {

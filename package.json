@@ -3,8 +3,11 @@
     "clean": "node clean.js",
     "build": "node build.js",
     "build:out": "node build.js ./dist/chronicle",
+    "build:all": "node build.js && cd tauri && npm install && npm run tauri:build",
     "publish:prepare": "node publish.js",
-    "publish:npm": "node publish.js --publish"
+    "publish:npm": "node publish.js --publish",
+    "clean": "node clean.js",
+    "clean:all": "node clean.js && cd tauri && rm -rf src-tauri/target"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"
