@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
-import { clientId, isTauriEnv } from '@/services/httpApi'
+import { clientId, isTauriEnv, ensureApiReady } from '@/services/httpApi'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
@@ -17,9 +17,8 @@ export function getConnectionInfo(): { url: string; state: ConnectionState; erro
 }
 
 async function getEventUrl(): Promise<string> {
-  // Always use relative path - Tauri's custom protocol handler
-  // routes tauri://localhost/api/* to the actual server
-  return `/api/events?clientId=${encodeURIComponent(clientId)}`
+  const basePath = await ensureApiReady()
+  return `${basePath}/api/events?clientId=${encodeURIComponent(clientId)}`
 }
 
 function createFetchSSE(

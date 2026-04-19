@@ -22,11 +22,17 @@ function getClient(): Promise<AxiosInstance> {
   if (!clientPromise) {
     clientPromise = (async () => {
       if (isTauriEnv) {
-        // Dev mode: page served by Vite (http://) → use relative paths, let Vite proxy /api to server
-        // Prod mode: tauri:// custom protocol → use relative paths, handled by Tauri's asset server
-        // We never invoke get_server_url() directly; all /api/* goes through the right channel.
-        apiBase = ''
-        return axios.create({ baseURL: '' })
+        // Dev mode: devUrl http://localhost → Vite proxies /api to server
+        // Production: tauri:// protocol → use configured server URL
+        const protocol = window.location.protocol
+        if (protocol === 'http:' || protocol === 'https:') {
+          apiBase = ''
+          return axios.create({ baseURL: '' })
+        }
+        const { invoke } = await import('@tauri-apps/api/core')
+        const serverUrl = await invoke('get_server_url').catch(() => 'http://localhost:8080') as string
+        apiBase = serverUrl
+        return axios.create({ baseURL: serverUrl })
       }
       apiBase = ''
       return axios.create({ baseURL: '' })
