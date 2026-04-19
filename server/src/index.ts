@@ -231,8 +231,12 @@ app.use('/assets/*', async (c, next) => {
 }, serveStatic({ root: './public' }))
 app.use('/favicon.ico', serveStatic({ path: './public/favicon.ico' }))
 app.get('*', (c) => {
+  const indexHtml = './public/index.html'
+  if (!fs.existsSync(indexHtml)) {
+    return c.json({ message: 'Chronicle server is running. Build the web frontend with `npm run publish:prepare` or `npm run build` to access the UI.' })
+  }
   c.header('Cache-Control', 'no-cache, no-store, must-revalidate')
-  return c.html(fs.readFileSync('./public/index.html', 'utf-8'))
+  return c.html(fs.readFileSync(indexHtml, 'utf-8'))
 })
 
 // --- Start ---
