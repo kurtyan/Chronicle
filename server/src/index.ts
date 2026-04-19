@@ -11,6 +11,18 @@ import { generatePlist, installLaunchd, uninstallLaunchd, isInstalled } from './
 import { getLogger } from './logging'
 import { createSSEStream, broadcastEvent } from './services/eventBus'
 import fs from 'fs'
+import path from 'path'
+
+function findPublicDir(): string {
+  // When running from npm global install: cwd is dist/, public is at ../public
+  // When running from source: cwd may be server/, public is at ./public
+  const candidates = ['./public', '../public']
+  for (const p of candidates) {
+    if (fs.existsSync(path.join(p, 'index.html'))) return p
+  }
+  return './public'
+}
+const publicDir = findPublicDir()
 
 const app = new Hono()
 const service = new AppService()
@@ -228,10 +240,10 @@ app.get('/api/events', async (c) => {
 app.use('/assets/*', async (c, next) => {
   c.header('Cache-Control', 'no-cache, no-store, must-revalidate')
   await next()
-}, serveStatic({ root: './public' }))
-app.use('/favicon.ico', serveStatic({ path: './public/favicon.ico' }))
+}, serveStatic({ root: publicDir }))
+app.use('/favicon.ico', serveStatic({ path: path.join(publicDir, 'favicon.ico') }))
 app.get('*', (c) => {
-  const indexHtml = './public/index.html'
+  const indexHtml = path.join(publicDir, 'index.html')
   if (!fs.existsSync(indexHtml)) {
     return c.json({ message: 'Chronicle server is running. Build the web frontend with `npm run publish:prepare` or `npm run build` to access the UI.' })
   }

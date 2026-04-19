@@ -86,14 +86,50 @@ npm run clean:all          # also remove Tauri target/
 
 ---
 
-## Deployment
+## Release Build & Install
 
-### Option 1: npm install (server)
-
-Install the server globally. On macOS it auto-registers as a launchd background service:
+### Build the server npm package
 
 ```bash
-npm install -g chronicle       # or: cd server && npm run build && npm link
+npm run clean                    # remove old build artifacts
+npm run publish:prepare          # builds web + server, creates package in dist/chronicle-npm/
+```
+
+### Pack and install from tarball
+
+```bash
+cd dist/chronicle-npm
+npm pack                         # creates chronicle-1.0.0.tgz
+npm install -g chronicle-1.0.0.tgz   # real copy, not symlink
+```
+
+### Verify
+
+```bash
+chronicle start                  # start server
+curl http://127.0.0.1:8083/api/reports/summary   # check API
+curl http://127.0.0.1:8083/                       # check web UI
+chronicle stop                   # stop server
+```
+
+### Publish to remote npm registry (optional)
+
+```bash
+cd dist/chronicle-npm
+npm publish
+```
+
+---
+
+## Deployment
+
+### Server
+
+The server can be installed globally. On macOS it auto-registers as a launchd background service:
+
+```bash
+npm install -g chronicle       # from npm registry
+npm install -g chronicle-1.0.0.tgz   # from local tarball
 ```
 
 **CLI commands:**
@@ -106,7 +142,7 @@ chronicle setup          # install/reinstall launchd background service
 chronicle                # show help
 ```
 
-### Option 2: Tauri app (desktop)
+### Desktop App
 
 Download `Chronicle.app` from [GitHub Releases](https://github.com/kurtyan/Chronicle/releases), or build from source:
 
