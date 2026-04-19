@@ -159,12 +159,13 @@ export function ReportPage() {
       return { onDuty: 0, workTime: 0, idleTime: 0 }
     }
 
-    // Find the latest endedAt or use current time for ongoing sessions
+    // Use Date.now() when any session is ongoing, otherwise use the latest endedAt
+    const hasOngoing = sessions.some(s => !s.endedAt)
     const latestEndedAt = sessions
       .filter(s => s.endedAt)
       .map(s => s.endedAt!)
       .sort((a, b) => b - a)[0]
-    const now = latestEndedAt ?? Date.now()
+    const now = hasOngoing ? Date.now() : (latestEndedAt ?? Date.now())
 
     // Group sessions by day
     const dayMap = new Map<string, typeof sessions>()

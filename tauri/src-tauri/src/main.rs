@@ -37,6 +37,27 @@ fn init_client_log() {
     }
 }
 
+#[tauri::command]
+fn set_zoom(app_handle: tauri::AppHandle, scale: f64) -> Result<(), String> {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.set_zoom(scale.max(0.5).min(3.0));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn write_client_log(message: String) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let log_path = format!("{}/.chronicle/logs/client.log", home);
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|e| format!("Failed to open log: {}", e))?;
+    writeln!(f, "{}", message)
+        .map_err(|e| format!("Failed to write log: {}", e))
+}
+
 fn main() {
     init_client_log();
 
@@ -45,7 +66,7 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![get_server_url, get_client_log])
+        .invoke_handler(tauri::generate_handler![get_server_url, get_client_log, set_zoom, write_client_log])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 

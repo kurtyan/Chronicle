@@ -26,6 +26,50 @@ function useSystemBrowserLinks() {
   }, [])
 }
 
+// Cmd+Plus/Minus/0 zoom in Tauri
+function useTauriZoom() {
+  useEffect(() => {
+    if (!(window as any).__TAURI__) return
+
+    const savedZoom = localStorage.getItem('chronicle_zoom_level')
+    const zoomLevelRef = { current: savedZoom ? parseInt(savedZoom, 10) : 100 }
+
+    ;(async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        if (zoomLevelRef.current !== 100) {
+          await invoke('set_zoom', { scale: zoomLevelRef.current / 100 })
+        }
+      } catch { /* ignore */ }
+    })()
+
+    const handler = async (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
+      const mod = isMac ? e.metaKey : e.ctrlKey
+      if (!mod) return
+      const { invoke } = await import('@tauri-apps/api/core')
+      let newZoom = zoomLevelRef.current
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault()
+        newZoom = Math.min(300, zoomLevelRef.current + 10)
+        await invoke('set_zoom', { scale: newZoom / 100 })
+      } else if (e.key === '-') {
+        e.preventDefault()
+        newZoom = Math.max(50, zoomLevelRef.current - 10)
+        await invoke('set_zoom', { scale: newZoom / 100 })
+      } else if (e.key === '0') {
+        e.preventDefault()
+        newZoom = 100
+        await invoke('set_zoom', { scale: 1.0 })
+      }
+      zoomLevelRef.current = newZoom
+      localStorage.setItem('chronicle_zoom_level', String(newZoom))
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+}
+
 function SseStatusDot() {
   const { state: connState, url: sseUrl, error: sseError } = useSSE()
   const [showBubble, setShowBubble] = useState(false)
@@ -145,6 +189,7 @@ function Sidebar() {
 
 function Layout() {
   useSystemBrowserLinks()
+  useTauriZoom()
   return (
     <div className="flex h-screen">
       <Sidebar />

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
-import { clientId } from '@/services/httpApi'
+import { clientId, isTauriEnv } from '@/services/httpApi'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
@@ -87,9 +87,19 @@ function createFetchSSE(
         }
       } catch (err: any) {
         if (controller.signal.aborted) return
+        try { reader?.cancel() } catch {}
         const errorMsg = err.message || String(err)
         console.error('[SSE] Connection error:', errorMsg, err)
         onError(errorMsg)
+
+        // Persist to client log (Tauri only)
+        if (isTauriEnv) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core')
+            const ts = new Date().toISOString()
+            invoke('write_client_log', { message: `[${ts}] SSE error: ${errorMsg}` }).catch(() => {})
+          } catch {}
+        }
 
         const delay = Math.min(1000 * 2 ** retryCount, 30000)
         retryCount++
@@ -147,6 +157,7 @@ export function useSSE() {
       console.log('[SSE] Connecting to:', resolvedUrl)
 
       const handlers: Record<string, (data: string) => void> = {
+        heartbeat: () => {},
         task_created: () => {
           console.log('[SSE] task_created, calling loadTodos')
           loadTodos()

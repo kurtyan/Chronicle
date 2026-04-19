@@ -15,14 +15,20 @@ export function createSSEStream(clientId: string): ReadableStream {
   let controller: ReadableStreamDefaultController
 
   const listener = (payload: string) => {
-    // Don't echo events back to the originating client
     const parsed = JSON.parse(payload)
     if (parsed.source === clientId) return
-    // Send with explicit event: field for proper SSE named event dispatch
     const sseMessage = `event: ${parsed.event}\ndata: ${JSON.stringify(parsed.data)}\n\n`
     queue.push(sseMessage)
     controller?.enqueue(encoder.encode(sseMessage))
   }
+
+  const heartbeatTimer = setInterval(() => {
+    try {
+      const hbMessage = `event: heartbeat\ndata: {"ts":${Date.now()}}\n\n`
+      queue.push(hbMessage)
+      controller?.enqueue(encoder.encode(hbMessage))
+    } catch { /* stream may be closed */ }
+  }, 5000)
 
   const stream = new ReadableStream({
     start(ctrl) {
@@ -31,6 +37,7 @@ export function createSSEStream(clientId: string): ReadableStream {
     },
     cancel() {
       listeners.delete(listener)
+      clearInterval(heartbeatTimer)
     },
   })
 

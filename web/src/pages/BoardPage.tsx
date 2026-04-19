@@ -80,7 +80,11 @@ export function BoardPage() {
     })
   }, [activeTaskId, entries])
 
-  const [taskListWidth, setTaskListWidth] = useState(() => Math.round(window.innerWidth * 0.3))
+  const [taskListWidth, setTaskListWidth] = useState(() => {
+    const saved = localStorage.getItem('chronicle_tasklist_pct')
+    const pct = saved ? parseFloat(saved) : 0.3
+    return Math.round(window.innerWidth * pct)
+  })
   const isResizing = useRef(false)
   const startX = useRef(0)
   const startWidth = useRef(0)
@@ -353,11 +357,12 @@ export function BoardPage() {
         return
       }
 
-      // Cmd+R: refresh task list and active task detail
+      // Cmd+R: refresh task list, active task detail, and current session
       if (mod && e.key === 'r') {
         e.preventDefault()
         e.stopPropagation()
         loadTodos()
+        loadCurrentSession()
         const currentTaskId = stateRef.current.activeTaskId
         if (currentTaskId && currentTaskId !== DRAFT_ID) {
           setActiveTask(currentTaskId)
@@ -485,6 +490,12 @@ export function BoardPage() {
       document.body.style.userSelect = ''
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
+      // Save as percentage of current window width
+      setTaskListWidth((w) => {
+        const pct = w / window.innerWidth
+        localStorage.setItem('chronicle_tasklist_pct', String(pct))
+        return w
+      })
     }
 
     document.addEventListener('mousemove', onMouseMove)
@@ -812,7 +823,7 @@ export function BoardPage() {
         {(!activeTaskId || !activeTask) && !draftTask ? (
           <>
             {/* Top bar with tracking status */}
-            <div className="flex-shrink-0 h-10 px-[10px] flex items-center justify-end">
+            <div className="flex-shrink-0 h-10 px-[30px] flex items-center justify-end">
               <div className="flex items-center gap-2">
                 {currentSession ? (
                   <TrackingStatusIndicator
@@ -857,7 +868,7 @@ export function BoardPage() {
                 {/* Fixed top section */}
                 <div className="flex-shrink-0">
                   {/* Info bar */}
-                  <div className="h-10 px-[10px] flex items-center justify-between">
+                  <div className="h-10 px-[30px] flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-muted-foreground">{t('task.creating')}</span>
                       <div className="flex gap-1">
@@ -897,7 +908,7 @@ export function BoardPage() {
                   </div>
 
                   {/* Title */}
-                  <div className="px-[10px] py-2">
+                  <div className="px-[30px] py-2">
                     <input
                       ref={titleInputRef}
                       className="text-xl font-bold w-full bg-transparent border-b border-primary focus:outline-none"
@@ -912,7 +923,7 @@ export function BoardPage() {
                 </div>
 
                 {/* Scrollable content */}
-                <div className="flex-1 overflow-y-auto px-[10px] pb-[10px]">
+                <div className="flex-1 overflow-y-auto px-[30px] pb-[10px]">
                   <div className="space-y-4 pt-2">
                     {/* Body editor */}
                     <RichEditor
@@ -950,7 +961,7 @@ export function BoardPage() {
                 {/* Fixed top section */}
                 <div className="flex-shrink-0">
                   {/* Task Info Bar */}
-                  <div className="h-10 px-[10px] flex items-center justify-between" data-testid="workspace-info-bar">
+                  <div className="h-10 px-[30px] flex items-center justify-between" data-testid="workspace-info-bar">
                     <div className="flex items-center gap-3">
                       <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">
                         {t(`type.${activeTask.type.toLowerCase()}`)}
@@ -1055,7 +1066,7 @@ export function BoardPage() {
                   </div>
 
                   {/* Title with task ID */}
-                  <div className="px-[10px] py-2 flex items-start gap-3">
+                  <div className="px-[30px] py-2 flex items-start gap-3">
                     {editingTitle ? (
                       <input
                         className="text-xl font-bold flex-1 bg-transparent border-b border-primary focus:outline-none"
@@ -1154,7 +1165,7 @@ export function BoardPage() {
                 </Dialog>
 
                 {/* Scrollable content */}
-                <div ref={workspaceScrollRef} className="flex-1 overflow-y-auto px-[10px] pb-[10px]">
+                <div ref={workspaceScrollRef} className="flex-1 overflow-y-auto px-[30px] pb-[10px]">
                   <div className="space-y-4 pt-2">
                     {/* Entries list */}
                     {entryLoading ? (
