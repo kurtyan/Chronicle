@@ -52,6 +52,20 @@ export interface WorkSession {
   endedAt: number | null
 }
 
+export interface SearchResult {
+  taskId: string
+  taskTitle: string
+  taskType: TaskType
+  taskStatus: TaskStatus
+  taskTags: string[]
+  matchType: 'task' | 'entry_body' | 'entry_log'
+  matchedContent: string
+  originalTitle: string
+  matchedOriginal: string
+  tokens: string[]
+  rank: number
+}
+
 export const priorityColors: Record<Priority, string> = {
   HIGH: 'bg-red-500',
   MEDIUM: 'bg-yellow-500',

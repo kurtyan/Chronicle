@@ -143,8 +143,29 @@ function Sidebar() {
   )
 }
 
+import { useTaskStore } from '@/stores/taskStore'
+
 function Layout() {
   useSystemBrowserLinks()
+  const { searchMode, setSearchMode } = useTaskStore()
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+      const mod = isMac ? e.metaKey : e.ctrlKey
+      if (mod && e.shiftKey && e.code === 'KeyF') {
+        e.preventDefault()
+        e.stopPropagation()
+        setSearchMode(true)
+      }
+      if (e.key === 'Escape' && searchMode) {
+        setSearchMode(false)
+      }
+    }
+    document.addEventListener('keydown', handler, true)
+    return () => document.removeEventListener('keydown', handler, true)
+  }, [searchMode, setSearchMode])
+
   return (
     <div className="flex h-screen">
       <Sidebar />

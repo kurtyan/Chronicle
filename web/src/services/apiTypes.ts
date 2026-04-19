@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -31,5 +31,10 @@ export interface ApiInterface {
     total: number
     completed: number
     inProgress: number
+  }>
+  searchTasks(query: string, limit?: number): Promise<{
+    results: SearchResult[]
+    tokens: string[]
+    total: number
   }>
 }

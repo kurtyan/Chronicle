@@ -144,6 +144,22 @@ app.get('/api/reports/range-stats', async (c) => {
   return c.json(await service.fetchRangeStats(start, end))
 })
 
+// --- Search API ---
+import { searchTasks, rebuildFtsIndex } from './services/searchService'
+
+app.get('/api/search', async (c) => {
+  const q = c.req.query('q')
+  if (!q) return c.json({ error: 'q parameter required' }, 400)
+  const limit = parseInt(c.req.query('limit') || '50')
+  const { results, tokens } = searchTasks(q, Math.min(limit, 200))
+  return c.json({ results, tokens, total: results.length })
+})
+
+app.post('/api/search/rebuild', async (c) => {
+  rebuildFtsIndex()
+  return c.json({ ok: true })
+})
+
 // --- Settings API ---
 app.get('/api/settings/export', async (c) => {
   const { data, path: dbPath } = exportDatabase()
@@ -225,6 +241,20 @@ const port = config.server.port
 const host = config.server.host
 
 initDb()
+import { getMetaValue, setMetaValue } from './db'
+
+// Auto-rebuild FTS index when tokenizer version changes
+const FTS_INDEX_VERSION_KEY = 'fts_tokenizer_version'
+const CURRENT_TOKENIZER_VERSION = '2' // v1: old (single-letter English), v2: new (full English words + jieba)
+const storedVersion = getMetaValue(FTS_INDEX_VERSION_KEY)
+if (storedVersion !== CURRENT_TOKENIZER_VERSION) {
+  const log = getLogger()
+  log.info(`FTS index version mismatch (stored: ${storedVersion}, current: ${CURRENT_TOKENIZER_VERSION}). Rebuilding...`)
+  rebuildFtsIndex()
+  setMetaValue(FTS_INDEX_VERSION_KEY, CURRENT_TOKENIZER_VERSION)
+  log.info('FTS index rebuilt successfully')
+}
+
 startBackupService()
 
 serve({ fetch: app.fetch, port, hostname: host })

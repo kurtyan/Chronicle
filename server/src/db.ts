@@ -48,7 +48,32 @@ export function initDb() {
     )
   `)
 
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+      task_id,
+      source,
+      content,
+      tokenize = 'unicode61'
+    )
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS _meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `)
+
   getLogger().info(`Database initialized: ${dbPath}`)
+}
+
+export function getMetaValue(key: string): string | null {
+  const row = getDb().prepare('SELECT value FROM _meta WHERE key = ?').get(key) as { value: string } | undefined
+  return row ? row.value : null
+}
+
+export function setMetaValue(key: string, value: string): void {
+  getDb().prepare('INSERT OR REPLACE INTO _meta(key, value) VALUES (?, ?)').run(key, value)
 }
 
 export function getDb(): Database.Database {

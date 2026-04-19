@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession, SearchResult } from '@/types'
 import * as api from '@/services/api'
 
 export interface DraftTask {
@@ -25,6 +25,11 @@ interface TaskState {
   draftTask: DraftTask | null
   currentSession: WorkSession | null
   previousActiveTaskId: string | null
+  // Search state
+  searchMode: boolean
+  searchQuery: string
+  searchResults: SearchResult[]
+  searchTokens: string[]
 
   loadTodos: () => Promise<void>
   setActiveTask: (id: string | null) => Promise<void>
@@ -46,6 +51,9 @@ interface TaskState {
   autoTakeOver: (taskId: string) => Promise<void>
   doDrop: (id: string, reason: string) => Promise<Task | null>
   loadCurrentSession: () => Promise<void>
+  // Search actions
+  setSearchMode: (on: boolean) => void
+  doSearch: (query: string) => Promise<void>
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
@@ -62,6 +70,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   draftTask: null,
   currentSession: null,
   previousActiveTaskId: null,
+  searchMode: false,
+  searchQuery: '',
+  searchResults: [],
+  searchTokens: [],
 
   loadTodos: async () => {
     set({ loading: true, error: null })
@@ -295,6 +307,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       set({ currentSession: session })
     } catch {
       // ignore
+    }
+  },
+
+  setSearchMode: (on) => set({
+    searchMode: on,
+    ...(on ? {} : { searchQuery: '', searchResults: [], searchTokens: [] }),
+  }),
+
+  doSearch: async (query) => {
+    set({ searchQuery: query })
+    if (!query.trim()) {
+      set({ searchResults: [], searchTokens: [] })
+      return
+    }
+    try {
+      const res = await api.searchTasks(query)
+      set({ searchResults: res.results, searchTokens: res.tokens })
+    } catch {
+      set({ searchResults: [], searchTokens: [] })
     }
   },
 }))

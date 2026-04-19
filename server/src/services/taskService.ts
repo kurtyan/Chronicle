@@ -1,4 +1,5 @@
 import { getDb } from '../db'
+import { indexTask, removeTaskFromIndex, indexEntry, removeEntryFromIndex } from './searchService'
 
 function generateTaskId(): string {
   const row = getDb().prepare('SELECT COUNT(*) as count FROM tasks').get() as { count: number }
@@ -127,7 +128,10 @@ export function createTask(data: {
       'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
       [entryId, id, data.body.trim(), 'body', now]
     )
+    indexEntry(id, entryId, data.body.trim(), 'body')
   }
+
+  indexTask(id, data.title)
 
   return getTaskById(id)!
 }
@@ -174,6 +178,9 @@ export function updateTask(id: string, data: {
 
   params.push(id)
   run(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, params)
+  if (data.title !== undefined) {
+    indexTask(id, data.title)
+  }
   return getTaskById(id)
 }
 
@@ -183,8 +190,8 @@ export function markTaskDone(id: string): Task | null {
 
 export function deleteTask(id: string): boolean {
   const result = getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id)
-  // Also delete entries
   getDb().prepare('DELETE FROM task_entries WHERE task_id = ?').run(id)
+  removeTaskFromIndex(id)
   return result.changes > 0
 }
 
@@ -209,6 +216,8 @@ export function createTaskEntry(taskId: string, content: string, type: 'body' | 
     [id, taskId, content, type, now]
   )
 
+  indexEntry(taskId, id, content, type)
+
   return { id, taskId, content, type, createdAt: now }
 }
 
@@ -217,6 +226,7 @@ export function updateTaskEntry(entryId: string, content: string): TaskEntry | n
   if (!existing) return null
 
   run('UPDATE task_entries SET content = ? WHERE id = ?', [content, entryId])
+  indexEntry(existing.task_id, entryId, content, existing.type as 'body' | 'log')
   return rowToTaskEntry(queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])!)
 }
 

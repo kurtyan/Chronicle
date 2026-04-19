@@ -4,6 +4,7 @@ import type { TaskEntry } from '@/types'
 import { RichEditor } from '@/components/RichEditor'
 import { useI18n } from '@/i18n/context'
 import { format } from 'date-fns'
+import { highlightHtml } from '@/lib/highlight'
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -20,9 +21,10 @@ interface TaskEntryBlockProps {
   onSave: (id: string, newContent: string) => void
   editing?: boolean
   onEditingChange?: (editing: boolean) => void
+  highlightTokens?: string[]
 }
 
-export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEditingChange }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEditingChange, highlightTokens }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(entry.content)
@@ -127,7 +129,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
       </div>
       <div
         className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition"
-        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(entry.content) }}
+        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(entry.content, highlightTokens) : entry.content) }}
       />
     </div>
   )
