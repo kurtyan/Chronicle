@@ -127,6 +127,7 @@ export const translations: Record<string, TranslationEntry> = {
   'report.sessionDuration': { 'zh-CN': '时长', en: 'Duration' },
   'report.ongoing': { 'zh-CN': '进行中', en: 'Ongoing' },
   'report.noSessions': { 'zh-CN': '暂无工作记录', en: 'No work sessions' },
+  'report.workDayOffset': { 'zh-CN': '工作日偏移', en: 'Work Day Offset' },
   'report.workPeriod': { 'zh-CN': '工作时间', en: 'Work Period' },
   'report.trackedTask': { 'zh-CN': '追踪任务', en: 'Tracked Task' },
 

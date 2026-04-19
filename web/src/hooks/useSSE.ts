@@ -87,7 +87,6 @@ function createFetchSSE(
         }
       } catch (err: any) {
         if (controller.signal.aborted) return
-        try { reader?.cancel() } catch {}
         const errorMsg = err.message || String(err)
         console.error('[SSE] Connection error:', errorMsg, err)
         onError(errorMsg)

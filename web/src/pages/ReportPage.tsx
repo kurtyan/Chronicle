@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
-import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight } from 'lucide-react'
+import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown } from 'lucide-react'
 import type { Task, WorkSession } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
@@ -48,6 +48,60 @@ export function ReportPage() {
   // Date-range stats (updates with selected date/view)
   const [dateRangeStats, setDateRangeStats] = useState({ total: 0, completed: 0, inProgress: 0 })
 
+  // Work day offset (hours to shift day boundary, default +5)
+  const [workDayOffset, setWorkDayOffset] = useState(() => {
+    const saved = localStorage.getItem('chronicle_workday_offset')
+    return saved ? parseInt(saved, 10) : 5
+  })
+
+  // Helper: clamp value to [min, max]
+  const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(val, max))
+
+  // Helper: get start/end timestamps for the date range in current time view, with offset applied
+  const getDayRange = (): { start: number; end: number } => {
+    if (timeView === 'day') {
+      const d = new Date(selectedDate)
+      d.setHours(0, 0, 0, 0)
+      const start = d.getTime() + workDayOffset * 3600_000
+      d.setDate(d.getDate() + 1)
+      const end = d.getTime() + workDayOffset * 3600_000
+      return { start, end }
+    }
+    if (timeView === 'week') {
+      const ws = dfStartOfWeek(selectedDate, { weekStartsOn: 1 })
+      ws.setHours(0, 0, 0, 0)
+      const start = ws.getTime() + workDayOffset * 3600_000
+      const end = addDays(ws, 7).getTime() + workDayOffset * 3600_000
+      return { start, end }
+    }
+    const ms = startOfMonth(selectedDate)
+    ms.setHours(0, 0, 0, 0)
+    const start = ms.getTime() + workDayOffset * 3600_000
+    const me = addMonths(ms, 1)
+    me.setHours(0, 0, 0, 0)
+    const end = me.getTime() + workDayOffset * 3600_000
+    return { start, end }
+  }
+
+  // Helper: iterate each day in the range, compute { dayStart, dayEnd, daySessions }
+  const getDaysInRange = (rangeStart: number, rangeEnd: number) => {
+    const days: { date: Date; dayStart: number; dayEnd: number; daySessions: WorkSession[] }[] = []
+    let d = new Date(rangeStart - workDayOffset * 3600_000)
+    d.setHours(0, 0, 0, 0)
+    while (d.getTime() + workDayOffset * 3600_000 < rangeEnd) {
+      const dayStart = d.getTime() + workDayOffset * 3600_000
+      d.setDate(d.getDate() + 1)
+      const dayEnd = d.getTime() + workDayOffset * 3600_000
+      days.push({
+        date: new Date(dayStart),
+        dayStart,
+        dayEnd,
+        daySessions: sessions.filter(s => s.startedAt >= dayStart && s.startedAt < dayEnd),
+      })
+    }
+    return days
+  }
+
   // Classic report data
   const loadData = useCallback(() => {
     setLoading(true)
@@ -80,28 +134,7 @@ export function ReportPage() {
   useEffect(() => {
     const abortController = new AbortController()
     setSessionsLoading(true)
-    let start: number, end: number
-
-    if (timeView === 'day') {
-      const dayStart = new Date(selectedDate)
-      dayStart.setHours(0, 0, 0, 0)
-      start = dayStart.getTime()
-      const dayEnd = new Date(selectedDate)
-      dayEnd.setHours(23, 59, 59, 999)
-      end = dayEnd.getTime()
-    } else if (timeView === 'week') {
-      const weekStart = dfStartOfWeek(selectedDate, { weekStartsOn: 1 })
-      weekStart.setHours(0, 0, 0, 0)
-      start = weekStart.getTime()
-      end = addDays(weekStart, 7).getTime() - 1
-    } else {
-      const monthStart = startOfMonth(selectedDate)
-      monthStart.setHours(0, 0, 0, 0)
-      start = monthStart.getTime()
-      const monthEnd = addMonths(monthStart, 1)
-      monthEnd.setHours(23, 59, 59, 999)
-      end = monthEnd.getTime() - 1
-    }
+    const { start, end } = getDayRange()
 
     let isStale = false
 
@@ -151,97 +184,62 @@ export function ReportPage() {
       isStale = true
       abortController.abort()
     }
-  }, [timeView, selectedDate])
+  }, [timeView, selectedDate, workDayOffset])
 
-  // Stats calculation
+  // Stats calculation — offset-based
   const stats = useMemo(() => {
-    if (sessions.length === 0) {
-      return { onDuty: 0, workTime: 0, idleTime: 0 }
-    }
-
-    // Use Date.now() when any session is ongoing, otherwise use the latest endedAt
-    const hasOngoing = sessions.some(s => !s.endedAt)
-    const latestEndedAt = sessions
-      .filter(s => s.endedAt)
-      .map(s => s.endedAt!)
-      .sort((a, b) => b - a)[0]
-    const now = hasOngoing ? Date.now() : (latestEndedAt ?? Date.now())
-
-    // Group sessions by day
-    const dayMap = new Map<string, typeof sessions>()
-    sessions.forEach(s => {
-      const dayKey = format(new Date(s.startedAt), 'yyyy-MM-dd')
-      if (!dayMap.has(dayKey)) dayMap.set(dayKey, [])
-      dayMap.get(dayKey)!.push(s)
-    })
-
+    const range = getDayRange()
+    const days = getDaysInRange(range.start, range.end)
     let totalOnDuty = 0
     let totalWorkTime = 0
-
-    dayMap.forEach(daySessions => {
-      if (daySessions.length === 0) return
-
-      const startedAts = daySessions.map(s => s.startedAt)
-      // For endedAt, use actual endedAt or 'now' for ongoing sessions
-      const endedAts = daySessions.map(s => s.endedAt ?? now)
-
-      const firstTakeover = Math.min(...startedAts)
-      const lastAfk = Math.max(...endedAts)
-      const dayOnDuty = lastAfk - firstTakeover
-      totalOnDuty += dayOnDuty
-
-      const dayWorkTime = daySessions.reduce((sum, s) => {
-        const endTime = s.endedAt ?? now
-        return sum + (endTime - s.startedAt)
+    for (const { dayStart, dayEnd, daySessions } of days) {
+      if (daySessions.length === 0) continue
+      const firstTakeover = Math.min(...daySessions.map(s => s.startedAt))
+      const lastAfk = daySessions.some(s => !s.endedAt)
+        ? dayEnd
+        : Math.max(...daySessions.map(s => s.endedAt!))
+      totalOnDuty += lastAfk - firstTakeover
+      totalWorkTime += daySessions.reduce((sum, s) => {
+        const sessionEnd = s.endedAt ?? dayEnd
+        return sum + Math.max(0, clamp(sessionEnd, dayStart, dayEnd) - clamp(s.startedAt, dayStart, dayEnd))
       }, 0)
-      totalWorkTime += dayWorkTime
-    })
-
-    const idleTime = totalOnDuty - totalWorkTime
-    return { onDuty: totalOnDuty, workTime: totalWorkTime, idleTime: Math.max(0, idleTime) }
-  }, [sessions])
-
-  // Group sessions by day for all views
-  const groupedSessions = useMemo(() => {
-    const groups: { date: Date; sessions: WorkSession[]; firstTakeOver: number; lastAfk: number }[] = []
-    const dayMap = new Map<string, WorkSession[]>()
-
-    const sorted = [...sessions].sort((a, b) => b.startedAt - a.startedAt)
-    sorted.forEach(s => {
-      const dayKey = format(new Date(s.startedAt), 'yyyy-MM-dd')
-      if (!dayMap.has(dayKey)) dayMap.set(dayKey, [])
-      dayMap.get(dayKey)!.push(s)
-    })
-
-    const now = Date.now()
-    for (const [dateStr, daySessions] of dayMap) {
-      const startedAts = daySessions.map(s => s.startedAt)
-      const endedAts = daySessions.map(s => s.endedAt ?? now)
-      groups.push({
-        date: new Date(dateStr),
-        sessions: daySessions.sort((a, b) => b.startedAt - a.startedAt),
-        firstTakeOver: Math.min(...startedAts),
-        lastAfk: Math.max(...endedAts),
-      })
     }
+    return { onDuty: totalOnDuty, workTime: totalWorkTime, idleTime: Math.max(0, totalOnDuty - totalWorkTime) }
+  }, [sessions, timeView, selectedDate, workDayOffset])
 
-    groups.sort((a, b) => b.date.getTime() - a.date.getTime())
-    return groups
-  }, [sessions])
+  // Group sessions by offset-based day
+  const groupedSessions = useMemo(() => {
+    const range = getDayRange()
+    const days = getDaysInRange(range.start, range.end)
+    return days
+      .filter(d => d.daySessions.length > 0)
+      .map(d => ({
+        date: d.date,
+        sessions: [...d.daySessions].sort((a, b) => b.startedAt - a.startedAt),
+        firstTakeOver: Math.min(...d.daySessions.map(s => s.startedAt)),
+        lastAfk: d.daySessions.some(s => !s.endedAt)
+          ? d.dayEnd
+          : Math.max(...d.daySessions.map(s => s.endedAt!)),
+      }))
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+  }, [sessions, timeView, selectedDate, workDayOffset])
 
   // Date display
   const dateDisplay = useMemo(() => {
+    const now = new Date()
     if (timeView === 'day') {
-      const isToday = isSameDay(selectedDate, new Date())
+      const isToday = isSameDay(selectedDate, now)
       return { text: format(selectedDate, 'yyyy-MM-dd', { locale: dateLocale }), isToday }
     }
     if (timeView === 'week') {
       const monday = dfStartOfWeek(selectedDate, { weekStartsOn: 1 })
       const sunday = addDays(monday, 6)
-      const isThisWeek = isSameDay(monday, dfStartOfWeek(new Date(), { weekStartsOn: 1 }))
+      const thisMonday = dfStartOfWeek(now, { weekStartsOn: 1 })
+      const isThisWeek = isSameDay(monday, thisMonday)
       return { text: `${format(monday, 'MM-dd', { locale: dateLocale })} ~ ${format(sunday, 'MM-dd', { locale: dateLocale })}`, isToday: isThisWeek }
     }
-    return { text: format(selectedDate, 'yyyy/MM', { locale: dateLocale }), isToday: isSameDay(startOfMonth(selectedDate), startOfMonth(new Date())) }
+    const isThisMonth = selectedDate.getMonth() === now.getMonth() && selectedDate.getFullYear() === now.getFullYear()
+    return { text: format(selectedDate, 'yyyy/MM', { locale: dateLocale }), isToday: isThisMonth }
   }, [timeView, selectedDate, dateLocale])
 
   const navigateLeft = () => {
@@ -305,6 +303,35 @@ export function ReportPage() {
           <button className="p-1 rounded hover:bg-muted transition" onClick={navigateRight}>
             <ChevronRight className="w-4 h-4" />
           </button>
+          <div className="w-4" />
+          {/* Offset config */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs tabular-nums">+{workDayOffset}h</span>
+            <div className="flex flex-col items-center gap-0">
+              <button
+                className="p-0.5 leading-none rounded hover:bg-muted transition"
+                onClick={() => {
+                  const v = Math.min(workDayOffset + 1, 12)
+                  setWorkDayOffset(v)
+                  localStorage.setItem('chronicle_workday_offset', String(v))
+                }}
+                title={t('report.workDayOffset')}
+              >
+                <ChevronUp className="w-4 h-4" />
+              </button>
+              <button
+                className="p-0.5 leading-none rounded hover:bg-muted transition"
+                onClick={() => {
+                  const v = Math.max(workDayOffset - 1, -12)
+                  setWorkDayOffset(v)
+                  localStorage.setItem('chronicle_workday_offset', String(v))
+                }}
+                title={t('report.workDayOffset')}
+              >
+                <ChevronDown className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
