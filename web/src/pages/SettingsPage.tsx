@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
-import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Shield } from 'lucide-react'
+import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
