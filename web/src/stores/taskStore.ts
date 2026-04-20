@@ -259,12 +259,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       }))
     }
     set({ currentSession: session, lastAfkTime: null })
+    localStorage.removeItem('chronicle_lastAfkTime')
     return session
   },
 
   doAfk: async () => {
     await api.doAfk()
-    set({ currentSession: null, lastAfkTime: Date.now() })
+    const afkTime = Date.now()
+    localStorage.setItem('chronicle_lastAfkTime', String(afkTime))
+    set({ currentSession: null, lastAfkTime: afkTime })
   },
 
   autoTakeOver: async (taskId) => {
@@ -286,6 +289,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       }))
     }
     set({ currentSession: session, lastAfkTime: null })
+    localStorage.removeItem('chronicle_lastAfkTime')
   },
 
   doDrop: async (id, reason) => {
@@ -306,7 +310,16 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   loadCurrentSession: async () => {
     try {
       const session = await api.getCurrentSession()
-      set({ currentSession: session })
+      if (session) {
+        localStorage.removeItem('chronicle_lastAfkTime')
+        set({ currentSession: session, lastAfkTime: null })
+      } else {
+        // Restore lastAfkTime from localStorage for idle display on startup
+        const stored = localStorage.getItem('chronicle_lastAfkTime')
+        if (stored) {
+          set({ lastAfkTime: parseInt(stored, 10) })
+        }
+      }
     } catch {
       // ignore
     }

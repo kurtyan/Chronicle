@@ -2,7 +2,8 @@
 
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, Modifiers, Code, ShortcutState};
 
 #[tauri::command]
 fn get_server_url() -> Result<String, String> {
@@ -66,8 +67,17 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .invoke_handler(tauri::generate_handler![get_server_url, get_client_log, set_zoom, write_client_log])
         .setup(|app| {
+            // Register Cmd+Shift+T global shortcut for Take Over
+            let shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyT);
+            app.global_shortcut().on_shortcut(shortcut, |_app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    let _ = _app.emit("global-shortcut-takeover", ());
+                }
+            }).ok();
+
             let window = app.get_webview_window("main").unwrap();
 
             window.on_window_event(move |event| {

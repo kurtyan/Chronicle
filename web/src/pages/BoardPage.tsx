@@ -11,6 +11,18 @@ import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogD
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
 
+// Tauri global快捷键事件（绕过 WKWebView 拦截）
+async function registerGlobalShortcutTakeover(callback: () => void) {
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen('global-shortcut-takeover', callback)
+    return unlisten
+  } catch {
+    // Not in Tauri env, ignore
+    return null
+  }
+}
+
 const DRAFT_ID = '__draft__'
 
 // Check if HTML content is effectively empty (no visible text)
@@ -39,6 +51,21 @@ export function BoardPage() {
   // Load current session on mount
   useEffect(() => {
     loadCurrentSession()
+  }, [])
+
+  // Listen for Tauri global shortcut Cmd+Shift+T → Take Over
+  useEffect(() => {
+    let cleanup: (() => void) | undefined
+    registerGlobalShortcutTakeover(async () => {
+      const s = useTaskStore.getState()
+      if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
+        if (s.currentSession) {
+          await s.doAfk()
+        }
+        await s.takeOver(s.activeTaskId!)
+      }
+    }).then(fn => { cleanup = fn ?? undefined })
+    return () => cleanup?.()
   }, [])
 
   // Reload todos when filter changes
@@ -396,8 +423,13 @@ export function BoardPage() {
       if (mod && e.shiftKey && e.key === 'T') {
         e.preventDefault()
         e.stopPropagation()
+        const s = stateRef.current
         if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
-          handleTakeOver()
+          if (s.currentSession) {
+            doAfk().then(() => takeOver(s.activeTaskId!))
+          } else {
+            takeOver(s.activeTaskId!)
+          }
         }
         return
       }
@@ -1448,12 +1480,11 @@ function TrackingStatusIndicator({ currentSession, tasks, onNavigate }: {
   return (
     <div
       className="text-xs px-2 py-1 rounded bg-green-500/10 text-green-600 overflow-hidden cursor-pointer hover:brightness-125 transition flex items-center gap-1.5"
-      style={{ width: '20ch', maxWidth: '20ch' }}
+      style={{ width: '32ch', maxWidth: '32ch' }}
       onClick={onNavigate}
       title={trackedTask?.title}
     >
-      <span className="whitespace-nowrap shrink-0">{t('workspace.tracking')}</span>
-      <span className="text-green-600 whitespace-nowrap shrink-0 font-mono">{formatDuration(elapsed)}</span>
+      <span className="whitespace-nowrap shrink-0 font-mono">{t('workspace.tracking')} {formatDuration(elapsed)}</span>
       <span
         ref={containerRef}
         className="overflow-hidden min-w-0 leading-[1]"

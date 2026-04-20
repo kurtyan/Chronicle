@@ -5,6 +5,6 @@ export default defineConfig({
   testMatch: '**/*.ts',
   timeout: 30000,
   use: {
-    baseURL: 'http://localhost:8080',
+    baseURL: 'http://localhost:8083',
   },
 })
