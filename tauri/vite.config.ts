@@ -18,7 +18,7 @@ export default defineConfig(({ command }) => ({
     port: 5176,
     proxy: {
       '/api': {
-        target: 'http://localhost:8083',
+        target: 'http://localhost:9876',
         changeOrigin: true,
         configure: (proxy, _options) => {
           proxy.on('proxyReq', (proxyReq, req) => {

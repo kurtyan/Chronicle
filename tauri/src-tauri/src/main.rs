@@ -122,8 +122,10 @@ fn emit_auto_afk(app: &tauri::AppHandle, reason: &str) {
         .as_secs();
     let last = LAST_AUTO_AFK_EMIT.load(Ordering::Relaxed);
     if now - last < 60 {
-        return; // dedup: max once per 60s
+        let _ = write_client_log(format!("[Auto-AFK] skipped (dedup, reason: {}, last emitted {}s ago)", reason, now - last));
+        return;
     }
+    let _ = write_client_log(format!("[Auto-AFK] emit triggered, reason: {}", reason));
     LAST_AUTO_AFK_EMIT.store(now, Ordering::Relaxed);
 
     // Directly call server API to end sessions
@@ -171,6 +173,7 @@ fn setup_screen_lock_detection(app: &tauri::AppHandle) {
 
     std::thread::spawn(move || {
         let mut was_locked = false;
+        let _ = write_client_log("[Auto-AFK] screen lock detection thread started".to_string());
         loop {
             std::thread::sleep(Duration::from_secs(5));
             let config = read_auto_afk_config();
@@ -179,7 +182,9 @@ fn setup_screen_lock_detection(app: &tauri::AppHandle) {
                 continue;
             }
             let is_locked = is_screen_locked();
+            let _ = write_client_log(format!("[Auto-AFK] screen lock check: is_locked={}, was_locked={}", is_locked, was_locked));
             if is_locked && !was_locked {
+                let _ = write_client_log("[Auto-AFK] triggering AFK due to screen lock".to_string());
                 emit_auto_afk(&app_handle, "screen-lock");
             }
             was_locked = is_locked;
@@ -246,6 +251,7 @@ static IDLE_CHECKER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::
 
 fn setup_idle_checker(app: &tauri::AppHandle, config: &AutoAfkConfig) {
     if !config.enabled || !config.idle_enabled {
+        let _ = write_client_log(format!("[Auto-AFK] idle checker disabled: enabled={}, idle_enabled={}", config.enabled, config.idle_enabled));
         return;
     }
     if IDLE_CHECKER_STARTED.swap(true, Ordering::Relaxed) {
@@ -253,6 +259,8 @@ fn setup_idle_checker(app: &tauri::AppHandle, config: &AutoAfkConfig) {
     }
 
     let app_handle = app.clone();
+    let timeout = config.idle_timeout_seconds;
+    let _ = write_client_log(format!("[Auto-AFK] idle checker thread started, timeout={}s", timeout));
 
     std::thread::spawn(move || {
         loop {
@@ -263,7 +271,10 @@ fn setup_idle_checker(app: &tauri::AppHandle, config: &AutoAfkConfig) {
             }
             match system_idle_time::get_idle_time() {
                 Ok(idle_duration) => {
+                    let idle_secs = idle_duration.as_secs();
+                    let _ = write_client_log(format!("[Auto-AFK] idle check: idle={}s, threshold={}s, timeout={}", idle_secs, config.idle_timeout_seconds, idle_secs >= config.idle_timeout_seconds));
                     if idle_duration >= Duration::from_secs(config.idle_timeout_seconds) {
+                        let _ = write_client_log(format!("[Auto-AFK] triggering AFK due to idle ({}s)", idle_secs));
                         emit_auto_afk(&app_handle, "idle");
                     }
                 }
@@ -315,22 +326,19 @@ fn main() {
                 }).ok();
             }
 
-            // Register Cmd+Shift+D global shortcut for Done + AFK
-            let shortcut_done = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyD);
-            app.global_shortcut().on_shortcut(shortcut_done, |_app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
-                    let _ = _app.emit("global-shortcut-done-task", ());
-                }
-            }).ok();
+            // Cmd+Shift+D (Done + AFK) is handled in-browser — no global shortcut needed
 
             // Auto-AFK setup
             let config = read_auto_afk_config();
+            let _ = write_client_log(format!("[Auto-AFK] config loaded: enabled={}, screen_lock={}, idle={}, timeout={}", config.enabled, config.screen_lock_enabled, config.idle_enabled, config.idle_timeout_seconds));
             if config.enabled {
                 if config.screen_lock_enabled {
                     #[cfg(target_os = "macos")]
                     setup_screen_lock_detection(&app.handle());
                 }
                 setup_idle_checker(&app.handle(), &config);
+            } else {
+                let _ = write_client_log("[Auto-AFK] disabled, not starting detection threads".to_string());
             }
 
             let window = app.get_webview_window("main").unwrap();

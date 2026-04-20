@@ -171,14 +171,24 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
     const updated = await api.markTaskDone(id)
     if (!updated) return null
-    set((state) => ({
-      tasks: (state.statusFilter === 'DONE'
+    set((state) => {
+      const nextTasks = (state.statusFilter === 'DONE'
         ? state.tasks.map((t) => (t.id === id ? updated : t))
         : state.tasks.filter((t) => t.id !== id)
-      ).sort((a, b) => b.updatedAt - a.updatedAt),
-      activeTaskId: state.activeTaskId === id ? null : state.activeTaskId,
-      entries: state.activeTaskId === id ? [] : state.entries,
-    }))
+      ).sort((a, b) => b.updatedAt - a.updatedAt)
+      // When task is removed from list, select the next task at the same index
+      let nextActiveId = state.activeTaskId
+      if (state.activeTaskId === id) {
+        const oldIndex = state.tasks.findIndex(t => t.id === id)
+        const nextTask = nextTasks[oldIndex] ?? nextTasks[oldIndex - 1] ?? null
+        nextActiveId = nextTask?.id ?? null
+      }
+      return {
+        tasks: nextTasks,
+        activeTaskId: nextActiveId,
+        entries: state.activeTaskId === id ? [] : state.entries,
+      }
+    })
     return updated
   },
 

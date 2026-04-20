@@ -23,16 +23,6 @@ async function registerGlobalShortcutTakeover(callback: () => void) {
   }
 }
 
-async function registerGlobalShortcutDone(callback: () => void) {
-  try {
-    const { listen } = await import('@tauri-apps/api/event')
-    const unlisten = await listen('global-shortcut-done-task', callback)
-    return unlisten
-  } catch {
-    return null
-  }
-}
-
 const DRAFT_ID = '__draft__'
 
 // Check if HTML content is effectively empty (no visible text)
@@ -78,17 +68,7 @@ export function BoardPage() {
     return () => cleanup?.()
   }, [])
 
-  // Listen for Tauri global shortcut Cmd+Shift+D → Done + AFK
-  useEffect(() => {
-    let cleanup: (() => void) | undefined
-    registerGlobalShortcutDone(async () => {
-      const s = useTaskStore.getState()
-      if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
-        await s.markDone(s.activeTaskId)
-      }
-    }).then(fn => { cleanup = fn ?? undefined })
-    return () => cleanup?.()
-  }, [])
+  // Cmd+Shift+D (Done) is now handled in-browser via keyboard shortcuts
 
   // Reload todos when filter changes
   useEffect(() => {
@@ -358,20 +338,6 @@ export function BoardPage() {
         return
       }
 
-      // Cmd/Ctrl + S: Save/Submit (exclude Cmd+Shift+S for priority)
-      if (mod && !e.shiftKey && e.key === 's') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (s.activeTaskId === DRAFT_ID && s.draftTitle.trim()) {
-          startDraft({ title: s.draftTitle, body: s.draftBody, type: s.draftType, priority: s.draftPriority, tags: s.draftTags.split(',').map((x: string) => x.trim()).filter(Boolean), dueDate: s.draftDueDate ? new Date(s.draftDueDate).getTime() : null })
-          commitDraft().catch((err: Error) => console.error('Failed to commit draft:', err))
-        } else if (s.activeTaskId && !isHtmlEmpty(s.logContent)) {
-          submitEntry(s.activeTaskId, s.logContent.trim(), 'log').catch((err: Error) => console.error('Failed to submit entry:', err))
-          setLogContent('')
-        }
-        return
-      }
-
       // Arrow Right: focus log editor for currently selected task
       if (!isEditing && !s.showDropDialog && !s.showCancelConfirm && s.activeTaskId && s.activeTaskId !== DRAFT_ID && !s.searchMode) {
         if (e.key === 'ArrowRight') {
@@ -454,6 +420,28 @@ export function BoardPage() {
           }
         }
         return
+      }
+
+      // Cmd+Shift+S: start task (set to DOING)
+      if (mod && e.shiftKey && (e.key === 's' || e.key === 'S') && s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
+        const activeTask = s.tasks.find(t => t.id === s.activeTaskId)
+        if (activeTask?.status === 'PENDING') {
+          e.preventDefault()
+          e.stopPropagation()
+          updateTask(s.activeTaskId, { status: 'DOING' }).catch((err: Error) => console.error('Failed to start task:', err))
+          return
+        }
+      }
+
+      // Cmd+Shift+D: mark DOING task as DONE
+      if (mod && e.shiftKey && (e.key === 'd' || e.key === 'D') && s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
+        const activeTask = s.tasks.find(t => t.id === s.activeTaskId)
+        if (activeTask?.status === 'DOING') {
+          e.preventDefault()
+          e.stopPropagation()
+          markDone(s.activeTaskId).catch((err: Error) => console.error('Failed to mark done:', err))
+          return
+        }
       }
 
       // Cmd+Shift+A/S/D: set priority when creating task
@@ -1186,7 +1174,7 @@ export function BoardPage() {
                       }}
                     />
                     <div className="text-xs text-muted-foreground">
-                      Ctrl+S {t('task.save')}
+                      Ctrl+Enter {t('task.save')}
                     </div>
                   </div>
                 </div>
