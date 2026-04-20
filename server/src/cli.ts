@@ -79,7 +79,7 @@ function cmdStart() {
 
   console.log(`[chronicle] Starting server in background at http://${host}:${port}...`)
 
-  const child = spawn('node', [SERVER_INDEX], {
+  const child = spawn('node', [SERVER_INDEX, '--port', String(port)], {
     detached: true,
     stdio: ['ignore', stdout, stderr],
     cwd: SCRIPT_DIR,
@@ -189,6 +189,7 @@ Usage:
   chronicle          Show this help
 
 Config: ~/.chronicle/config.json
+Dev:    node dist/index.js --port <number>  Override port without modifying config
 `)
 }
 

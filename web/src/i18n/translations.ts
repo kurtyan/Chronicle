@@ -162,4 +162,16 @@ export const translations: Record<string, TranslationEntry> = {
   'search.matchBody': { 'zh-CN': '正文', en: 'Body' },
   'search.matchLog': { 'zh-CN': '记录', en: 'Log' },
   'search.close': { 'zh-CN': '关闭', en: 'Close' },
+
+  // Auto-AFK Settings
+  'settings.autoAfkTitle': { 'zh-CN': '自动离开检测', en: 'Auto-AFK Detection' },
+  'settings.autoAfkEnabled': { 'zh-CN': '启用自动离开', en: 'Enable Auto-AFK' },
+  'settings.screenLockAfk': { 'zh-CN': '屏幕锁定时自动离开', en: 'Auto-AFK on screen lock' },
+  'settings.screenLockAfkDesc': { 'zh-CN': 'Mac 屏幕锁定时自动结束工作会话', en: 'Automatically end work session when Mac screen is locked' },
+  'settings.idleAfk': { 'zh-CN': '输入空闲自动离开', en: 'Auto-AFK on input idle' },
+  'settings.idleAfkDesc': { 'zh-CN': '键盘/鼠标无操作一段时间后自动离开', en: 'Automatically AFK after period of no keyboard/mouse input' },
+  'settings.idleTimeout': { 'zh-CN': '空闲超时', en: 'Idle timeout' },
+  'settings.idleTimeoutMinutes': { 'zh-CN': '分钟', en: 'minutes' },
+  'settings.saveAutoAfk': { 'zh-CN': '保存设置', en: 'Save Auto-AFK Settings' },
+  'settings.autoAfkSaved': { 'zh-CN': '自动离开设置已保存', en: 'Auto-AFK settings saved' },
 }

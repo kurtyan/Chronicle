@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
-import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal } from 'lucide-react'
+import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Shield } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
@@ -44,6 +44,12 @@ export function SettingsPage() {
   const [clientLog, setClientLog] = useState('')
   const [logLoading, setLogLoading] = useState(false)
 
+  // Auto-AFK state
+  const [autoAfkEnabled, setAutoAfkEnabled] = useState(false)
+  const [screenLockEnabled, setScreenLockEnabled] = useState(true)
+  const [idleEnabled, setIdleEnabled] = useState(true)
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(5)
+
   useEffect(() => {
     apiFetch('/api/settings/info')
       .then(r => r.json())
@@ -58,6 +64,36 @@ export function SettingsPage() {
       .then((log: string) => { setClientLog(log); setLogLoading(false) })
       .catch(() => { setClientLog(t('settings.logUnavailable')); setLogLoading(false) })
   }, [showLog])
+
+  // Load auto-AFK config on mount
+  useEffect(() => {
+    if (!isTauriEnv) return
+    ;(window as any).__TAURI__.core.invoke('get_auto_afk_config')
+      .then((cfg: any) => {
+        setAutoAfkEnabled(cfg.enabled)
+        setScreenLockEnabled(cfg.screen_lock_enabled)
+        setIdleEnabled(cfg.idle_enabled)
+        setIdleTimeoutMinutes(Math.round(cfg.idle_timeout_seconds / 60))
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleSaveAutoAfk = async () => {
+    try {
+      await (window as any).__TAURI__.core.invoke('set_auto_afk_config', {
+        config: {
+          enabled: autoAfkEnabled,
+          screen_lock_enabled: screenLockEnabled,
+          idle_enabled: idleEnabled,
+          idle_timeout_seconds: idleTimeoutMinutes * 60,
+        },
+      })
+      setMessage({ type: 'success', text: t('settings.autoAfkSaved') })
+      setTimeout(() => setMessage(null), 3000)
+    } catch {
+      setMessage({ type: 'error', text: 'Failed to save Auto-AFK settings' })
+    }
+  }
 
   const handleExport = async () => {
     setExporting(true)
@@ -221,6 +257,83 @@ export function SettingsPage() {
               placeholder={logLoading ? 'Loading...' : 'No log available'}
             />
           )}
+        </div>
+      )}
+
+      {/* Auto-AFK Settings (Tauri only) */}
+      {isTauriEnv && (
+        <div className="bg-card rounded-lg border p-4 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Clock className="w-5 h-5 text-muted-foreground" />
+            <h2 className="text-lg font-medium">{t('settings.autoAfkTitle')}</h2>
+          </div>
+
+          <div className="space-y-4">
+            {/* Master toggle */}
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoAfkEnabled}
+                onChange={(e) => setAutoAfkEnabled(e.target.checked)}
+                className="w-4 h-4 rounded"
+              />
+              <span className="text-sm font-medium">{t('settings.autoAfkEnabled')}</span>
+            </label>
+
+            {autoAfkEnabled && (
+              <div className="ml-7 space-y-4 border-l-2 border-muted pl-4 pb-2">
+                {/* Screen lock AFK */}
+                <div>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={screenLockEnabled}
+                      onChange={(e) => setScreenLockEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded"
+                    />
+                    <span className="text-sm font-medium">{t('settings.screenLockAfk')}</span>
+                  </label>
+                  <p className="text-xs text-muted-foreground ml-7 mt-1">{t('settings.screenLockAfkDesc')}</p>
+                </div>
+
+                {/* Idle AFK */}
+                <div>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={idleEnabled}
+                      onChange={(e) => setIdleEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded"
+                    />
+                    <span className="text-sm font-medium">{t('settings.idleAfk')}</span>
+                  </label>
+                  <p className="text-xs text-muted-foreground ml-7 mt-1">{t('settings.idleAfkDesc')}</p>
+
+                  {idleEnabled && (
+                    <div className="flex items-center gap-2 ml-7 mt-2">
+                      <label className="text-sm text-muted-foreground">{t('settings.idleTimeout')}:</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={idleTimeoutMinutes}
+                        onChange={(e) => setIdleTimeoutMinutes(Math.max(1, Math.min(60, parseInt(e.target.value, 10) || 1)))}
+                        className="w-16 px-2 py-1 text-sm border rounded bg-background"
+                      />
+                      <span className="text-sm text-muted-foreground">{t('settings.idleTimeoutMinutes')}</span>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={handleSaveAutoAfk}
+                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90 transition"
+                >
+                  {t('settings.saveAutoAfk')}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

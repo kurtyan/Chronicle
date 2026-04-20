@@ -253,7 +253,11 @@ app.get('*', (c) => {
 
 // --- Start ---
 const config = getConfig()
-const port = config.server.port
+const cliPort = (() => {
+  const idx = process.argv.indexOf('--port')
+  return idx >= 0 ? parseInt(process.argv[idx + 1], 10) : undefined
+})()
+const port = cliPort ?? config.server.port
 const host = config.server.host
 
 initDb()
