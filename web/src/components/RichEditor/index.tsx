@@ -1,6 +1,6 @@
-import { useEditor, EditorContent } from '@tiptap/react'
+import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import Image from '@tiptap/extension-image'
+import TipTapImage from '@tiptap/extension-image'
 import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -8,6 +8,28 @@ import { Bold, Italic, List, ListOrdered, Code, Link2, Image as ImageIcon, Strik
 import { useEffect, useRef } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
+
+const IMAGE_MAX_SIZE = 80
+
+/** Insert image with auto-resize: scale down so max(width,height) ≤ 80px */
+function insertImageWithResize(ed: Editor | null, src: string) {
+  if (!ed) return
+  const img = new Image()
+  img.onload = () => {
+    let w = img.naturalWidth
+    let h = img.naturalHeight
+    if (w > IMAGE_MAX_SIZE || h > IMAGE_MAX_SIZE) {
+      const scale = IMAGE_MAX_SIZE / Math.max(w, h)
+      w = Math.round(w * scale)
+      h = Math.round(h * scale)
+    }
+    ed.chain().focus().setImage({ src, width: w, height: h }).run()
+  }
+  img.onerror = () => {
+    ed.chain().focus().setImage({ src }).run()
+  }
+  img.src = src
+}
 
 interface RichEditorProps {
   content: string
@@ -62,7 +84,7 @@ export function RichEditor({
       StarterKit.configure({
         heading: { levels: [1, 2] },
       }),
-      Image.configure({
+      TipTapImage.configure({
         allowBase64: true,
         HTMLAttributes: {
           class: 'rounded-md max-w-full',
@@ -128,7 +150,7 @@ export function RichEditor({
 
               reader.onload = (e) => {
                 const src = e.target?.result as string
-                editor?.chain().focus().setImage({ src }).run()
+                insertImageWithResize(editor, src)
               }
               reader.onerror = () => {
                 console.error('Failed to read pasted image')
@@ -302,7 +324,7 @@ export function RichEditor({
                 if (file) {
                   const reader = new FileReader()
                   reader.onload = (e) => {
-                    editor.chain().focus().setImage({ src: e.target?.result as string }).run()
+                    insertImageWithResize(editor, e.target?.result as string)
                   }
                   reader.readAsDataURL(file)
                 }

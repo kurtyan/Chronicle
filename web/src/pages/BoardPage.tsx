@@ -27,7 +27,7 @@ export function BoardPage() {
   const { t } = useI18n()
   const {
     tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
-    statusFilter, isTodayFilter, draftTask, currentSession,
+    statusFilter, isTodayFilter, draftTask, currentSession, lastAfkTime,
     searchMode, searchQuery, searchResults, searchTokens,
     loadTodos, setActiveTask, updateTask, deleteTask, markDone,
     submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
@@ -216,6 +216,7 @@ export function BoardPage() {
     showCancelConfirm,
     tasks,
     currentSession,
+    lastAfkTime,
     statusFilter,
     isTodayFilter,
     searchMode,
@@ -236,6 +237,7 @@ export function BoardPage() {
       showCancelConfirm,
       tasks,
       currentSession,
+      lastAfkTime,
       statusFilter,
       isTodayFilter,
       searchMode,
@@ -307,8 +309,8 @@ export function BoardPage() {
         return
       }
 
-      // Cmd/Ctrl + S: Save/Submit
-      if (mod && e.key === 's') {
+      // Cmd/Ctrl + S: Save/Submit (exclude Cmd+Shift+S for priority)
+      if (mod && !e.shiftKey && e.key === 's') {
         e.preventDefault()
         e.stopPropagation()
         if (s.activeTaskId === DRAFT_ID && s.draftTitle.trim()) {
@@ -388,6 +390,38 @@ export function BoardPage() {
         e.stopPropagation()
         setTodayFilter(!s.isTodayFilter)
         return
+      }
+
+      // Cmd+Shift+T: Take Over current task
+      if (mod && e.shiftKey && e.key === 'T') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
+          handleTakeOver()
+        }
+        return
+      }
+
+      // Cmd+Shift+A/S/D: set priority when creating task
+      if (mod && e.shiftKey && s.activeTaskId === DRAFT_ID) {
+        if (e.key === 'a' || e.key === 'A') {
+          e.preventDefault()
+          e.stopPropagation()
+          setDraftPriority('HIGH')
+          return
+        }
+        if (e.key === 's' || e.key === 'S') {
+          e.preventDefault()
+          e.stopPropagation()
+          setDraftPriority('MEDIUM')
+          return
+        }
+        if (e.key === 'd' || e.key === 'D') {
+          e.preventDefault()
+          e.stopPropagation()
+          setDraftPriority('LOW')
+          return
+        }
       }
 
       // Cmd+R: refresh task list, active task detail, and current session
@@ -989,9 +1023,7 @@ export function BoardPage() {
                     }}
                   />
                 ) : (
-                  <span className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground">
-                    {t('workspace.notTracking')}
-                  </span>
+                  <IdleTimeIndicator />
                 )}
                 {currentSession && (
                   <button
@@ -1181,9 +1213,7 @@ export function BoardPage() {
                           }}
                         />
                       ) : (
-                        <span className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground">
-                          {t('workspace.notTracking')}
-                        </span>
+                        <IdleTimeIndicator />
                       )}
                       {/* Take Over button when tracking a different task than the one being viewed */}
                       {currentSession && activeTaskId && activeTaskId !== DRAFT_ID && currentSession.taskId !== activeTaskId && (
@@ -1389,7 +1419,7 @@ export function BoardPage() {
   )
 }
 
-// Tracking status indicator with conditional marquee
+// Tracking status indicator with elapsed working time
 function TrackingStatusIndicator({ currentSession, tasks, onNavigate }: {
   currentSession: WorkSession
   tasks: Task[]
@@ -1400,6 +1430,7 @@ function TrackingStatusIndicator({ currentSession, tasks, onNavigate }: {
   const titleRef = useRef<HTMLSpanElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [isOverflowing, setIsOverflowing] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
 
   useEffect(() => {
     const titleEl = titleRef.current
@@ -1407,6 +1438,12 @@ function TrackingStatusIndicator({ currentSession, tasks, onNavigate }: {
     if (!titleEl || !containerEl) return
     setIsOverflowing(titleEl.scrollWidth > containerEl.clientWidth)
   }, [trackedTask?.title])
+
+  useEffect(() => {
+    setElapsed(Date.now() - currentSession.startedAt)
+    const timer = setInterval(() => setElapsed(Date.now() - currentSession.startedAt), 1000)
+    return () => clearInterval(timer)
+  }, [currentSession.startedAt])
 
   return (
     <div
@@ -1416,6 +1453,7 @@ function TrackingStatusIndicator({ currentSession, tasks, onNavigate }: {
       title={trackedTask?.title}
     >
       <span className="whitespace-nowrap shrink-0">{t('workspace.tracking')}</span>
+      <span className="text-green-600 whitespace-nowrap shrink-0 font-mono">{formatDuration(elapsed)}</span>
       <span
         ref={containerRef}
         className="overflow-hidden min-w-0 leading-[1]"
@@ -1429,4 +1467,40 @@ function TrackingStatusIndicator({ currentSession, tasks, onNavigate }: {
       </span>
     </div>
   )
+}
+
+// Idle time indicator — shown when no session is active
+function IdleTimeIndicator() {
+  const { t } = useI18n()
+  const lastAfkTime = useTaskStore(s => s.lastAfkTime)
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    if (lastAfkTime == null) return
+    setElapsed(Date.now() - lastAfkTime)
+    const timer = setInterval(() => setElapsed(Date.now() - lastAfkTime), 1000)
+    return () => clearInterval(timer)
+  }, [lastAfkTime])
+
+  if (lastAfkTime == null) {
+    return (
+      <span className="text-xs px-2 py-1 rounded bg-muted text-muted-foreground">
+        {t('workspace.notTracking')}
+      </span>
+    )
+  }
+
+  return (
+    <span className="text-xs px-2 py-1 rounded bg-amber-500/10 text-amber-600 font-mono">
+      {t('workspace.idle')} {formatDuration(elapsed)}
+    </span>
+  )
+}
+
+function formatDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }

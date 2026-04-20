@@ -24,6 +24,7 @@ interface TaskState {
   savedFilterTypes: TaskType[]
   draftTask: DraftTask | null
   currentSession: WorkSession | null
+  lastAfkTime: number | null
   previousActiveTaskId: string | null
   // Search state
   searchMode: boolean
@@ -69,6 +70,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   savedFilterTypes: [],
   draftTask: null,
   currentSession: null,
+  lastAfkTime: null,
   previousActiveTaskId: null,
   searchMode: false,
   searchQuery: '',
@@ -256,13 +258,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }))
     }
-    set({ currentSession: session })
+    set({ currentSession: session, lastAfkTime: null })
     return session
   },
 
   doAfk: async () => {
     await api.doAfk()
-    set({ currentSession: null })
+    set({ currentSession: null, lastAfkTime: Date.now() })
   },
 
   autoTakeOver: async (taskId) => {
@@ -283,7 +285,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
       }))
     }
-    set({ currentSession: session })
+    set({ currentSession: session, lastAfkTime: null })
   },
 
   doDrop: async (id, reason) => {

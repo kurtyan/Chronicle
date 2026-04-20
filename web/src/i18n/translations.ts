@@ -107,6 +107,8 @@ export const translations: Record<string, TranslationEntry> = {
   'workspace.afk': { 'zh-CN': 'AFK', en: 'AFK' },
   'workspace.tracking': { 'zh-CN': '正在工作', en: 'Working' },
   'workspace.notTracking': { 'zh-CN': '未追踪时间', en: 'Not tracking' },
+  'workspace.idle': { 'zh-CN': '空闲', en: 'Idle' },
+  'workspace.workingTime': { 'zh-CN': '工作', en: 'Working' },
   'workspace.dropReason': { 'zh-CN': '请输入废弃原因...', en: 'Enter drop reason...' },
   'workspace.dropConfirm': { 'zh-CN': '确认废弃', en: 'Confirm Drop' },
 
