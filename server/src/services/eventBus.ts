@@ -4,6 +4,7 @@ let listeners: Set<Listener> = new Set()
 
 export function broadcastEvent(event: string, data: unknown, source?: string) {
   const payload = JSON.stringify({ event, data, source })
+  console.log(`[SSE broadcast] ${event} (source: ${source || '-'}) → ${listeners.size} listener(s)`)
   for (const fn of listeners) {
     fn(payload)
   }

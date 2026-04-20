@@ -190,9 +190,37 @@ function Sidebar() {
 
 import { useTaskStore } from '@/stores/taskStore'
 
+// Listen for auto-AFK events from Tauri backend
+function useAutoAfk() {
+  useEffect(() => {
+    const p = (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        const unlisten = await listen('auto-afk-triggered', async (event) => {
+          const reason = event.payload as string
+          console.log('[Auto-AFK] event received:', reason)
+          const s = useTaskStore.getState()
+          console.log('[Auto-AFK] currentSession:', s.currentSession ? 'exists' : 'null')
+          if (s.currentSession) {
+            await s.doAfk()
+            console.log('[Auto-AFK] doAfk() completed')
+          }
+        })
+        console.log('[Auto-AFK] listener registered')
+        return unlisten
+      } catch (e) {
+        console.log('[Auto-AFK] failed to register listener:', e)
+        return null
+      }
+    })()
+    return () => { p.then(fn => fn?.()) }
+  }, [])
+}
+
 function Layout() {
   useSystemBrowserLinks()
   useTauriZoom()
+  useAutoAfk()
   const navigate = useNavigate()
 
   const { searchMode, setSearchMode } = useTaskStore()
