@@ -279,3 +279,19 @@ startBackupService()
 
 serve({ fetch: app.fetch, port, hostname: host })
 getLogger().info(`Server running at http://${host}:${port}`)
+
+import { createServer } from 'http'
+import { handleMcpRequest } from './mcp/start'
+
+// --- MCP Server ---
+if (config.mcp.enabled) {
+  const mcpHttpServer = createServer((req, res) => {
+    handleMcpRequest(req, res, service)
+  })
+  mcpHttpServer.listen(config.mcp.port, () => {
+    getLogger().info(`MCP server running at http://localhost:${config.mcp.port}`)
+  })
+  mcpHttpServer.on('error', (err) => {
+    getLogger().error('MCP HTTP server error:', err)
+  })
+}

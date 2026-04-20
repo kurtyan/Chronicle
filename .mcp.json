@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "chronicle": {
+      "command": "chronicle-mcp"
+    }
+  }
+}

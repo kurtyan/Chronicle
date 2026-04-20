@@ -59,13 +59,25 @@ fs.mkdirSync(PUBLISH_DIR, { recursive: true })
 copyDir(path.join(ROOT_DIR, 'server', 'dist'), path.join(PUBLISH_DIR, 'dist'))
 copyDir(path.join(ROOT_DIR, 'server', 'public'), path.join(PUBLISH_DIR, 'public'))
 
+// Copy MCP stdio bridge
+if (!fs.existsSync(path.join(PUBLISH_DIR, 'mcp'))) {
+  fs.mkdirSync(path.join(PUBLISH_DIR, 'mcp'), { recursive: true })
+}
+fs.copyFileSync(
+  path.join(ROOT_DIR, 'server', 'src', 'mcp', 'stdio-bridge.mjs'),
+  path.join(PUBLISH_DIR, 'mcp', 'stdio-bridge.mjs')
+)
+
 // Create package.json for publishing
 const serverPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'server', 'package.json'), 'utf-8'))
 const publishPkg = {
   name: serverPkg.name,
   version: serverPkg.version,
   description: serverPkg.description,
-  bin: serverPkg.bin,
+  bin: {
+    ...serverPkg.bin,
+    'chronicle-mcp': './mcp/stdio-bridge.mjs',
+  },
   scripts: {
     start: 'node dist/cli.js start',
     postinstall: serverPkg.scripts.postinstall,

@@ -11,10 +11,12 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsup",
     "start": "node dist/index.js",
+    "mcp": "node src/mcp/stdio-bridge.mjs",
     "postinstall": "node -e \"try{require('child_process').execSync('node dist/setup.js',{stdio:'inherit'})}catch(e){}\""
   },
   "dependencies": {
     "@hono/node-server": "^1.11.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@tiptap/extension-image": "^3.22.3",
     "@tiptap/extension-link": "^3.22.3",
     "@tiptap/extension-placeholder": "^3.22.3",
@@ -23,7 +25,8 @@
     "better-sqlite3": "^12.9.0",
     "hono": "^4.4.0",
     "nodejieba": "^3.5.8",
-    "pino": "^9.0.0"
+    "pino": "^9.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

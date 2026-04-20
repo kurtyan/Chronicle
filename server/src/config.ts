@@ -9,6 +9,10 @@ export interface ChronicleConfig {
     database: string
     logPath?: string
   }
+  mcp: {
+    enabled: boolean
+    port: number
+  }
   lauri: {
     serverHost: string
     serverPort: number
@@ -18,12 +22,16 @@ export interface ChronicleConfig {
 const defaultConfig: ChronicleConfig = {
   server: {
     host: '127.0.0.1',
-    port: 8080,
+    port: 9983,
     database: '',
+  },
+  mcp: {
+    enabled: true,
+    port: 9981,
   },
   lauri: {
     serverHost: 'localhost',
-    serverPort: 8080,
+    serverPort: 9983,
   },
 }
 
@@ -37,6 +45,7 @@ export function getConfig(): ChronicleConfig {
       const parsed = JSON.parse(raw) as Partial<ChronicleConfig>
       return {
         server: { ...defaultConfig.server, ...parsed.server },
+        mcp: { ...defaultConfig.mcp, ...(parsed as any).mcp },
         lauri: { ...defaultConfig.lauri, ...parsed.lauri },
       }
     }
