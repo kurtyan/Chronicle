@@ -128,7 +128,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
         </span>
       </div>
       <div
-        className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition"
+        className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"
         dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(entry.content, highlightTokens) : entry.content) }}
       />
     </div>

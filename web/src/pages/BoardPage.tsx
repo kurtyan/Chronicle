@@ -23,6 +23,16 @@ async function registerGlobalShortcutTakeover(callback: () => void) {
   }
 }
 
+async function registerGlobalShortcutDone(callback: () => void) {
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen('global-shortcut-done-task', callback)
+    return unlisten
+  } catch {
+    return null
+  }
+}
+
 const DRAFT_ID = '__draft__'
 
 // Check if HTML content is effectively empty (no visible text)
@@ -63,6 +73,18 @@ export function BoardPage() {
           await s.doAfk()
         }
         await s.takeOver(s.activeTaskId!)
+      }
+    }).then(fn => { cleanup = fn ?? undefined })
+    return () => cleanup?.()
+  }, [])
+
+  // Listen for Tauri global shortcut Cmd+Shift+D → Done + AFK
+  useEffect(() => {
+    let cleanup: (() => void) | undefined
+    registerGlobalShortcutDone(async () => {
+      const s = useTaskStore.getState()
+      if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
+        await s.markDone(s.activeTaskId)
       }
     }).then(fn => { cleanup = fn ?? undefined })
     return () => cleanup?.()

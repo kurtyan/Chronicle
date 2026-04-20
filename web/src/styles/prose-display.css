@@ -1,0 +1,51 @@
+.prose-mirror-display img {
+  max-width: 100%;
+  border-radius: 0.375rem;
+  margin: 0.5rem 0;
+  -webkit-user-drag: none !important;
+  user-drag: none !important;
+  user-select: none;
+}
+
+.prose-mirror-display a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+}
+
+.prose-mirror-display blockquote {
+  border-left: 3px solid hsl(var(--border));
+  padding-left: 1rem;
+  margin: 0.5rem 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.prose-mirror-display pre {
+  background: hsl(var(--muted));
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+}
+
+.prose-mirror-display code {
+  background: hsl(var(--muted));
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.875rem;
+}
+
+.prose-mirror-display ul { list-style-type: disc; padding-left: 1.5rem; }
+.prose-mirror-display ol { list-style-type: decimal; padding-left: 1.5rem; }
+.prose-mirror-display h1 { font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0; }
+.prose-mirror-display h2 { font-size: 1.25rem; font-weight: 600; margin: 0.5rem 0; }
+
+.prose-mirror-display .resize-image-wrapper {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.prose-mirror-display .resize-image-wrapper img {
+  display: block;
+  max-width: 100%;
+}

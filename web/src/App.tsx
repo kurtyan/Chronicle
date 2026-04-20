@@ -8,6 +8,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSSE } from './hooks/useSSE'
 import { isTauriEnv, apiBase } from './services/httpApi'
+import '@/styles/prose-display.css'
 
 // Open links in system browser when running in Tauri
 function useSystemBrowserLinks() {
@@ -192,9 +193,11 @@ import { useTaskStore } from '@/stores/taskStore'
 function Layout() {
   useSystemBrowserLinks()
   useTauriZoom()
+  const navigate = useNavigate()
 
   const { searchMode, setSearchMode } = useTaskStore()
 
+  // Cmd+Shift+F search / Escape exit search
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
@@ -211,6 +214,25 @@ function Layout() {
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
   }, [searchMode, setSearchMode])
+
+  // Cmd+1/2/3 sidebar navigation via Tauri global shortcuts
+  useEffect(() => {
+    const listeners: Promise<(() => void) | null>[] = []
+    for (const [event, path] of [
+      ['sidebar-nav-board', '/'],
+      ['sidebar-nav-report', '/report'],
+      ['sidebar-nav-settings', '/settings'],
+    ] as const) {
+      const p = (async () => {
+        try {
+          const { listen } = await import('@tauri-apps/api/event')
+          return listen(event, () => navigate(path))
+        } catch { return null }
+      })()
+      listeners.push(p)
+    }
+    return () => { listeners.forEach(p => p.then(fn => fn?.())) }
+  }, [navigate])
   return (
     <div className="flex h-screen">
       <Sidebar />

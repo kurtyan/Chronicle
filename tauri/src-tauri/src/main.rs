@@ -71,10 +71,32 @@ fn main() {
         .invoke_handler(tauri::generate_handler![get_server_url, get_client_log, set_zoom, write_client_log])
         .setup(|app| {
             // Register Cmd+Shift+T global shortcut for Take Over
-            let shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyT);
-            app.global_shortcut().on_shortcut(shortcut, |_app, _shortcut, event| {
+            let shortcut_takeover = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyT);
+            app.global_shortcut().on_shortcut(shortcut_takeover, |_app, _shortcut, event| {
                 if event.state == ShortcutState::Pressed {
                     let _ = _app.emit("global-shortcut-takeover", ());
+                }
+            }).ok();
+
+            // Register Cmd+1/2/3 global shortcuts for sidebar navigation
+            for (code, event_name) in [
+                (Code::Digit1, "sidebar-nav-board"),
+                (Code::Digit2, "sidebar-nav-report"),
+                (Code::Digit3, "sidebar-nav-settings"),
+            ] {
+                let shortcut = Shortcut::new(Some(Modifiers::SUPER), code);
+                app.global_shortcut().on_shortcut(shortcut, |_app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        let _ = _app.emit(event_name, ());
+                    }
+                }).ok();
+            }
+
+            // Register Cmd+Shift+D global shortcut for Done + AFK
+            let shortcut_done = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyD);
+            app.global_shortcut().on_shortcut(shortcut_done, |_app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    let _ = _app.emit("global-shortcut-done-task", ());
                 }
             }).ok();
 
