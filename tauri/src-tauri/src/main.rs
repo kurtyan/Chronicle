@@ -165,6 +165,39 @@ fn set_auto_afk_config(app: tauri::AppHandle, config: AutoAfkConfig) -> Result<(
     Ok(())
 }
 
+// --- UI Language ---
+
+#[tauri::command]
+fn get_ui_language() -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let config_path = format!("{}/.chronicle/config.json", home);
+    if let Ok(content) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(ui) = config.get("ui").and_then(|u| u.get("language")) {
+                if let Some(lang) = ui.as_str() {
+                    return Ok(lang.to_string());
+                }
+            }
+        }
+    }
+    Ok("auto".to_string())
+}
+
+#[tauri::command]
+fn set_ui_language(language: String) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let config_path = format!("{}/.chronicle/config.json", home);
+    let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
+        serde_json::from_str(&content).unwrap_or(serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+    config["ui"]["language"] = serde_json::Value::String(language);
+    let content = serde_json::to_string_pretty(&config).map_err(|e| format!("Failed to serialize: {}", e))?;
+    std::fs::write(&config_path, content).map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}
+
 // Screen lock detection via polling CGSession
 #[cfg(target_os = "macos")]
 fn setup_screen_lock_detection(app: &tauri::AppHandle) {
@@ -299,7 +332,9 @@ fn main() {
             set_zoom,
             write_client_log,
             get_auto_afk_config,
-            set_auto_afk_config
+            set_auto_afk_config,
+            get_ui_language,
+            set_ui_language,
         ])
         .setup(|app| {
             // Note: Cmd+Shift+T and Cmd+1/2/3 are now handled in-browser (not global shortcuts)

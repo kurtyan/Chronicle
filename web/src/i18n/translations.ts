@@ -174,4 +174,12 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.idleTimeoutMinutes': { 'zh-CN': '分钟', en: 'minutes' },
   'settings.saveAutoAfk': { 'zh-CN': '保存设置', en: 'Save Auto-AFK Settings' },
   'settings.autoAfkSaved': { 'zh-CN': '自动离开设置已保存', en: 'Auto-AFK settings saved' },
+
+  // Language
+  'settings.language': { 'zh-CN': '界面语言', en: 'Language' },
+  'settings.languageZh': { 'zh-CN': '中文', en: '中文' },
+  'settings.languageEn': { 'zh-CN': 'English', en: 'English' },
+  'settings.languageAuto': { 'zh-CN': '跟随系统', en: 'Auto' },
+  'settings.languageDesc': { 'zh-CN': '切换界面显示语言，即时生效', en: 'Switch UI display language, applies immediately' },
+  'settings.languageSaved': { 'zh-CN': '语言设置已保存', en: 'Language setting saved' },
 }

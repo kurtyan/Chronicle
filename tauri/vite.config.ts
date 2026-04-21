@@ -15,7 +15,7 @@ export default defineConfig(({ command }) => ({
     },
   },
   server: command === 'serve' ? {
-    port: 5176,
+    port: 5180,
     proxy: {
       '/api': {
         target: 'http://localhost:9983',

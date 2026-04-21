@@ -1227,6 +1227,7 @@ export function BoardPage() {
                   <div className="space-y-4 pt-2">
                     {/* Body editor */}
                     <RichEditor
+                      key={`body-${activeTaskId ?? 'none'}`}
                       content={draftBody}
                       onChange={handleDraftBodyChange}
                       placeholder={t('task.bodyPlaceholder')}
@@ -1508,6 +1509,7 @@ export function BoardPage() {
                       <>
                         <div ref={logEditorRef}>
                           <RichEditor
+                            key={`log-${activeTaskId ?? 'none'}`}
                             content={logContent}
                             onChange={handleLogContentChange}
                             placeholder={t('task.logPlaceholder')}

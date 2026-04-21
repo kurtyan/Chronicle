@@ -5,7 +5,7 @@ import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { Bold, Italic, List, ListOrdered, Code, Link2, Image as ImageIcon, Strikethrough, Heading1, Heading2, Quote } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useMemo } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
 
@@ -39,7 +39,7 @@ interface RichEditorProps {
   autoFocus?: boolean
   onKeyDown?: (e: KeyboardEvent) => void
   variant?: 'full' | 'minimal'
-  onNavigateUp?: () => void  // Called when cursor at start and ArrowUp pressed
+  onNavigateUp?: () => void
 }
 
 const ToolbarButton = ({
@@ -66,7 +66,7 @@ const ToolbarButton = ({
   </button>
 )
 
-export function RichEditor({
+function RichEditorInner({
   content,
   onChange,
   placeholder,
@@ -78,31 +78,35 @@ export function RichEditor({
 }: RichEditorProps) {
   const { t } = useI18n()
   const contentRef = useRef(content)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+
+  const extensions = useMemo(() => [
+    StarterKit.configure({
+      heading: { levels: [1, 2] },
+    }),
+    TipTapImage.configure({
+      allowBase64: true,
+      HTMLAttributes: {
+        class: 'rounded-md max-w-full',
+        draggable: 'false',
+      },
+    }),
+    ImageResize,
+    Link.configure({
+      openOnClick: false,
+    }),
+    Placeholder.configure({
+      placeholder: placeholder ?? t('editor.placeholder'),
+    }),
+  ], []) // stable across re-renders
+
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2] },
-      }),
-      TipTapImage.configure({
-        allowBase64: true,
-        HTMLAttributes: {
-          class: 'rounded-md max-w-full',
-          draggable: 'false',
-        },
-      }),
-      ImageResize,
-      Link.configure({
-        openOnClick: false,
-      }),
-      Placeholder.configure({
-        placeholder: placeholder ?? t('editor.placeholder'),
-      }),
-    ],
+    extensions,
     content,
     onUpdate: ({ editor }) => {
       contentRef.current = editor.getHTML()
-      onChange(editor.getHTML())
+      onChangeRef.current(editor.getHTML())
     },
     editorProps: {
       attributes: {
@@ -114,7 +118,6 @@ export function RichEditor({
           return true
         },
         drop: (_view, event) => {
-          // Only prevent if it's an image being dropped outside the editor
           if (event.dataTransfer?.files.length || event.dataTransfer?.getData('text/html').includes('<img')) {
             event.preventDefault()
           }
@@ -122,11 +125,9 @@ export function RichEditor({
         },
       },
       handleKeyDown: (view, event) => {
-        // Handle ArrowUp at document start - navigate to title
         if (event.key === 'ArrowUp' && onNavigateUp) {
           const { state } = view
           const { selection } = state
-          // Check if cursor is at the very beginning of the document
           const isAtStart = selection.$anchor.pos === 1 && selection.$head.pos === 1
           if (isAtStart) {
             onNavigateUp()
@@ -143,14 +144,12 @@ export function RichEditor({
             const file = item.getAsFile()
             if (file) {
               const reader = new FileReader()
-              // Store reader for cleanup
               const readers = (window as unknown as { __richEditorReaders?: FileReader[] }).__richEditorReaders || []
               readers.push(reader)
               ;(window as unknown as { __richEditorReaders: FileReader[] }).__richEditorReaders = readers
 
               reader.onload = (e) => {
-                const src = e.target?.result as string
-                insertImageWithResize(editor, src)
+                insertImageWithResize(editor, e.target?.result as string)
               }
               reader.onerror = () => {
                 console.error('Failed to read pasted image')
@@ -165,7 +164,9 @@ export function RichEditor({
     },
   })
 
-  // Controlled mode: sync external content changes
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Sync external content changes back to editor (e.g. clearing after submit)
   useEffect(() => {
     if (!editor) return
     if (content !== contentRef.current) {
@@ -180,20 +181,18 @@ export function RichEditor({
     }
   }, [editor, autoFocus])
 
-  // Handle keyboard shortcuts at DOM level - use document level for reliability
+  // Keyboard shortcuts at DOM level
   useEffect(() => {
     if (!onKeyDown) return
 
     const handler = (e: KeyboardEvent) => {
-      // Only handle if focus is within this editor
       if (!containerRef.current?.contains(document.activeElement)) return
 
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
         editor.commands.blur()
-        // Propagate to parent so it can handle ESC (e.g., cancel draft)
-        if (onKeyDown) onKeyDown(e)
+        onKeyDown(e)
       } else if (e.ctrlKey && e.key === 'Enter') {
         e.preventDefault()
         e.stopPropagation()
@@ -201,12 +200,11 @@ export function RichEditor({
       }
     }
 
-    // Use capture phase on document to catch before anything else
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
-  }, [onKeyDown])
+  }, [onKeyDown, editor])
 
-  // Prevent drag on images to avoid browser opening them in new tab
+  // Prevent drag on images
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -221,7 +219,6 @@ export function RichEditor({
     container.addEventListener('dragstart', preventDrag, true)
     return () => {
       container.removeEventListener('dragstart', preventDrag, true)
-      // Abort any pending FileReaders
       const readers = (window as unknown as { __richEditorReaders?: FileReader[] }).__richEditorReaders
       if (readers) {
         readers.forEach(r => {
@@ -420,3 +417,6 @@ export function RichEditor({
     </div>
   )
 }
+
+// Let RichEditor re-render when content prop changes (e.g. cleared after submit)
+export const RichEditor = RichEditorInner

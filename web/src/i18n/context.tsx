@@ -14,10 +14,21 @@ function resolveLocale(): Locale {
   const urlLang = params.get('lang')
   if (urlLang === 'en' || urlLang === 'zh-CN') return urlLang
 
-  // 2. navigator.language
-  const nav = navigator.language
-  if (nav.startsWith('zh')) return 'zh-CN'
-  return 'en'
+  return 'en' // default; will be overridden by Tauri config after mount
+}
+
+async function resolveLocaleFromTauri(): Promise<Locale | null> {
+  try {
+    const tauri = (window as any).__TAURI__
+    if (!tauri?.core) return null
+    const lang: string = await tauri.core.invoke('get_ui_language')
+    if (lang === 'zh-CN' || lang === 'zh') return 'zh-CN'
+    if (lang === 'en') return 'en'
+    // 'auto' or other -> fall back to navigator.language
+    return null
+  } catch {
+    return null
+  }
 }
 
 function setLocaleInUrl(locale: Locale) {
@@ -38,6 +49,15 @@ const I18nContext = createContext<I18nContextValue | null>(null)
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(resolveLocale)
+
+  // After mount, try loading language from Tauri config
+  useEffect(() => {
+    resolveLocaleFromTauri().then(fromConfig => {
+      if (fromConfig) {
+        setLocaleState(fromConfig)
+      }
+    })
+  }, [])
 
   useEffect(() => {
     setLocaleInUrl(locale)

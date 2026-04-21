@@ -17,6 +17,9 @@ export interface ChronicleConfig {
     serverHost: string
     serverPort: number
   }
+  ui: {
+    language: string
+  }
 }
 
 const defaultConfig: ChronicleConfig = {
@@ -33,6 +36,9 @@ const defaultConfig: ChronicleConfig = {
     serverHost: 'localhost',
     serverPort: 9983,
   },
+  ui: {
+    language: 'auto',
+  },
 }
 
 const configDir = path.join(os.homedir(), '.chronicle')
@@ -47,6 +53,7 @@ export function getConfig(): ChronicleConfig {
         server: { ...defaultConfig.server, ...parsed.server },
         mcp: { ...defaultConfig.mcp, ...(parsed as any).mcp },
         lauri: { ...defaultConfig.lauri, ...parsed.lauri },
+        ui: { ...defaultConfig.ui, ...(parsed as any).ui },
       }
     }
   } catch {

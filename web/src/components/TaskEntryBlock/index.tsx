@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import DOMPurify from 'dompurify'
 import type { TaskEntry } from '@/types'
 import { RichEditor } from '@/components/RichEditor'
@@ -28,6 +28,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(entry.content)
+  const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
 
   const editing = externalEditing ?? internalEditing
 
@@ -77,6 +78,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
           </span>
         </div>
         <RichEditor
+          key={entry.id}
           content={draftContent}
           onChange={setDraftContent}
           placeholder={t('entry.editPlaceholder')}
@@ -112,7 +114,15 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
     )
   }
 
+  const handleMouseDown = (e: React.MouseEvent) => {
+    mouseDownPos.current = { x: e.clientX, y: e.clientY }
+  }
+
   const handleContainerClick = (e: React.MouseEvent) => {
+    if (!mouseDownPos.current) return
+    const dx = e.clientX - mouseDownPos.current.x
+    const dy = e.clientY - mouseDownPos.current.y
+    if (Math.sqrt(dx * dx + dy * dy) > 3) return // was a drag/selection, not a click
     if ((e.target as HTMLElement).closest('a')) return
     handleEdit()
   }
@@ -120,6 +130,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
   return (
     <div
       className="py-2 cursor-pointer hover:bg-muted/40 rounded transition group"
+      onMouseDown={handleMouseDown}
       onClick={handleContainerClick}
     >
       <div className="flex items-center gap-2 mb-2">
