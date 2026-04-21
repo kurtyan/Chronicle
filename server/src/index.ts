@@ -214,6 +214,12 @@ app.get('/api/reports/range-stats', async (c) => {
   return c.json(await service.fetchRangeStats(start, end))
 })
 
+app.get('/api/reports/tasks', async (c) => {
+  const start = parseInt(c.req.query('start') || '0')
+  const end = parseInt(c.req.query('end') || String(Date.now()))
+  return c.json(await service.fetchReportTasks(start, end))
+})
+
 // --- Search API ---
 import { searchTasks, rebuildFtsIndex } from './services/searchService'
 

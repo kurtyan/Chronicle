@@ -1,14 +1,15 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
-import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown } from 'lucide-react'
+import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
 import type { Task, WorkSession } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { getTaskById } from '@/services/api'
+import { getTaskById, fetchTaskEntries } from '@/services/api'
 import { registerShortcut } from '@/shortcuts/registry'
 
 type TimeView = 'day' | 'week' | 'month'
+type StatFilter = 'NEW' | 'COMPLETED' | 'IN_PROGRESS' | 'ALL'
 
 interface ReportData {
   totalToday: number
@@ -23,12 +24,16 @@ interface SummaryData {
   totalTasks: number
 }
 
+interface ReportTask extends Task {
+  body: string
+  workMs: number
+}
+
 function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000)
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-  return `${hours}h ${minutes}m ${seconds}s`
+  return `${hours}h ${minutes}m`
 }
 
 export function ReportPage() {
@@ -45,20 +50,27 @@ export function ReportPage() {
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [sessionTasks, setSessionTasks] = useState<Record<string, Task>>({})
   const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [sessionsExpanded, setSessionsExpanded] = useState(false)
 
-  // Date-range stats (updates with selected date/view)
+  // Date-range stats
   const [dateRangeStats, setDateRangeStats] = useState({ total: 0, completed: 0, inProgress: 0 })
 
-  // Work day offset (hours to shift day boundary, default +5)
+  // Task list from new API
+  const [reportTasks, setReportTasks] = useState<ReportTask[]>([])
+  const [selectedStatFilter, setSelectedStatFilter] = useState<StatFilter>('COMPLETED')
+
+  // Side panel
+  const [selectedTask, setSelectedTask] = useState<ReportTask | null>(null)
+  const [taskEntries, setTaskEntries] = useState<{ content: string; type: string; createdAt: number }[]>([])
+
+  // Work day offset
   const [workDayOffset, setWorkDayOffset] = useState(() => {
     const saved = localStorage.getItem('chronicle_workday_offset')
     return saved ? parseInt(saved, 10) : 5
   })
 
-  // Helper: clamp value to [min, max]
   const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(val, max))
 
-  // Helper: get start/end timestamps for the date range in current time view, with offset applied
   const getDayRange = (): { start: number; end: number } => {
     if (timeView === 'day') {
       const d = new Date(selectedDate)
@@ -84,7 +96,6 @@ export function ReportPage() {
     return { start, end }
   }
 
-  // Helper: iterate each day in the range, compute { dayStart, dayEnd, daySessions }
   const getDaysInRange = (rangeStart: number, rangeEnd: number) => {
     const days: { date: Date; dayStart: number; dayEnd: number; daySessions: WorkSession[] }[] = []
     let d = new Date(rangeStart - workDayOffset * 3600_000)
@@ -103,7 +114,6 @@ export function ReportPage() {
     return days
   }
 
-  // Classic report data
   const loadData = useCallback(() => {
     setLoading(true)
     Promise.all([fetchTodayReport(), fetchSummary()])
@@ -116,7 +126,6 @@ export function ReportPage() {
     loadData()
   }, [loadData])
 
-  // Cmd+R: refresh report (registered with central dispatcher)
   useEffect(() => {
     const unregister = registerShortcut({
       id: 'refresh-report',
@@ -128,7 +137,7 @@ export function ReportPage() {
     return unregister
   }, [loadData])
 
-  // Fetch sessions + compute date-range stats when time view or date changes
+  // Fetch sessions + date-range stats + report tasks when time view or date changes
   useEffect(() => {
     const abortController = new AbortController()
     setSessionsLoading(true)
@@ -140,23 +149,16 @@ export function ReportPage() {
     fetchSessions(start, end).then(sessions => {
       if (isStale || abortController.signal.aborted) return
       setSessions(sessions)
-      // Fetch task info for each unique task
       const uniqueTaskIds = [...new Set(sessions.map(s => s.taskId))]
       Promise.all(
         uniqueTaskIds.map(async (id) => {
-          try {
-            const task = await getTaskById(id)
-            return { id, task }
-          } catch {
-            return { id, task: null }
-          }
+          try { return { id, task: await getTaskById(id) } }
+          catch { return { id, task: null } }
         })
       ).then(results => {
         if (isStale || abortController.signal.aborted) return
         const map: Record<string, Task> = {}
-        results.forEach(({ id, task }) => {
-          if (task) map[id] = task
-        })
+        results.forEach(({ id, task }) => { if (task) map[id] = task })
         setSessionTasks(map)
         setSessionsLoading(false)
       })
@@ -167,22 +169,37 @@ export function ReportPage() {
       }
     })
 
-    // Fetch date-range stats from server
+    // Fetch date-range stats
     fetchRangeStats(start, end).then(stats => {
       if (isStale || abortController.signal.aborted) return
       setDateRangeStats({ total: stats.total, completed: stats.completed, inProgress: stats.inProgress })
+    }).catch(() => {
+      if (!isStale && !abortController.signal.aborted) {
+        setDateRangeStats({ total: 0, completed: 0, inProgress: 0 })
+      }
     })
+
+    // Fetch report tasks
+    fetch(`http://localhost:9983/api/reports/tasks?start=${start}&end=${end}`)
+      .then(r => r.json())
+      .then(data => {
+        if (isStale || abortController.signal.aborted) return
+        setReportTasks(data)
+      })
       .catch(() => {
-        if (!isStale && !abortController.signal.aborted) {
-          setDateRangeStats({ total: 0, completed: 0, inProgress: 0 })
-        }
+        if (!isStale && !abortController.signal.aborted) setReportTasks([])
       })
 
-    return () => {
-      isStale = true
-      abortController.abort()
-    }
+    return () => { isStale = true; abortController.abort() }
   }, [timeView, selectedDate, workDayOffset])
+
+  // When stat filter or reportTasks change, update selectedTask if it no longer matches
+  useEffect(() => {
+    if (selectedTask) {
+      const exists = filteredTasks.some(t => t.id === selectedTask.id)
+      if (!exists) setSelectedTask(null)
+    }
+  }, [selectedStatFilter, reportTasks])
 
   // Stats calculation — offset-based
   const stats = useMemo(() => {
@@ -252,153 +269,270 @@ export function ReportPage() {
     else setSelectedDate(d => addMonths(d, 1))
   }
 
-  const navigateReset = () => {
-    setSelectedDate(new Date())
+  const navigateReset = () => setSelectedDate(new Date())
+
+  // Filtered tasks based on selected stat
+  const filteredTasks = useMemo(() => {
+    switch (selectedStatFilter) {
+      case 'NEW': return reportTasks
+      case 'COMPLETED': return reportTasks.filter(t => t.status === 'DONE')
+      case 'IN_PROGRESS': return reportTasks.filter(t => t.status === 'DOING')
+      case 'ALL': return reportTasks
+    }
+  }, [reportTasks, selectedStatFilter])
+
+  // Open side panel for a task
+  const openTaskDetail = async (task: ReportTask) => {
+    setSelectedTask(task)
+    try {
+      const entries = await fetchTaskEntries(task.id)
+      setTaskEntries(entries)
+    } catch {
+      setTaskEntries([])
+    }
   }
+
+  // ESC to close side panel
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedTask) {
+        setSelectedTask(null)
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [selectedTask])
 
   if (loading) return <div className="flex items-center justify-center h-40 text-muted-foreground">{t('report.loading')}</div>
 
   const today = format(new Date(), 'PPP EEEE', { locale: dateLocale })
 
   return (
-    <div className="flex flex-col gap-6 p-4">
-      <h1 className="text-2xl font-bold">{t('report.title')}</h1>
-      <p className="text-muted-foreground">{today}</p>
+    <div className="flex h-full">
+      <div className="flex flex-col gap-6 p-4 flex-1 overflow-y-auto">
+        <h1 className="text-2xl font-bold">{t('report.title')}</h1>
+        <p className="text-muted-foreground">{today}</p>
 
-      {/* Date view tabs + navigation - moved to top */}
-      <div className="flex items-center gap-4">
-        <div className="flex gap-1">
-          {([
-            { key: 'day' as TimeView, label: 'day' },
-            { key: 'week' as TimeView, label: 'week' },
-            { key: 'month' as TimeView, label: 'month' },
-          ]).map(({ key, label }) => (
-            <button
-              key={key}
-              className={`text-xs px-3 py-1.5 rounded transition ${
-                timeView === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
-              }`}
-              onClick={() => setTimeView(key)}
-            >
-              {t(`report.${label}`)}
+        {/* Date view tabs + navigation */}
+        <div className="flex items-center gap-4">
+          <div className="flex gap-1">
+            {([
+              { key: 'day' as TimeView, label: 'day' },
+              { key: 'week' as TimeView, label: 'week' },
+              { key: 'month' as TimeView, label: 'month' },
+            ]).map(({ key, label }) => (
+              <button
+                key={key}
+                className={`text-xs px-3 py-1.5 rounded transition ${
+                  timeView === key ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
+                }`}
+                onClick={() => setTimeView(key)}
+              >
+                {t(`report.${label}`)}
+              </button>
+            ))}
+          </div>
+
+          {/* Date navigation */}
+          <div className="flex items-center gap-2">
+            <button className="p-1 rounded hover:bg-muted transition" onClick={navigateLeft}>
+              <ChevronLeft className="w-4 h-4" />
             </button>
-          ))}
-        </div>
-
-        {/* Date navigation */}
-        <div className="flex items-center gap-2">
-          <button className="p-1 rounded hover:bg-muted transition" onClick={navigateLeft}>
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <button
-            className={`text-sm font-medium px-2 py-0.5 rounded transition ${
-              dateDisplay.isToday ? 'bg-muted/50' : 'hover:bg-muted'
-            }`}
-            onClick={navigateReset}
-          >
-            {dateDisplay.text}
-          </button>
-          <button className="p-1 rounded hover:bg-muted transition" onClick={navigateRight}>
-            <ChevronRight className="w-4 h-4" />
-          </button>
-          <div className="w-4" />
-          {/* Offset config */}
-          <div className="flex items-center gap-1">
-            <span className="text-xs tabular-nums">+{workDayOffset}h</span>
-            <div className="flex flex-col items-center gap-0">
-              <button
-                className="p-0.5 leading-none rounded hover:bg-muted transition"
-                onClick={() => {
-                  const v = Math.min(workDayOffset + 1, 12)
-                  setWorkDayOffset(v)
-                  localStorage.setItem('chronicle_workday_offset', String(v))
-                }}
-                title={t('report.workDayOffset')}
-              >
-                <ChevronUp className="w-4 h-4" />
-              </button>
-              <button
-                className="p-0.5 leading-none rounded hover:bg-muted transition"
-                onClick={() => {
-                  const v = Math.max(workDayOffset - 1, -12)
-                  setWorkDayOffset(v)
-                  localStorage.setItem('chronicle_workday_offset', String(v))
-                }}
-                title={t('report.workDayOffset')}
-              >
-                <ChevronDown className="w-4 h-4" />
-              </button>
+            <button
+              className={`text-sm font-medium px-2 py-0.5 rounded transition ${
+                dateDisplay.isToday ? 'bg-muted/50' : 'hover:bg-muted'
+              }`}
+              onClick={navigateReset}
+            >
+              {dateDisplay.text}
+            </button>
+            <button className="p-1 rounded hover:bg-muted transition" onClick={navigateRight}>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <div className="w-4" />
+            {/* Offset config */}
+            <div className="flex items-center gap-1">
+              <span className="text-xs tabular-nums">+{workDayOffset}h</span>
+              <div className="flex flex-col items-center gap-0">
+                <button
+                  className="p-0.5 leading-none rounded hover:bg-muted transition"
+                  onClick={() => {
+                    const v = Math.min(workDayOffset + 1, 12)
+                    setWorkDayOffset(v)
+                    localStorage.setItem('chronicle_workday_offset', String(v))
+                  }}
+                  title={t('report.workDayOffset')}
+                >
+                  <ChevronUp className="w-4 h-4" />
+                </button>
+                <button
+                  className="p-0.5 leading-none rounded hover:bg-muted transition"
+                  onClick={() => {
+                    const v = Math.max(workDayOffset - 1, -12)
+                    setWorkDayOffset(v)
+                    localStorage.setItem('chronicle_workday_offset', String(v))
+                  }}
+                  title={t('report.workDayOffset')}
+                >
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Classic stats cards - now show date-range data */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard icon={<ListTodo className="w-5 h-5" />} label="Total" value={dateRangeStats.total} />
-        <StatCard icon={<CheckCircle2 className="w-5 h-5" />} label={t('report.completed')} value={dateRangeStats.completed} />
-        <StatCard icon={<Clock className="w-5 h-5" />} label={t('report.inProgress')} value={dateRangeStats.inProgress} />
-        <StatCard icon={<BarChart3 className="w-5 h-5" />} label="Overall Tasks" value={summary?.totalTasks ?? 0} />
-      </div>
+        {/* Work duration stats - collapsed, click to expand */}
+        <div className="border rounded-lg">
+          <div
+            className="px-4 py-3 grid grid-cols-3 gap-4 cursor-pointer hover:bg-muted/20 transition"
+            onClick={() => setSessionsExpanded(v => !v)}
+          >
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">{t('report.onDuty')}</div>
+              <div className="text-lg font-semibold">{formatDuration(stats.onDuty)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">{t('report.workTime')}</div>
+              <div className="text-lg font-semibold text-green-600">{formatDuration(stats.workTime)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">{t('report.idleTime')}</div>
+              <div className="text-lg font-semibold text-amber-600">{formatDuration(stats.idleTime)}</div>
+            </div>
+          </div>
 
-      {/* ==================== Work Session Section ==================== */}
-      <div className="border rounded-lg flex flex-col" style={{ maxHeight: '600px' }}>
-        {/* Stats overview */}
-        <div className="px-4 py-3 border-b grid grid-cols-3 gap-4 flex-shrink-0">
-          <div>
-            <div className="text-xs text-muted-foreground mb-1">{t('report.onDuty')}</div>
-            <div className="text-lg font-semibold">{formatDuration(stats.onDuty)}</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted-foreground mb-1">{t('report.workTime')}</div>
-            <div className="text-lg font-semibold text-green-600">{formatDuration(stats.workTime)}</div>
-          </div>
-          <div>
-            <div className="text-xs text-muted-foreground mb-1">{t('report.idleTime')}</div>
-            <div className="text-lg font-semibold text-amber-600">{formatDuration(stats.idleTime)}</div>
-          </div>
-        </div>
-
-        {/* Session list */}
-        {sessionsLoading ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.loading')}</div>
-        ) : sessions.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.noSessions')}</div>
-        ) : (
-          <div className="divide-y overflow-y-auto flex-1">
-            {groupedSessions.map(({ date, sessions: daySessions, firstTakeOver, lastAfk }) => (
-              <div key={format(date, 'yyyy-MM-dd')}>
-                <div className="px-4 py-2 bg-muted/30 text-sm">
-                  <span className="font-medium">
-                    {format(date, 'yyyy-MM-dd EEEE', { locale: dateLocale })}
-                  </span>
-                  <span className="text-muted-foreground ml-3">
-                    {format(new Date(firstTakeOver), 'HH:mm')} — {format(new Date(lastAfk), 'HH:mm')}
-                  </span>
-                </div>
-                {daySessions.map(session => (
-                  <SessionRow key={session.id} session={session} task={sessionTasks[session.taskId]} />
+          {/* Session list - collapsed by default */}
+          {sessionsExpanded && (
+            sessionsLoading ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.loading')}</div>
+            ) : sessions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.noSessions')}</div>
+            ) : (
+              <div className="divide-y max-h-[400px] overflow-y-auto">
+                {groupedSessions.map(({ date, sessions: daySessions, firstTakeOver, lastAfk }) => (
+                  <div key={format(date, 'yyyy-MM-dd')}>
+                    <div className="px-4 py-2 bg-muted/30 text-sm">
+                      <span className="font-medium">
+                        {format(date, 'yyyy-MM-dd EEEE', { locale: dateLocale })}
+                      </span>
+                      <span className="text-muted-foreground ml-3">
+                        {format(new Date(firstTakeOver), 'HH:mm')} — {format(new Date(lastAfk), 'HH:mm')}
+                      </span>
+                    </div>
+                    {daySessions.map(session => (
+                      <SessionRow key={session.id} session={session} task={sessionTasks[session.taskId]} dayEnd={
+                        (() => { const d = getDaysInRange(getDayRange().start, getDayRange().end).find(dd => dd.daySessions.some(s => s.id === session.id)); return d?.dayEnd ?? Date.now() })()
+                      } />
+                    ))}
+                  </div>
                 ))}
               </div>
-            ))}
+            )
+          )}
+        </div>
+
+        {/* Stat cards - clickable filters */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <StatCard icon={<ListTodo className="w-5 h-5" />} label="New" value={dateRangeStats.total} active={selectedStatFilter === 'NEW'} onClick={() => setSelectedStatFilter('NEW')} />
+          <StatCard icon={<CheckCircle2 className="w-5 h-5" />} label={t('report.completed')} value={dateRangeStats.completed} active={selectedStatFilter === 'COMPLETED'} onClick={() => setSelectedStatFilter('COMPLETED')} />
+          <StatCard icon={<Clock className="w-5 h-5" />} label={t('report.inProgress')} value={dateRangeStats.inProgress} active={selectedStatFilter === 'IN_PROGRESS'} onClick={() => setSelectedStatFilter('IN_PROGRESS')} />
+          <StatCard icon={<BarChart3 className="w-5 h-5" />} label="All Tasks" value={summary?.totalTasks ?? 0} active={selectedStatFilter === 'ALL'} onClick={() => setSelectedStatFilter('ALL')} />
+        </div>
+
+        {/* Task list */}
+        <div className="border rounded-lg">
+          <div className="px-4 py-3 border-b flex items-center justify-between">
+            <span className="text-sm font-medium">{filteredTasks.length} task{filteredTasks.length !== 1 ? 's' : ''}</span>
+            <span className="text-xs text-muted-foreground">
+              {selectedStatFilter === 'NEW' ? 'New tasks' : selectedStatFilter === 'COMPLETED' ? 'Completed tasks' : selectedStatFilter === 'IN_PROGRESS' ? 'In progress tasks' : 'All tasks'}
+            </span>
           </div>
-        )}
+          {filteredTasks.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.noTasks')}</div>
+          ) : (
+            <div className="divide-y max-h-[400px] overflow-y-auto">
+              {filteredTasks.map(task => (
+                <div
+                  key={task.id}
+                  className="px-4 py-3 flex items-center gap-4 text-sm cursor-pointer hover:bg-muted/40 transition"
+                  onClick={() => openTaskDetail(task)}
+                >
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${priorityColors[task.priority as keyof typeof priorityColors]}`} />
+                  <span className="flex-1 truncate">{task.title}</span>
+                  <span className="text-xs text-muted-foreground w-24 text-right">{format(new Date(task.createdAt), 'MM-dd')}</span>
+                  {task.completedAt && (
+                    <span className="text-xs text-green-600 w-24 text-right">{format(new Date(task.completedAt), 'MM-dd')}</span>
+                  )}
+                  <span className="text-xs tabular-nums w-16 text-right">{formatDuration(task.workMs)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Side panel - task detail */}
+      {selectedTask && (
+        <div className="w-96 border-l bg-card flex flex-col flex-shrink-0 overflow-y-auto">
+          <div className="flex items-center justify-between px-4 py-3 border-b">
+            <h2 className="text-sm font-semibold truncate flex-1">{selectedTask.title}</h2>
+            <button className="p-1 rounded hover:bg-muted transition" onClick={() => setSelectedTask(null)}>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="px-4 py-3 space-y-4 text-sm">
+            <div className="flex gap-4">
+              <div>
+                <span className="text-xs text-muted-foreground">Status</span>
+                <div>{selectedTask.status}</div>
+              </div>
+              <div>
+                <span className="text-xs text-muted-foreground">Created</span>
+                <div>{format(new Date(selectedTask.createdAt), 'MM-dd HH:mm', { locale: dateLocale })}</div>
+              </div>
+              {selectedTask.completedAt && (
+                <div>
+                  <span className="text-xs text-muted-foreground">Completed</span>
+                  <div>{format(new Date(selectedTask.completedAt), 'MM-dd HH:mm', { locale: dateLocale })}</div>
+                </div>
+              )}
+            </div>
+            {selectedTask.body && (
+              <div>
+                <span className="text-xs text-muted-foreground">Body</span>
+                <div className="mt-1 prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: selectedTask.body }} />
+              </div>
+            )}
+            {taskEntries.length > 0 && (
+              <div>
+                <span className="text-xs text-muted-foreground">Work Logs</span>
+                <div className="mt-1 space-y-2">
+                  {taskEntries.filter(e => e.type === 'log').map(entry => (
+                    <div key={entry.id} className="border-l-2 border-muted pl-3 py-1">
+                      <div className="text-xs text-muted-foreground">{format(new Date(entry.createdAt), 'MM-dd HH:mm')}</div>
+                      <div className="text-sm" dangerouslySetInnerHTML={{ __html: entry.content }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-function SessionRow({ session, task, serverNow }: { session: WorkSession; task?: Task; serverNow?: number }) {
+function SessionRow({ session, task, dayEnd }: { session: WorkSession; task?: Task; dayEnd?: number }) {
   const { t, dateLocale } = useI18n()
   const startedAt = new Date(session.startedAt)
   const endedAt = session.endedAt ? new Date(session.endedAt) : null
-  // Use serverNow if available, otherwise fallback to Date.now() with a warning
-  const now = serverNow ?? Date.now()
+  // Fix: use Math.min(dayEnd, Date.now()) for ongoing sessions
+  const now = Math.min(dayEnd ?? Date.now(), Date.now())
   const duration = endedAt ? session.endedAt! - session.startedAt : now - session.startedAt
 
   return (
     <div className="px-4 py-3 flex items-center gap-6 text-sm">
-      {/* Time */}
       <div className="w-32 flex-shrink-0">
         <div className="font-medium">{format(startedAt, 'HH:mm', { locale: dateLocale })}</div>
         {endedAt ? (
@@ -407,13 +541,9 @@ function SessionRow({ session, task, serverNow }: { session: WorkSession; task?:
           <div className="text-blue-500 text-xs">{t('report.ongoing')}</div>
         )}
       </div>
-
-      {/* Duration */}
       <div className="w-20 flex-shrink-0 font-medium">
         {formatDuration(duration)}
       </div>
-
-      {/* Task */}
       <div className="flex-1 min-w-0">
         {task ? (
           <div className="flex items-center gap-2">
@@ -428,9 +558,14 @@ function SessionRow({ session, task, serverNow }: { session: WorkSession; task?:
   )
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+function StatCard({ icon, label, value, active, onClick }: { icon: React.ReactNode; label: string; value: number; active?: boolean; onClick?: () => void }) {
   return (
-    <div className="border rounded-lg p-4 flex items-center gap-3">
+    <div
+      className={`border rounded-lg p-4 flex items-center gap-3 cursor-pointer transition ${
+        active ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'
+      }`}
+      onClick={onClick}
+    >
       <div className="p-2 bg-muted rounded-md">{icon}</div>
       <div>
         <div className="text-2xl font-bold">{value}</div>

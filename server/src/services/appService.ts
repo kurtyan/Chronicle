@@ -185,6 +185,33 @@ export class AppService {
     }
   }
 
+  /** Fetch tasks created in range with body content and work session totals */
+  async fetchReportTasks(start: number, end: number): Promise<Array<Task & { body: string; workMs: number }>> {
+    const tasks = getAllTasks()
+    const inRange = tasks.filter(t => t.createdAt >= start && t.createdAt <= end)
+
+    const result = inRange.map(task => {
+      // Get body entries
+      const entries = getDb().prepare(
+        'SELECT content FROM task_entries WHERE task_id = ? AND type = ? ORDER BY created_at ASC'
+      ).all(task.id, 'body') as { content: string }[]
+      const body = entries.map(e => e.content).join('\n\n')
+
+      // Sum work session duration
+      const sessions = getDb().prepare(
+        'SELECT started_at, ended_at FROM work_sessions WHERE task_id = ?'
+      ).all(task.id) as { started_at: number; ended_at: number | null }[]
+      let workMs = 0
+      for (const s of sessions) {
+        workMs += (s.ended_at ?? Date.now()) - s.started_at
+      }
+
+      return { ...task, body, workMs }
+    })
+
+    return result.sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
   // --- Task Extra Info ---
 
   async setTaskExtraInfo(taskId: string, key: string, value: string): Promise<TaskExtraInfo> {
