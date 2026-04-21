@@ -3,7 +3,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import type { Task, TaskType, TaskEntry, SearchResult } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { X, AlertTriangle, Copy, Search, Pin } from 'lucide-react'
+import { X, AlertTriangle, Copy, Search, Pin, PauseCircle } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
@@ -35,7 +35,7 @@ export function BoardPage() {
     tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
     statusFilter, isTodayFilter, draftTask, currentSession, lastAfkTime, pinnedIds,
     searchMode, searchQuery, searchResults, searchTokens,
-    loadTodos, setActiveTask, updateTask, markDone,
+    loadTodos, setActiveTask, updateTask, markDone, setOnHold,
     submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
     startDraft, commitDraft, cancelDraft,
     takeOver, doAfk, autoTakeOver, doDrop, loadCurrentSession, loadPinnedIds, togglePinned,
@@ -806,10 +806,7 @@ export function BoardPage() {
       return
     }
     if (confirm(`确认将「${task.title}」设为搁置状态？\n\n此操作将终止当前工作记录。`)) {
-      if (currentSession?.taskId === taskId) {
-        await doAfk()
-      }
-      await updateTask(taskId, { status: 'ON_HOLD' })
+      await setOnHold(taskId)
     }
     setPinMenu(null)
   }
@@ -1245,6 +1242,7 @@ export function BoardPage() {
                 handleSetOnHold(pinMenu.taskId)
               }}
             >
+              <PauseCircle className="w-3.5 h-3.5" />
               {t('status.onHold')}
             </button>
           </div>

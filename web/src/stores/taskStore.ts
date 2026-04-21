@@ -39,6 +39,7 @@ interface TaskState {
   updateTask: (id: string, req: UpdateTaskRequest) => Promise<Task | null>
   deleteTask: (id: string) => Promise<void>
   markDone: (id: string) => Promise<Task | null>
+  setOnHold: (id: string) => Promise<Task | null>
   submitEntry: (taskId: string, content: string, type?: 'body' | 'log') => Promise<TaskEntry>
   updateEntry: (taskId: string, entryId: string, content: string) => Promise<TaskEntry | null>
   setFilterTypes: (types: TaskType[]) => void
@@ -100,14 +101,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         let tasks: Task[]
         if (filterTypes.length === 0) {
           // All types
-          tasks = await api.fetchTodos(undefined, 'PENDING,DOING,ON_HOLD')
+          tasks = await api.fetchTodos(undefined, 'PENDING,DOING')
         } else if (filterTypes.length === 1) {
           // Single type — direct call
-          tasks = await api.fetchTodos(filterTypes[0], 'PENDING,DOING,ON_HOLD')
+          tasks = await api.fetchTodos(filterTypes[0], 'PENDING,DOING')
         } else {
           // Multiple types — fetch each separately and merge (OR semantics)
           const results = await Promise.all(
-            filterTypes.map((type) => api.fetchTodos(type, 'PENDING,DOING,ON_HOLD'))
+            filterTypes.map((type) => api.fetchTodos(type, 'PENDING,DOING'))
           )
           const merged = results.flat()
           const ids = new Set<string>()
@@ -203,6 +204,34 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         : state.tasks.filter((t) => t.id !== id)
       ).sort((a, b) => b.updatedAt - a.updatedAt)
       // When task is removed from list, select the next task at the same index
+      let nextActiveId = state.activeTaskId
+      if (state.activeTaskId === id) {
+        const oldIndex = state.tasks.findIndex(t => t.id === id)
+        const nextTask = nextTasks[oldIndex] ?? nextTasks[oldIndex - 1] ?? null
+        nextActiveId = nextTask?.id ?? null
+      }
+      return {
+        tasks: nextTasks,
+        activeTaskId: nextActiveId,
+        entries: state.activeTaskId === id ? [] : state.entries,
+      }
+    })
+    return updated
+  },
+
+  setOnHold: async (id) => {
+    const { currentSession } = get()
+    if (currentSession?.taskId === id) {
+      await api.doAfk()
+      set({ currentSession: null })
+    }
+    const updated = await api.updateTask(id, { status: 'ON_HOLD' })
+    if (!updated) return null
+    set((state) => {
+      const nextTasks = (state.statusFilter === 'ON_HOLD'
+        ? state.tasks.map((t) => (t.id === id ? updated : t))
+        : state.tasks.filter((t) => t.id !== id)
+      ).sort((a, b) => b.updatedAt - a.updatedAt)
       let nextActiveId = state.activeTaskId
       if (state.activeTaskId === id) {
         const oldIndex = state.tasks.findIndex(t => t.id === id)

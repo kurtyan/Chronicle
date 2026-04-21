@@ -92,6 +92,7 @@ export const translations: Record<string, TranslationEntry> = {
   'status.done': { 'zh-CN': '已完成', en: 'Done' },
   'status.dropped': { 'zh-CN': '已废弃', en: 'Dropped' },
   'status.onHold': { 'zh-CN': '已搁置', en: 'On Hold' },
+  'status.on_hold': { 'zh-CN': '已搁置', en: 'On Hold' },
   'priority.high': { 'zh-CN': '高', en: 'High' },
   'priority.medium': { 'zh-CN': '中', en: 'Medium' },
   'priority.low': { 'zh-CN': '低', en: 'Low' },
