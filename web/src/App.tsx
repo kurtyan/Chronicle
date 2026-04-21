@@ -197,9 +197,15 @@ function Sidebar() {
 }
 
 import { useTaskStore } from '@/stores/taskStore'
+import { AutoAfkDialog } from '@/components/AutoAfkDialog'
 
 // Listen for auto-AFK events from Tauri backend
+// Returns dialog state for rendering in Layout
 function useAutoAfk() {
+  const [afkDialog, setAfkDialog] = useState<{ open: boolean; reason: string; triggeredAt: number }>({
+    open: false, reason: '', triggeredAt: 0,
+  })
+
   useEffect(() => {
     const p = (async () => {
       try {
@@ -207,12 +213,9 @@ function useAutoAfk() {
         const unlisten = await listen('auto-afk-triggered', async (event) => {
           const reason = event.payload as string
           console.log('[Auto-AFK] event received:', reason)
-          const s = useTaskStore.getState()
-          console.log('[Auto-AFK] currentSession:', s.currentSession ? 'exists' : 'null')
-          if (s.currentSession) {
-            await s.doAfk()
-            console.log('[Auto-AFK] doAfk() completed')
-          }
+          // End the session (calls server API + clears local state) then show dialog
+          useTaskStore.getState().doAfk()
+          setAfkDialog({ open: true, reason, triggeredAt: Date.now() })
         })
         console.log('[Auto-AFK] listener registered')
         return unlisten
@@ -223,12 +226,19 @@ function useAutoAfk() {
     })()
     return () => { p.then(fn => fn?.()) }
   }, [])
+
+  return {
+    open: afkDialog.open,
+    reason: afkDialog.reason,
+    triggeredAt: afkDialog.triggeredAt,
+    onClose: () => setAfkDialog(prev => ({ ...prev, open: false })),
+  }
 }
 
 function Layout() {
   useSystemBrowserLinks()
   useTauriZoom()
-  useAutoAfk()
+  const afkDialog = useAutoAfk()
   const navigate = useNavigate()
 
   const { setSearchMode } = useTaskStore()
@@ -346,6 +356,12 @@ function Layout() {
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
+      <AutoAfkDialog
+        open={afkDialog.open}
+        reason={afkDialog.reason}
+        triggeredAt={afkDialog.triggeredAt}
+        onClose={afkDialog.onClose}
+      />
     </div>
   )
 }

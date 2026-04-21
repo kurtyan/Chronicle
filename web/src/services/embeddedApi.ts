@@ -565,13 +565,13 @@ export class EmbeddedApiProvider implements ApiInterface {
   // --- AFK Events (stub: in-memory store) ---
   private afkEvents: AfkEvent[] = []
 
-  async createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
+  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
     const event: AfkEvent = {
       id: crypto.randomUUID(),
       triggeredAt,
       reason,
-      userNote: null,
-      submittedAt: null,
+      userNote: userNote ?? null,
+      submittedAt: Date.now(),
     }
     this.afkEvents.push(event)
     return event

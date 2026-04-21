@@ -127,28 +127,8 @@ fn emit_auto_afk(app: &tauri::AppHandle, reason: &str) {
     let _ = write_client_log(format!("[Auto-AFK] emit triggered, reason: {}", reason));
     LAST_AUTO_AFK_EMIT.store(now, Ordering::Relaxed);
 
-    // Directly call server API to end sessions
-    if let Ok(server_url) = get_server_url() {
-        let afk_url = format!("{}/api/afk", server_url);
-        let _ = write_client_log(format!("[Auto-AFK] calling {} (reason: {})", afk_url, reason));
-        // Use std::process::Command to curl for simplicity
-        let output = std::process::Command::new("curl")
-            .args(["-s", "-X", "POST", &afk_url])
-            .output();
-        match output {
-            Ok(out) => {
-                let status = String::from_utf8_lossy(&out.stdout);
-                let _ = write_client_log(format!("[Auto-AFK] server response: {}", status.trim()));
-            }
-            Err(e) => {
-                let _ = write_client_log(format!("[Auto-AFK] server call failed: {}", e));
-            }
-        }
-    } else {
-        let _ = write_client_log("[Auto-AFK] could not resolve server URL".to_string());
-    }
-
-    // Also emit event to frontend in case it's listening
+    // Emit event to frontend — the frontend's useAutoAfk hook will call
+    // doAfk() to end the session (both server API + local state) and show dialog
     let _ = app.emit("auto-afk-triggered", reason);
 }
 
@@ -238,7 +218,7 @@ fn run_terminal_command(command: String) -> Result<(), String> {
     Ok(())
 }
 
-// Screen lock detection via polling CGSession
+// Screen lock detection via polling
 #[cfg(target_os = "macos")]
 fn setup_screen_lock_detection(app: &tauri::AppHandle) {
     let app_handle = app.clone();
@@ -265,31 +245,29 @@ fn setup_screen_lock_detection(app: &tauri::AppHandle) {
 }
 
 #[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGSessionCopyCurrentDictionary() -> core_foundation_sys::dictionary::CFDictionaryRef;
+}
+
+#[cfg(target_os = "macos")]
 fn is_screen_locked() -> bool {
+    use core_foundation_sys::base::{CFTypeRef, CFRelease};
+    use core_foundation_sys::dictionary::CFDictionaryGetValue;
+    use core_foundation_sys::number::{CFBooleanGetValue, CFBooleanRef};
+    use core_foundation_sys::string::CFStringCreateWithCString;
+    use std::ffi::c_void;
+
     unsafe {
-        use core_foundation_sys::base::{CFTypeRef, CFRelease};
-        use core_foundation_sys::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
-        use core_foundation_sys::string::CFStringCreateWithBytes;
-        use core_foundation_sys::number::{CFNumberGetValue, CFNumberRef, kCFNumberSInt64Type};
-        use std::ffi::c_void;
-
-        #[link(name = "CoreGraphics", kind = "framework")]
-        extern "C" {
-            fn CGSessionCopyCurrentDictionary() -> CFDictionaryRef;
-        }
-
         let dict_ref = CGSessionCopyCurrentDictionary();
         if dict_ref.is_null() {
             return false;
         }
 
-        let key_bytes = b"CGSSessionScreenIsLocked";
-        let key_ref = CFStringCreateWithBytes(
+        let key_ref = CFStringCreateWithCString(
             std::ptr::null_mut(),
-            key_bytes.as_ptr(),
-            key_bytes.len() as isize,
+            b"CGSSessionScreenIsLocked\0".as_ptr() as *const i8,
             0x08000100u32,
-            0,
         );
         if key_ref.is_null() {
             CFRelease(dict_ref as CFTypeRef);
@@ -304,17 +282,7 @@ fn is_screen_locked() -> bool {
             return false;
         }
 
-        let mut value: i64 = 0;
-        let ok = CFNumberGetValue(
-            value_ref as CFNumberRef,
-            kCFNumberSInt64Type,
-            &mut value as *mut i64 as *mut c_void,
-        );
-        if ok {
-            value != 0
-        } else {
-            false
-        }
+        CFBooleanGetValue(value_ref as CFBooleanRef)
     }
 }
 

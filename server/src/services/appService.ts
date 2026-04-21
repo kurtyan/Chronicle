@@ -244,8 +244,8 @@ export class AppService {
 
   // --- AFK Events ---
 
-  async createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
-    return createAfkEvent(reason, triggeredAt)
+  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
+    return createAfkEvent(reason, triggeredAt, userNote)
   }
 
   async updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null> {

@@ -115,8 +115,8 @@ export async function getPinnedTaskIds(): Promise<string[]> {
 }
 
 // AFK Events
-export async function createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
-  return (await getApi()).createAfkEvent(reason, triggeredAt)
+export async function createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
+  return (await getApi()).createAfkEvent(reason, triggeredAt, userNote)
 }
 export async function updateAfkEventApi(id: string, userNote: string): Promise<AfkEvent | null> {
   return (await getApi()).updateAfkEvent(id, userNote)

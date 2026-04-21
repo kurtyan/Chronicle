@@ -188,7 +188,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto">
+    <div className="p-6 max-w-2xl mx-auto h-screen overflow-y-auto">
       <h1 className="text-2xl font-semibold mb-6">{t('settings.title')}</h1>
 
       {/* Database Info */}

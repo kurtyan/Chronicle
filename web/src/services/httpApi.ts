@@ -216,8 +216,8 @@ export const httpApi: ApiInterface = {
   },
 
   // AFK Events
-  async createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
-    const { data } = await (await withClientId()).post<AfkEvent>('/api/afk-events', { reason, triggeredAt })
+  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
+    const { data } = await (await withClientId()).post<AfkEvent>('/api/afk-events', { reason, triggeredAt, userNote })
     return data
   },
 

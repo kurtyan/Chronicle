@@ -46,7 +46,7 @@ export interface ApiInterface {
   togglePinned(taskId: string): Promise<boolean>
   getPinnedTaskIds(): Promise<string[]>
   // AFK Events
-  createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent>
+  createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent>
   updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null>
   getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]>
 }

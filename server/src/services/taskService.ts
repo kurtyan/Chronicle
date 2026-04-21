@@ -416,7 +416,7 @@ function rowToAfkEvent(row: any): AfkEvent {
   }
 }
 
-export function createAfkEvent(reason: string, triggeredAt: number): AfkEvent {
+export function createAfkEvent(reason: string, triggeredAt: number, userNote?: string): AfkEvent {
   const submittedAt = Date.now()
 
   // Reject if the AFK time range overlaps with any work session
@@ -430,8 +430,8 @@ export function createAfkEvent(reason: string, triggeredAt: number): AfkEvent {
 
   const id = crypto.randomUUID()
   run(
-    'INSERT INTO afk_events(id, triggered_at, reason, submitted_at) VALUES (?, ?, ?, ?)',
-    [id, triggeredAt, reason, submittedAt]
+    'INSERT INTO afk_events(id, triggered_at, reason, user_note, submitted_at) VALUES (?, ?, ?, ?, ?)',
+    [id, triggeredAt, reason, userNote ?? null, submittedAt]
   )
   return rowToAfkEvent(queryOne('SELECT * FROM afk_events WHERE id = ?', [id])!)
 }

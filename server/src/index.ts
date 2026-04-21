@@ -179,7 +179,7 @@ app.get('/api/tasks/pinned', async (c) => {
 app.post('/api/afk-events', async (c) => {
   const body = await c.req.json()
   try {
-    const event = await service.createAfkEvent(body.reason, body.triggeredAt ?? Date.now())
+    const event = await service.createAfkEvent(body.reason, body.triggeredAt ?? Date.now(), body.userNote)
     return c.json(event, 201)
   } catch (e: any) {
     return c.json({ error: e.message }, 409)
