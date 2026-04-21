@@ -215,6 +215,7 @@ export function createTaskEntry(taskId: string, content: string, type: 'body' | 
     'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
     [id, taskId, content, type, now]
   )
+  run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, taskId])
 
   indexEntry(taskId, id, content, type)
 
@@ -226,6 +227,7 @@ export function updateTaskEntry(entryId: string, content: string): TaskEntry | n
   if (!existing) return null
 
   run('UPDATE task_entries SET content = ? WHERE id = ?', [content, entryId])
+  run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), existing.task_id])
   indexEntry(existing.task_id, entryId, content, existing.type as 'body' | 'log')
   return rowToTaskEntry(queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])!)
 }
