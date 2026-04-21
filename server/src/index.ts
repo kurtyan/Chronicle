@@ -141,6 +141,51 @@ app.post('/api/tasks/:id/drop', async (c) => {
   return c.json(task)
 })
 
+// --- Task Extra Info API ---
+app.get('/api/tasks/:id/extra-info', async (c) => {
+  return c.json(await service.getTaskExtraInfo(c.req.param('id')))
+})
+
+app.get('/api/tasks/:id/extra-info/:key', async (c) => {
+  const value = await service.getTaskExtraInfoValue(c.req.param('id'), c.req.param('key'))
+  return c.json({ value })
+})
+
+app.put('/api/tasks/:id/extra-info/:key', async (c) => {
+  const body = await c.req.json()
+  return c.json(await service.setTaskExtraInfo(c.req.param('id'), c.req.param('key'), body.value ?? ''))
+})
+
+app.delete('/api/tasks/:id/extra-info/:key', async (c) => {
+  const ok = await service.deleteTaskExtraInfo(c.req.param('id'), c.req.param('key'))
+  if (!ok) return c.json({ error: 'Not found' }, 404)
+  return c.json({ ok: true })
+})
+
+// --- AFK Events API ---
+app.post('/api/afk-events', async (c) => {
+  const body = await c.req.json()
+  try {
+    const event = await service.createAfkEvent(body.reason, body.triggeredAt ?? Date.now())
+    return c.json(event, 201)
+  } catch (e: any) {
+    return c.json({ error: e.message }, 409)
+  }
+})
+
+app.put('/api/afk-events/:id', async (c) => {
+  const body = await c.req.json()
+  const event = await service.updateAfkEvent(c.req.param('id'), body.userNote ?? '')
+  if (!event) return c.json({ error: 'Not found' }, 404)
+  return c.json(event)
+})
+
+app.get('/api/afk-events', async (c) => {
+  const start = c.req.query('start') ? parseInt(c.req.query('start')!) : undefined
+  const end = c.req.query('end') ? parseInt(c.req.query('end')!) : undefined
+  return c.json(await service.getAfkEvents(start, end))
+})
+
 // --- Report API ---
 app.get('/api/reports/today', async (c) => {
   return c.json(await service.fetchTodayReport())

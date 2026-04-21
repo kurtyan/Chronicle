@@ -58,6 +58,25 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS afk_events (
+      id TEXT PRIMARY KEY,
+      triggered_at INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      user_note TEXT,
+      submitted_at INTEGER
+    )
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_extra_info (
+      task_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (task_id, key)
+    )
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS _meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

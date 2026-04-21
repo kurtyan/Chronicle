@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -37,4 +37,13 @@ export interface ApiInterface {
     tokens: string[]
     total: number
   }>
+  // Task Extra Info
+  getTaskExtraInfo(taskId: string): Promise<TaskExtraInfo[]>
+  getTaskExtraInfoValue(taskId: string, key: string): Promise<string | null>
+  setTaskExtraInfo(taskId: string, key: string, value: string): Promise<TaskExtraInfo>
+  deleteTaskExtraInfo(taskId: string, key: string): Promise<boolean>
+  // AFK Events
+  createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent>
+  updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null>
+  getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]>
 }

@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -511,6 +511,62 @@ export class EmbeddedApiProvider implements ApiInterface {
 
     const results = [...taskMap.values()]
     return { results, tokens: [trimmed], total: results.length }
+  }
+
+  // --- Task Extra Info (stub: in-memory store) ---
+  private extraInfoStore: Map<string, Map<string, string>> = new Map()
+
+  async getTaskExtraInfo(taskId: string): Promise<TaskExtraInfo[]> {
+    const map = this.extraInfoStore.get(taskId)
+    if (!map) return []
+    return [...map.entries()].map(([key, value]) => ({ taskId, key, value }))
+  }
+
+  async getTaskExtraInfoValue(taskId: string, key: string): Promise<string | null> {
+    return this.extraInfoStore.get(taskId)?.get(key) ?? null
+  }
+
+  async setTaskExtraInfo(taskId: string, key: string, value: string): Promise<TaskExtraInfo> {
+    if (!this.extraInfoStore.has(taskId)) this.extraInfoStore.set(taskId, new Map())
+    this.extraInfoStore.get(taskId)!.set(key, value)
+    return { taskId, key, value }
+  }
+
+  async deleteTaskExtraInfo(taskId: string, key: string): Promise<boolean> {
+    const map = this.extraInfoStore.get(taskId)
+    if (!map) return false
+    return map.delete(key)
+  }
+
+  // --- AFK Events (stub: in-memory store) ---
+  private afkEvents: AfkEvent[] = []
+
+  async createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
+    const event: AfkEvent = {
+      id: crypto.randomUUID(),
+      triggeredAt,
+      reason,
+      userNote: null,
+      submittedAt: null,
+    }
+    this.afkEvents.push(event)
+    return event
+  }
+
+  async updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null> {
+    const event = this.afkEvents.find(e => e.id === id)
+    if (!event) return null
+    event.userNote = userNote
+    event.submittedAt = Date.now()
+    return event
+  }
+
+  async getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]> {
+    let events = [...this.afkEvents]
+    if (start !== undefined && end !== undefined) {
+      events = events.filter(e => e.triggeredAt >= start && e.triggeredAt <= end)
+    }
+    return events.sort((a, b) => b.triggeredAt - a.triggeredAt)
   }
 }
 

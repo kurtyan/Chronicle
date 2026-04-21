@@ -78,3 +78,17 @@ export const priorityOrder: Record<Priority, number> = {
   MEDIUM: 1,
   LOW: 2,
 }
+
+export interface TaskExtraInfo {
+  taskId: string
+  key: string
+  value: string
+}
+
+export interface AfkEvent {
+  id: string
+  triggeredAt: number
+  reason: string
+  userNote: string | null
+  submittedAt: number | null
+}

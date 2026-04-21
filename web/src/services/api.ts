@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -89,4 +89,29 @@ export async function searchTasks(query: string, limit?: number): Promise<{
   total: number
 }> {
   return (await getApi()).searchTasks(query, limit)
+}
+
+// Task Extra Info
+export async function getTaskExtraInfo(taskId: string): Promise<TaskExtraInfo[]> {
+  return (await getApi()).getTaskExtraInfo(taskId)
+}
+export async function getTaskExtraInfoValue(taskId: string, key: string): Promise<string | null> {
+  return (await getApi()).getTaskExtraInfoValue(taskId, key)
+}
+export async function setTaskExtraInfo(taskId: string, key: string, value: string): Promise<TaskExtraInfo> {
+  return (await getApi()).setTaskExtraInfo(taskId, key, value)
+}
+export async function deleteTaskExtraInfo(taskId: string, key: string): Promise<boolean> {
+  return (await getApi()).deleteTaskExtraInfo(taskId, key)
+}
+
+// AFK Events
+export async function createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
+  return (await getApi()).createAfkEvent(reason, triggeredAt)
+}
+export async function updateAfkEventApi(id: string, userNote: string): Promise<AfkEvent | null> {
+  return (await getApi()).updateAfkEvent(id, userNote)
+}
+export async function getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]> {
+  return (await getApi()).getAfkEvents(start, end)
 }

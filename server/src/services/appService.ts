@@ -2,7 +2,9 @@ import {
   getAllTasks, getTaskById, createTask, updateTask, deleteTask,
   getTaskEntries, createTaskEntry, updateTaskEntry, markTaskDone,
   startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
-  type Task, type TaskEntry, type WorkSession,
+  setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned,
+  createAfkEvent, updateAfkEvent, getAfkEvents,
+  type Task, type TaskEntry, type WorkSession, type TaskExtraInfo, type AfkEvent,
 } from './taskService'
 import { getDb } from '../db'
 
@@ -177,5 +179,41 @@ export class AppService {
       completed: completedResult.count,
       inProgress: inProgressResult.count,
     }
+  }
+
+  // --- Task Extra Info ---
+
+  async setTaskExtraInfo(taskId: string, key: string, value: string): Promise<TaskExtraInfo> {
+    return setTaskExtraInfo(taskId, key, value)
+  }
+
+  async getTaskExtraInfo(taskId: string): Promise<TaskExtraInfo[]> {
+    return getTaskExtraInfo(taskId)
+  }
+
+  async getTaskExtraInfoValue(taskId: string, key: string): Promise<string | null> {
+    return getTaskExtraInfoValue(taskId, key)
+  }
+
+  async deleteTaskExtraInfo(taskId: string, key: string): Promise<boolean> {
+    return deleteTaskExtraInfo(taskId, key)
+  }
+
+  async getAllTasksWithPinned(): Promise<Array<Task & { pinned: boolean }>> {
+    return getAllTasksWithPinned()
+  }
+
+  // --- AFK Events ---
+
+  async createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
+    return createAfkEvent(reason, triggeredAt)
+  }
+
+  async updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null> {
+    return updateAfkEvent(id, userNote)
+  }
+
+  async getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]> {
+    return getAfkEvents(start, end)
   }
 }

@@ -63,7 +63,7 @@ function queryAll(sql: string, params: any[] = []): any[] {
 }
 
 function run(sql: string, params: any[] = []) {
-  getDb().prepare(sql).run(...params)
+  return getDb().prepare(sql).run(...params)
 }
 
 export function getAllTasks(filters?: { type?: string; priority?: string; status?: string[] }): Task[] {
@@ -322,4 +322,112 @@ export function getTodayTasks(): Task[] {
   if (toRead && !ids.has(toRead.id)) result.push(toRead)
 
   return result.sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+// --- Task Extra Info ---
+
+export interface TaskExtraInfo {
+  taskId: string
+  key: string
+  value: string
+}
+
+export function setTaskExtraInfo(taskId: string, key: string, value: string): TaskExtraInfo {
+  run(
+    'INSERT OR REPLACE INTO task_extra_info(task_id, key, value) VALUES (?, ?, ?)',
+    [taskId, key, value]
+  )
+  return { taskId, key, value }
+}
+
+export function getTaskExtraInfo(taskId: string): TaskExtraInfo[] {
+  return queryAll(
+    'SELECT task_id, key, value FROM task_extra_info WHERE task_id = ?',
+    [taskId]
+  ).map((row) => ({ taskId: row.task_id, key: row.key, value: row.value }))
+}
+
+export function getTaskExtraInfoValue(taskId: string, key: string): string | null {
+  const row = queryOne(
+    'SELECT value FROM task_extra_info WHERE task_id = ? AND key = ?',
+    [taskId, key]
+  )
+  return row ? row.value : null
+}
+
+export function deleteTaskExtraInfo(taskId: string, key: string): boolean {
+  const result = run(
+    'DELETE FROM task_extra_info WHERE task_id = ? AND key = ?',
+    [taskId, key]
+  )
+  return result.changes > 0
+}
+
+export function getAllTasksWithPinned(): Array<Task & { pinned: boolean }> {
+  const tasks = getAllTasks()
+  const pinnedIds = new Set(
+    queryAll(
+      "SELECT task_id FROM task_extra_info WHERE key = 'pinned' AND value = 'true'"
+    ).map((r) => r.task_id)
+  )
+  return tasks.map((t) => ({ ...t, pinned: pinnedIds.has(t.id) }))
+}
+
+// --- AFK Events ---
+
+export interface AfkEvent {
+  id: string
+  triggeredAt: number
+  reason: string
+  userNote: string | null
+  submittedAt: number | null
+}
+
+function rowToAfkEvent(row: any): AfkEvent {
+  return {
+    id: row.id,
+    triggeredAt: row.triggered_at,
+    reason: row.reason,
+    userNote: row.user_note,
+    submittedAt: row.submitted_at,
+  }
+}
+
+export function createAfkEvent(reason: string, triggeredAt: number): AfkEvent {
+  const submittedAt = Date.now()
+
+  // Reject if the AFK time range overlaps with any work session
+  const overlap = queryOne(
+    'SELECT COUNT(*) as count FROM work_sessions WHERE started_at < ? AND ended_at > ?',
+    [submittedAt, triggeredAt]
+  )
+  if (overlap && overlap.count > 0) {
+    throw new Error('AFK event overlaps with an existing work session')
+  }
+
+  const id = crypto.randomUUID()
+  run(
+    'INSERT INTO afk_events(id, triggered_at, reason, submitted_at) VALUES (?, ?, ?, ?)',
+    [id, triggeredAt, reason, submittedAt]
+  )
+  return rowToAfkEvent(queryOne('SELECT * FROM afk_events WHERE id = ?', [id])!)
+}
+
+export function updateAfkEvent(id: string, userNote: string): AfkEvent | null {
+  run(
+    'UPDATE afk_events SET user_note = ?, submitted_at = ? WHERE id = ?',
+    [userNote, Date.now(), id]
+  )
+  const row = queryOne('SELECT * FROM afk_events WHERE id = ?', [id])
+  return row ? rowToAfkEvent(row) : null
+}
+
+export function getAfkEvents(start?: number, end?: number): AfkEvent[] {
+  let sql = 'SELECT * FROM afk_events ORDER BY triggered_at DESC'
+  const params: any[] = []
+  if (start !== undefined && end !== undefined) {
+    sql = 'SELECT * FROM afk_events WHERE triggered_at >= ? AND triggered_at <= ? ORDER BY triggered_at DESC'
+    params.push(start, end)
+  }
+  return queryAll(sql, params).map(rowToAfkEvent)
 }

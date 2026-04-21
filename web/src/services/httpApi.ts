@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -176,6 +176,46 @@ export const httpApi: ApiInterface = {
     const { data } = await (await withClientId()).get('/api/search', {
       params: { q: query, limit }
     })
+    return data
+  },
+
+  // Task Extra Info
+  async getTaskExtraInfo(taskId: string): Promise<TaskExtraInfo[]> {
+    const { data } = await (await withClientId()).get<TaskExtraInfo[]>(`/api/tasks/${taskId}/extra-info`)
+    return data
+  },
+
+  async getTaskExtraInfoValue(taskId: string, key: string): Promise<string | null> {
+    const { data } = await (await withClientId()).get<{ value: string | null }>(`/api/tasks/${taskId}/extra-info/${key}`)
+    return data.value
+  },
+
+  async setTaskExtraInfo(taskId: string, key: string, value: string): Promise<TaskExtraInfo> {
+    const { data } = await (await withClientId()).put<TaskExtraInfo>(`/api/tasks/${taskId}/extra-info/${key}`, { value })
+    return data
+  },
+
+  async deleteTaskExtraInfo(taskId: string, key: string): Promise<boolean> {
+    const { data } = await (await withClientId()).delete<{ ok: boolean }>(`/api/tasks/${taskId}/extra-info/${key}`)
+    return data.ok
+  },
+
+  // AFK Events
+  async createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
+    const { data } = await (await withClientId()).post<AfkEvent>('/api/afk-events', { reason, triggeredAt })
+    return data
+  },
+
+  async updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null> {
+    const { data } = await (await withClientId()).put<AfkEvent>(`/api/afk-events/${id}`, { userNote })
+    return data
+  },
+
+  async getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]> {
+    const params: Record<string, number> = {}
+    if (start !== undefined) params.start = start
+    if (end !== undefined) params.end = end
+    const { data } = await (await withClientId()).get<AfkEvent[]>('/api/afk-events', { params })
     return data
   },
 }
