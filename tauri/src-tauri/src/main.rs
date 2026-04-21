@@ -198,6 +198,27 @@ fn set_ui_language(language: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn run_terminal_command(command: String) -> Result<(), String> {
+    use std::process::Command;
+    // Open Terminal.app and run the command
+    let output = Command::new("osascript")
+        .args(&["-e", &format!(
+            r#"tell application "Terminal"
+                do script "{}"
+                activate
+            end tell"#,
+            command.replace('"', "\\\"")
+        )])
+        .output()
+        .map_err(|e| format!("Failed to run command: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("osascript failed: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
 // Screen lock detection via polling CGSession
 #[cfg(target_os = "macos")]
 fn setup_screen_lock_detection(app: &tauri::AppHandle) {
@@ -335,6 +356,7 @@ fn main() {
             set_auto_afk_config,
             get_ui_language,
             set_ui_language,
+            run_terminal_command,
         ])
         .setup(|app| {
             // Note: Cmd+Shift+T and Cmd+1/2/3 are now handled in-browser (not global shortcuts)

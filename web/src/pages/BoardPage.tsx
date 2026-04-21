@@ -190,7 +190,20 @@ export function BoardPage() {
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
 
   // Pin context menu
-  const [pinMenuId, setPinMenuId] = useState<string | null>(null)
+  const [pinMenu, setPinMenu] = useState<{ taskId: string; x: number; y: number } | null>(null)
+  const pinMenuRef = useRef<HTMLDivElement>(null)
+
+  // Dismiss context menu on outside click
+  useEffect(() => {
+    if (!pinMenu) return
+    const handleClick = (e: MouseEvent) => {
+      if (pinMenuRef.current && !pinMenuRef.current.contains(e.target as Node)) {
+        setPinMenu(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [pinMenu])
 
   // Cancel confirm dialog
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
@@ -231,6 +244,7 @@ export function BoardPage() {
     isTodayFilter,
     searchMode,
     searchInput,
+    pinnedIds,
   })
   useEffect(() => {
     stateRef.current = {
@@ -252,6 +266,7 @@ export function BoardPage() {
       isTodayFilter,
       searchMode,
       searchInput,
+      pinnedIds,
     }
   })
 
@@ -375,11 +390,15 @@ export function BoardPage() {
       context: notEditing,
       handler: () => {
         const s = stateRef.current
-        const visibleTasks = s.tasks.map((t: Task) => t.id)
-        if (visibleTasks.length === 0) return
-        const currentIdx = s.activeTaskId ? visibleTasks.indexOf(s.activeTaskId) : -1
+        const sorted = [...s.tasks].sort((a: Task, b: Task) => {
+          const aPinned = s.pinnedIds?.has(a.id) ? 1 : 0
+          const bPinned = s.pinnedIds?.has(b.id) ? 1 : 0
+          return bPinned - aPinned || b.updatedAt - a.updatedAt
+        }).map((t: Task) => t.id)
+        if (sorted.length === 0) return
+        const currentIdx = s.activeTaskId ? sorted.indexOf(s.activeTaskId) : -1
         const nextIdx = currentIdx <= 0 ? 0 : currentIdx - 1
-        setActiveTask(visibleTasks[nextIdx])
+        setActiveTask(sorted[nextIdx])
       },
     }))
 
@@ -392,11 +411,15 @@ export function BoardPage() {
       context: notEditing,
       handler: () => {
         const s = stateRef.current
-        const visibleTasks = s.tasks.map((t: Task) => t.id)
-        if (visibleTasks.length === 0) return
-        const currentIdx = s.activeTaskId ? visibleTasks.indexOf(s.activeTaskId) : -1
-        const nextIdx = currentIdx >= visibleTasks.length - 1 ? visibleTasks.length - 1 : currentIdx + 1
-        setActiveTask(visibleTasks[nextIdx])
+        const sorted = [...s.tasks].sort((a: Task, b: Task) => {
+          const aPinned = s.pinnedIds?.has(a.id) ? 1 : 0
+          const bPinned = s.pinnedIds?.has(b.id) ? 1 : 0
+          return bPinned - aPinned || b.updatedAt - a.updatedAt
+        }).map((t: Task) => t.id)
+        if (sorted.length === 0) return
+        const currentIdx = s.activeTaskId ? sorted.indexOf(s.activeTaskId) : -1
+        const nextIdx = currentIdx >= sorted.length - 1 ? sorted.length - 1 : currentIdx + 1
+        setActiveTask(sorted[nextIdx])
       },
     }))
 
@@ -744,12 +767,12 @@ export function BoardPage() {
     setShowDropDialog(false)
     setDropReason('')
     setDropTargetId(null)
-    setPinMenuId(null)
+    setPinMenu(null)
   }
 
   const handleTogglePin = async (taskId: string) => {
     await togglePinned(taskId)
-    setPinMenuId(null)
+    setPinMenu(null)
     loadTodos() // Refresh the list
   }
 
@@ -773,6 +796,22 @@ export function BoardPage() {
     // Browser fallback: copy command to clipboard
     await navigator.clipboard.writeText(cmd)
     alert(`Copied to clipboard:\n${cmd}`)
+  }
+
+  const handleSetOnHold = async (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId)
+    if (!task) return
+    if (task.status === 'DONE' || task.status === 'DROPPED') {
+      alert(t('status.onHold') + ': 无法对已完成或已废弃的任务执行此操作')
+      return
+    }
+    if (confirm(`确认将「${task.title}」设为搁置状态？\n\n此操作将终止当前工作记录。`)) {
+      if (currentSession?.taskId === taskId) {
+        await doAfk()
+      }
+      await updateTask(taskId, { status: 'ON_HOLD' })
+    }
+    setPinMenu(null)
   }
 
   const handleTakeOver = async () => {
@@ -1163,23 +1202,13 @@ export function BoardPage() {
                       onContextMenu={(e) => {
                         e.preventDefault()
                         e.stopPropagation()
-                        setPinMenuId(task.id === pinMenuId ? null : task.id)
+                        if (pinMenu?.taskId === task.id) {
+                          setPinMenu(null)
+                        } else {
+                          setPinMenu({ taskId: task.id, x: e.clientX, y: e.clientY })
+                        }
                       }}
                     />
-                    {pinMenuId === task.id && (
-                      <div
-                        className="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-popover border rounded-md shadow-md py-1 min-w-[120px]"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <button
-                          className="w-full text-left text-sm px-3 py-1.5 hover:bg-muted flex items-center gap-2"
-                          onClick={() => handleTogglePin(task.id)}
-                        >
-                          <Pin className="w-3.5 h-3.5" />
-                          {isPinned ? t('task.unpin') : t('task.pin')}
-                        </button>
-                      </div>
-                    )}
                   </div>
                   )
                 })
@@ -1189,6 +1218,37 @@ export function BoardPage() {
           </>
         )}
         </div>
+
+        {/* Context menu — fixed position, top-left aligned with cursor */}
+        {pinMenu && (
+          <div
+            className="fixed z-[100] bg-popover border rounded-md shadow-md py-1 min-w-[140px]"
+            ref={pinMenuRef}
+            style={{ left: pinMenu.x, top: pinMenu.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="w-full text-left text-sm px-3 py-1.5 hover:bg-muted flex items-center gap-2"
+              onClick={(e) => {
+                e.stopPropagation()
+                handleTogglePin(pinMenu.taskId)
+              }}
+            >
+              <Pin className="w-3.5 h-3.5" />
+              {pinnedIds.has(pinMenu.taskId) ? t('task.unpin') : t('task.pin')}
+            </button>
+            <div className="border-t my-1" />
+            <button
+              className="w-full text-left text-sm px-3 py-1.5 hover:bg-muted flex items-center gap-2 text-orange-600"
+              onClick={(e) => {
+                e.stopPropagation()
+                handleSetOnHold(pinMenu.taskId)
+              }}
+            >
+              {t('status.onHold')}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Workspace */}
