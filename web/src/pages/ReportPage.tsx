@@ -6,6 +6,7 @@ import type { Task, WorkSession } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
 import { getTaskById } from '@/services/api'
+import { registerShortcut } from '@/shortcuts/registry'
 
 type TimeView = 'day' | 'week' | 'month'
 
@@ -115,19 +116,16 @@ export function ReportPage() {
     loadData()
   }, [loadData])
 
-  // Cmd+R: refresh report
+  // Cmd+R: refresh report (registered with central dispatcher)
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
-      const mod = isMac ? e.metaKey : e.ctrlKey
-      if (mod && e.key === 'r') {
-        e.preventDefault()
-        e.stopPropagation()
-        loadData()
-      }
-    }
-    window.addEventListener('keydown', handler, true)
-    return () => window.removeEventListener('keydown', handler, true)
+    const unregister = registerShortcut({
+      id: 'refresh-report',
+      combo: 'mod+r',
+      label: 'Refresh report',
+      scope: 'page',
+      handler: loadData,
+    })
+    return unregister
   }, [loadData])
 
   // Fetch sessions + compute date-range stats when time view or date changes

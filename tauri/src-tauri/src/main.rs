@@ -5,7 +5,6 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{Manager, Emitter};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, Modifiers, Code, ShortcutState};
 use serde::{Deserialize, Serialize};
 
 #[tauri::command]
@@ -294,7 +293,6 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             get_server_url,
             get_client_log,
@@ -304,29 +302,8 @@ fn main() {
             set_auto_afk_config
         ])
         .setup(|app| {
-            // Register Cmd+Shift+T global shortcut for Take Over
-            let shortcut_takeover = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyT);
-            app.global_shortcut().on_shortcut(shortcut_takeover, |_app, _shortcut, event| {
-                if event.state == ShortcutState::Pressed {
-                    let _ = _app.emit("global-shortcut-takeover", ());
-                }
-            }).ok();
-
-            // Register Cmd+1/2/3 global shortcuts for sidebar navigation
-            for (code, event_name) in [
-                (Code::Digit1, "sidebar-nav-board"),
-                (Code::Digit2, "sidebar-nav-report"),
-                (Code::Digit3, "sidebar-nav-settings"),
-            ] {
-                let shortcut = Shortcut::new(Some(Modifiers::SUPER), code);
-                app.global_shortcut().on_shortcut(shortcut, |_app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
-                        let _ = _app.emit(event_name, ());
-                    }
-                }).ok();
-            }
-
-            // Cmd+Shift+D (Done + AFK) is handled in-browser — no global shortcut needed
+            // Note: Cmd+Shift+T and Cmd+1/2/3 are now handled in-browser (not global shortcuts)
+            // This allows other apps to use these shortcuts when Chronicle is not focused
 
             // Auto-AFK setup
             let config = read_auto_afk_config();

@@ -10,18 +10,7 @@ import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
-
-// Tauri global快捷键事件（绕过 WKWebView 拦截）
-async function registerGlobalShortcutTakeover(callback: () => void) {
-  try {
-    const { listen } = await import('@tauri-apps/api/event')
-    const unlisten = await listen('global-shortcut-takeover', callback)
-    return unlisten
-  } catch {
-    // Not in Tauri env, ignore
-    return null
-  }
-}
+import { registerShortcut } from '@/shortcuts/registry'
 
 const DRAFT_ID = '__draft__'
 
@@ -52,23 +41,6 @@ export function BoardPage() {
   useEffect(() => {
     loadCurrentSession()
   }, [])
-
-  // Listen for Tauri global shortcut Cmd+Shift+T → Take Over
-  useEffect(() => {
-    let cleanup: (() => void) | undefined
-    registerGlobalShortcutTakeover(async () => {
-      const s = useTaskStore.getState()
-      if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
-        if (s.currentSession) {
-          await s.doAfk()
-        }
-        await s.takeOver(s.activeTaskId!)
-      }
-    }).then(fn => { cleanup = fn ?? undefined })
-    return () => cleanup?.()
-  }, [])
-
-  // Cmd+Shift+D (Done) is now handled in-browser via keyboard shortcuts
 
   // Reload todos when filter changes
   useEffect(() => {
@@ -308,26 +280,31 @@ export function BoardPage() {
 
   // ==================== Keyboard shortcuts ====================
 
-  // Bind keyboard shortcuts once
+  // Register page-level shortcuts with the centralized registry
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const s = stateRef.current
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
-      const mod = isMac ? e.metaKey : e.ctrlKey
-      const tag = (e.target as HTMLElement).tagName
-      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable
-      // Also consider focus within RichEditor as "input mode" (for toolbar buttons)
-      const activeEl = document.activeElement
-      const isInEditor = activeEl?.closest('[data-rich-editor="true"]') !== null
-      const isEditing = isInput || isInEditor
+    const unregisters: (() => void)[] = []
 
-      // Allow Cmd+Plus/Minus/0 for zoom to pass through
-      if (mod && ['+', '-', '=', '0'].includes(e.key)) return
+    // Helpers — match original guards exactly
+    // isEditing = isInput || isInEditor
+    const isEditing = () => {
+      const tag = (document.activeElement as HTMLElement)?.tagName
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || (document.activeElement as HTMLElement)?.isContentEditable
+      const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
+      return isInput || isInEditor
+    }
+    // notEditing = !isEditing && no dialogs && not in search
+    const notEditing = () => !isEditing() && !stateRef.current.showDropDialog && !stateRef.current.showCancelConfirm && !stateRef.current.searchMode
 
-      // Ctrl+Enter: Submit (only when NOT editing an entry)
-      if (e.ctrlKey && e.key === 'Enter' && !s.editingEntryId) {
-        e.preventDefault()
-        e.stopPropagation()
+    // Ctrl+Enter: Submit entry or commit draft
+    // Original guard: !s.editingEntryId (no isEditing check)
+    unregisters.push(registerShortcut({
+      id: 'submit-entry',
+      combo: 'ctrl+enter',
+      label: 'Submit entry',
+      scope: 'page',
+      context: () => !stateRef.current.editingEntryId,
+      handler: () => {
+        const s = stateRef.current
         if (s.activeTaskId === DRAFT_ID && s.draftTitle.trim()) {
           startDraft({ title: s.draftTitle, body: s.draftBody, type: s.draftType, priority: s.draftPriority, tags: s.draftTags.split(',').map((x: string) => x.trim()).filter(Boolean), dueDate: s.draftDueDate ? new Date(s.draftDueDate).getTime() : null })
           commitDraft().catch((err: Error) => console.error('Failed to commit draft:', err))
@@ -335,184 +312,283 @@ export function BoardPage() {
           submitEntry(s.activeTaskId, s.logContent.trim(), 'log').catch((err: Error) => console.error('Failed to submit entry:', err))
           setLogContent('')
         }
-        return
-      }
+      },
+    }))
 
-      // Arrow Right: focus log editor for currently selected task
-      if (!isEditing && !s.showDropDialog && !s.showCancelConfirm && s.activeTaskId && s.activeTaskId !== DRAFT_ID && !s.searchMode) {
-        if (e.key === 'ArrowRight') {
-          e.preventDefault()
-          e.stopPropagation()
-          const proseMirror = document.querySelector('[data-rich-editor="true"] .ProseMirror') as HTMLElement | null
-          if (proseMirror) {
-            proseMirror.focus()
-          }
-          return
+    // Arrow Right: Focus log editor
+    // Original guard: !isEditing && !showDropDialog && !showCancelConfirm && activeTaskId !== DRAFT && !searchMode
+    unregisters.push(registerShortcut({
+      id: 'focus-log-editor',
+      combo: 'ArrowRight',
+      label: 'Focus log editor',
+      scope: 'page',
+      context: () => {
+        const s = stateRef.current
+        return Boolean(notEditing() && s.activeTaskId && s.activeTaskId !== DRAFT_ID)
+      },
+      handler: () => {
+        const proseMirror = document.querySelector('[data-rich-editor="true"] .ProseMirror') as HTMLElement | null
+        proseMirror?.focus()
+      },
+    }))
+
+    // Arrow Left: Blur editor, return focus to task list
+    unregisters.push(registerShortcut({
+      id: 'blur-to-task-list',
+      combo: 'ArrowLeft',
+      label: 'Blur editor, focus task',
+      scope: 'page',
+      context: () => {
+        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
+        return isInEditor
+      },
+      handler: () => {
+        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
+        if (isInEditor) {
+          const activeEl = document.activeElement as HTMLElement
+          activeEl?.blur()
         }
-      }
-
-      // Arrow Up/Down
-      if (!isEditing && !s.showDropDialog && !s.showCancelConfirm && !s.searchMode) {
-        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-          e.preventDefault()
-          e.stopPropagation()
-          const visibleTasks = s.tasks.map((t: Task) => t.id)
-          if (visibleTasks.length === 0) return
-          const currentIdx = s.activeTaskId ? visibleTasks.indexOf(s.activeTaskId) : -1
-          let nextIdx: number
-          if (s.activeTaskId === null || currentIdx === -1) {
-            nextIdx = 0
-          } else if (e.key === 'ArrowUp') {
-            nextIdx = Math.max(0, currentIdx - 1)
-          } else {
-            nextIdx = Math.min(visibleTasks.length - 1, currentIdx + 1)
-          }
-          setActiveTask(visibleTasks[nextIdx])
-          return
-        }
-
-        if (e.key === 'n') {
-          e.preventDefault()
-          e.stopPropagation()
-          if (s.currentSession) doAfk()
-          const prevTaskId = s.activeTaskId && s.activeTaskId !== DRAFT_ID ? s.activeTaskId : null
-          setDraftTitle('')
-          setDraftBody('')
-          setDraftType('TODO')
-          setDraftPriority('MEDIUM')
-          setDraftTags('')
-          setDraftDueDate('')
-          startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null })
-          useTaskStore.setState({ previousActiveTaskId: prevTaskId })
-          setActiveTask(DRAFT_ID)
-          return
-        }
-      }
-
-      // Cmd+Q: AFK current session (instead of quitting app)
-      if (mod && e.key === 'q') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (s.currentSession) {
-          doAfk()
-        }
-        return
-      }
-
-      // Cmd+T: toggle Today filter
-      if (mod && e.key === 't') {
-        e.preventDefault()
-        e.stopPropagation()
-        setTodayFilter(!s.isTodayFilter)
-        return
-      }
-
-      // Cmd+Shift+T: Take Over current task
-      if (mod && e.shiftKey && e.key === 'T') {
-        e.preventDefault()
-        e.stopPropagation()
+        // Focus the active task button
         const s = stateRef.current
         if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
-          if (s.currentSession) {
-            doAfk().then(() => takeOver(s.activeTaskId!))
-          } else {
-            takeOver(s.activeTaskId!)
-          }
+          const taskBtn = document.querySelector(`[data-task-id="${s.activeTaskId}"]`) as HTMLElement
+          taskBtn?.focus()
         }
-        return
-      }
+      },
+    }))
 
-      // Cmd+Shift+S: start task (set to DOING)
-      if (mod && e.shiftKey && (e.key === 's' || e.key === 'S') && s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
-        const activeTask = s.tasks.find(t => t.id === s.activeTaskId)
-        if (activeTask?.status === 'PENDING') {
-          e.preventDefault()
-          e.stopPropagation()
-          updateTask(s.activeTaskId, { status: 'DOING' }).catch((err: Error) => console.error('Failed to start task:', err))
-          return
-        }
-      }
+    // Arrow Up: Navigate to previous task
+    unregisters.push(registerShortcut({
+      id: 'nav-up',
+      combo: 'ArrowUp',
+      label: 'Previous task',
+      scope: 'page',
+      context: notEditing,
+      handler: () => {
+        const s = stateRef.current
+        const visibleTasks = s.tasks.map((t: Task) => t.id)
+        if (visibleTasks.length === 0) return
+        const currentIdx = s.activeTaskId ? visibleTasks.indexOf(s.activeTaskId) : -1
+        const nextIdx = currentIdx <= 0 ? 0 : currentIdx - 1
+        setActiveTask(visibleTasks[nextIdx])
+      },
+    }))
 
-      // Cmd+Shift+D: mark DOING task as DONE
-      if (mod && e.shiftKey && (e.key === 'd' || e.key === 'D') && s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
-        const activeTask = s.tasks.find(t => t.id === s.activeTaskId)
-        if (activeTask?.status === 'DOING') {
-          e.preventDefault()
-          e.stopPropagation()
-          markDone(s.activeTaskId).catch((err: Error) => console.error('Failed to mark done:', err))
-          return
-        }
-      }
+    // Arrow Down: Navigate to next task
+    unregisters.push(registerShortcut({
+      id: 'nav-down',
+      combo: 'ArrowDown',
+      label: 'Next task',
+      scope: 'page',
+      context: notEditing,
+      handler: () => {
+        const s = stateRef.current
+        const visibleTasks = s.tasks.map((t: Task) => t.id)
+        if (visibleTasks.length === 0) return
+        const currentIdx = s.activeTaskId ? visibleTasks.indexOf(s.activeTaskId) : -1
+        const nextIdx = currentIdx >= visibleTasks.length - 1 ? visibleTasks.length - 1 : currentIdx + 1
+        setActiveTask(visibleTasks[nextIdx])
+      },
+    }))
 
-      // Cmd+Shift+A/S/D: set priority when creating task
-      if (mod && e.shiftKey && s.activeTaskId === DRAFT_ID) {
-        if (e.key === 'a' || e.key === 'A') {
-          e.preventDefault()
-          e.stopPropagation()
-          setDraftPriority('HIGH')
-          return
-        }
-        if (e.key === 's' || e.key === 'S') {
-          e.preventDefault()
-          e.stopPropagation()
-          setDraftPriority('MEDIUM')
-          return
-        }
-        if (e.key === 'd' || e.key === 'D') {
-          e.preventDefault()
-          e.stopPropagation()
-          setDraftPriority('LOW')
-          return
-        }
-      }
+    // Cmd+N: New task
+    unregisters.push(registerShortcut({
+      id: 'new-task',
+      combo: 'mod+n',
+      label: 'New task',
+      scope: 'page',
+      context: notEditing,
+      handler: () => {
+        const s = stateRef.current
+        if (s.currentSession) doAfk()
+        const prevTaskId = s.activeTaskId && s.activeTaskId !== DRAFT_ID ? s.activeTaskId : null
+        setDraftTitle('')
+        setDraftBody('')
+        setDraftType('TODO')
+        setDraftPriority('MEDIUM')
+        setDraftTags('')
+        setDraftDueDate('')
+        startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null })
+        useTaskStore.setState({ previousActiveTaskId: prevTaskId })
+        setActiveTask(DRAFT_ID)
+      },
+    }))
 
-      // Cmd+R: refresh task list, active task detail, and current session
-      if (mod && e.key === 'r') {
-        e.preventDefault()
-        e.stopPropagation()
+    // Cmd+Q: AFK session (no isEditing check in original)
+    // Original ALWAYS intercepted Cmd+Q (preventDefault always called)
+    // so it never reached macOS Quit behavior
+    unregisters.push(registerShortcut({
+      id: 'afk-session',
+      combo: 'mod+q',
+      label: 'AFK session',
+      scope: 'page',
+      handler: () => {
+        if (stateRef.current.currentSession) {
+          doAfk()
+        }
+      },
+    }))
+
+    // Cmd+T: Toggle Today filter (no isEditing check in original)
+    unregisters.push(registerShortcut({
+      id: 'toggle-today',
+      combo: 'mod+t',
+      label: 'Toggle Today filter',
+      scope: 'page',
+      handler: () => setTodayFilter(!stateRef.current.isTodayFilter),
+    }))
+
+    // Cmd+Shift+T: Take Over current task
+    // Original guard: activeTaskId && activeTaskId !== DRAFT (no isEditing check)
+    unregisters.push(registerShortcut({
+      id: 'take-over',
+      combo: 'mod+shift+t',
+      label: 'Take Over task',
+      scope: 'page',
+      context: () => {
+        const s = stateRef.current
+        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID)
+      },
+      handler: async () => {
+        const s = stateRef.current
+        if (s.currentSession) {
+          await doAfk()
+        }
+        takeOver(s.activeTaskId!)
+      },
+    }))
+
+    // Cmd+Shift+S: Start task (when PENDING)
+    unregisters.push(registerShortcut({
+      id: 'start-task',
+      combo: 'mod+shift+s',
+      label: 'Start task',
+      scope: 'page',
+      context: () => {
+        const s = stateRef.current
+        const task = s.tasks.find(t => t.id === s.activeTaskId)
+        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && task?.status === 'PENDING')
+      },
+      handler: () => {
+        const s = stateRef.current
+        updateTask(s.activeTaskId!, { status: 'DOING' }).catch((err: Error) => console.error('Failed to start task:', err))
+      },
+    }))
+
+    // Cmd+Shift+D: Mark task done (when DOING)
+    unregisters.push(registerShortcut({
+      id: 'mark-done',
+      combo: 'mod+shift+d',
+      label: 'Mark done',
+      scope: 'page',
+      context: () => {
+        const s = stateRef.current
+        const task = s.tasks.find(t => t.id === s.activeTaskId)
+        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && task?.status === 'DOING')
+      },
+      handler: () => {
+        const s = stateRef.current
+        markDone(s.activeTaskId!).catch((err: Error) => console.error('Failed to mark done:', err))
+      },
+    }))
+
+    // Cmd+Shift+A: Set priority HIGH (in draft)
+    unregisters.push(registerShortcut({
+      id: 'priority-high',
+      combo: 'mod+shift+a',
+      label: 'Priority: High',
+      scope: 'page',
+      context: () => useTaskStore.getState().activeTaskId === DRAFT_ID,
+      handler: () => setDraftPriority('HIGH'),
+    }))
+
+    // Cmd+Shift+S: Set priority MEDIUM (in draft)
+    unregisters.push(registerShortcut({
+      id: 'priority-medium',
+      combo: 'mod+shift+s',
+      label: 'Priority: Medium',
+      scope: 'page',
+      context: () => useTaskStore.getState().activeTaskId === DRAFT_ID,
+      handler: () => setDraftPriority('MEDIUM'),
+    }))
+
+    // Cmd+Shift+D: Set priority LOW (in draft)
+    unregisters.push(registerShortcut({
+      id: 'priority-low',
+      combo: 'mod+shift+d',
+      label: 'Priority: Low',
+      scope: 'page',
+      context: () => useTaskStore.getState().activeTaskId === DRAFT_ID,
+      handler: () => setDraftPriority('LOW'),
+    }))
+
+    // Cmd+R: Refresh (no isEditing check in original)
+    unregisters.push(registerShortcut({
+      id: 'refresh',
+      combo: 'mod+r',
+      label: 'Refresh tasks',
+      scope: 'page',
+      handler: () => {
         loadTodos()
         loadCurrentSession()
         const currentTaskId = stateRef.current.activeTaskId
         if (currentTaskId && currentTaskId !== DRAFT_ID) {
           setActiveTask(currentTaskId)
         }
-        return
-      }
+      },
+    }))
 
-      // Cmd+W: blur editor (when focused inside RichEditor) OR cancel done/dropped filter
-      if (mod && e.key === 'w') {
+    // Cmd+W: Blur editor or cancel filter
+    // Original: only intercepted when action would actually be taken
+    unregisters.push(registerShortcut({
+      id: 'blur-editor',
+      combo: 'mod+w',
+      label: 'Blur editor',
+      scope: 'page',
+      context: () => {
+        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
+        const s = stateRef.current
+        return isInEditor || s.statusFilter === 'DONE' || s.statusFilter === 'DROPPED'
+      },
+      handler: () => {
+        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
+        const s = stateRef.current
         if (isInEditor) {
-          e.preventDefault()
-          e.stopPropagation()
-          const editorEl = activeEl?.closest('[data-rich-editor="true"] .ProseMirror') as HTMLElement | null
+          const editorEl = document.activeElement?.closest('[data-rich-editor="true"] .ProseMirror') as HTMLElement | null
           editorEl?.blur()
         } else if (s.statusFilter === 'DONE' || s.statusFilter === 'DROPPED') {
-          e.preventDefault()
-          e.stopPropagation()
           setStatusFilter(null)
           collapseWithDelay()
         }
-        return
-      }
+      },
+    }))
 
-      // ESC: Handle immediately (only when NOT editing an entry AND NOT in RichEditor)
-      if (e.key === 'Escape' && !s.editingEntryId && !isInEditor) {
-        e.preventDefault()
-        e.stopPropagation()
-        if (s.searchMode) {
-          if (!s.searchInput) {
-            setSearchMode(false)
-          }
+    // Escape: Handle ESC
+    // Original guard: !editingEntryId && !isInEditor
+    // Inside: if searchMode && !searchInput → exit search, else handleEscKey
+    unregisters.push(registerShortcut({
+      id: 'escape',
+      combo: 'Escape',
+      label: 'Escape / Cancel',
+      scope: 'page',
+      context: () => {
+        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
+        return !stateRef.current.editingEntryId && !isInEditor
+      },
+      handler: () => {
+        const s = stateRef.current
+        if (s.searchMode && !s.searchInput) {
+          setSearchMode(false)
         } else {
           handleEscKey()
         }
-        return
-      }
-    }
+      },
+    }))
 
-    window.addEventListener('keydown', handler, true)
-    return () => window.removeEventListener('keydown', handler, true)
-  }, []) // Empty deps - bind once
+    return () => {
+      for (const unregister of unregisters) unregister()
+    }
+  }, []) // Empty deps - handlers use stateRef/getState()
 
   // ==================== Handlers ====================
 
@@ -1328,30 +1404,38 @@ export function BoardPage() {
 
                 {/* Drop dialog */}
                 <Dialog open={showDropDialog} onOpenChange={(open) => { if (!open) { setShowDropDialog(false); setDropReason(''); setDropTargetId(null) } }}>
-                  <DialogContent className="sm:max-w-md">
+                  <DialogContent className="sm:max-w-lg">
                     <DialogHeader>
-                      <div className="flex items-center gap-2 text-destructive">
-                        <AlertTriangle className="w-5 h-5" />
-                        <DialogTitle>{t('workspace.dropConfirm')}</DialogTitle>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center justify-center w-10 h-10 rounded-full bg-red-100 flex-shrink-0">
+                          <AlertTriangle className="w-5 h-5 text-red-600" />
+                        </div>
+                        <div>
+                          <DialogTitle className="text-lg">{t('workspace.dropConfirm')}</DialogTitle>
+                          <p className="text-sm text-muted-foreground mt-0.5">
+                            此操作将废弃任务「<span className="font-medium text-foreground">{dropTargetId ? tasks.find(t => t.id === dropTargetId)?.title : ''}</span>」，并终止当前工作记录
+                          </p>
+                        </div>
                       </div>
                     </DialogHeader>
-                    <DialogDescription className="sr-only">Drop task reason</DialogDescription>
-                    <input
-                      className="w-full text-sm px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                    <DialogDescription className="text-sm text-muted-foreground">请说明废弃原因，以便后续追溯</DialogDescription>
+                    <textarea
+                      className="w-full text-sm px-3 py-2.5 border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary resize-none min-h-[80px]"
                       value={dropReason}
                       onChange={(e) => setDropReason(e.target.value)}
-                      placeholder={t('workspace.dropReason')}
+                      placeholder="请输入废弃原因..."
+                      rows={3}
                       autoFocus
                     />
                     <DialogFooter>
                       <button
-                        className="px-4 py-2 text-sm rounded border hover:bg-muted transition"
+                        className="px-5 py-2 text-sm rounded-lg border border-border hover:bg-muted transition"
                         onClick={() => { setShowDropDialog(false); setDropReason(''); setDropTargetId(null) }}
                       >
                         {t('task.cancel')}
                       </button>
                       <button
-                        className="px-4 py-2 text-sm rounded bg-red-500 text-white hover:bg-red-600 transition disabled:opacity-50"
+                        className="px-5 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled={!dropReason.trim()}
                         onClick={handleDropConfirm}
                       >

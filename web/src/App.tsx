@@ -8,6 +8,7 @@ import { useEffect, useState, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSSE } from './hooks/useSSE'
 import { isTauriEnv, apiBase } from './services/httpApi'
+import { dispatchShortcut, registerShortcut } from '@/shortcuts/registry'
 import '@/styles/prose-display.css'
 
 // Open links in system browser when running in Tauri
@@ -223,44 +224,89 @@ function Layout() {
   useAutoAfk()
   const navigate = useNavigate()
 
-  const { searchMode, setSearchMode } = useTaskStore()
+  const { setSearchMode } = useTaskStore()
+  const navigateRef = useRef(navigate)
+  const setSearchModeRef = useRef(setSearchMode)
 
-  // Cmd+Shift+F search / Escape exit search
+  // Keep refs updated
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
-      const mod = isMac ? e.metaKey : e.ctrlKey
-      if (mod && e.shiftKey && e.code === 'KeyF') {
+    navigateRef.current = navigate
+  })
+  useEffect(() => {
+    setSearchModeRef.current = setSearchMode
+  })
+
+  // Central keyboard shortcut dispatcher
+  // Registered once on mount — uses refs for navigate and setSearchMode
+  useEffect(() => {
+    // Register app-level shortcuts
+    const unregisters: (() => void)[] = []
+
+    // Cmd+Shift+F: Toggle search mode (works even in inputs, matching original)
+    unregisters.push(registerShortcut({
+      id: 'toggle-search',
+      combo: 'mod+shift+f',
+      label: 'Toggle search',
+      scope: 'app',
+      handler: () => setSearchModeRef.current(true),
+    }))
+
+    // Cmd+1/2/3: Sidebar navigation
+    unregisters.push(registerShortcut({
+      id: 'nav-board',
+      combo: 'mod+1',
+      label: 'Go to Board',
+      scope: 'app',
+      handler: () => navigateRef.current('/'),
+    }))
+    unregisters.push(registerShortcut({
+      id: 'nav-report',
+      combo: 'mod+2',
+      label: 'Go to Report',
+      scope: 'app',
+      handler: () => navigateRef.current('/report'),
+    }))
+    unregisters.push(registerShortcut({
+      id: 'nav-settings',
+      combo: 'mod+3',
+      label: 'Go to Settings',
+      scope: 'app',
+      handler: () => navigateRef.current('/settings'),
+    }))
+
+    // Escape: Exit search mode (immediate, no registry — needs latest searchMode)
+    const escapeHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && useTaskStore.getState().searchMode) {
         e.preventDefault()
         e.stopPropagation()
-        setSearchMode(true)
-      }
-      if (e.key === 'Escape' && searchMode) {
-        setSearchMode(false)
+        setSearchModeRef.current(false)
       }
     }
-    document.addEventListener('keydown', handler, true)
-    return () => document.removeEventListener('keydown', handler, true)
-  }, [searchMode, setSearchMode])
+    document.addEventListener('keydown', escapeHandler, true)
 
-  // Cmd+1/2/3 sidebar navigation via Tauri global shortcuts
-  useEffect(() => {
-    const listeners: Promise<(() => void) | null>[] = []
-    for (const [event, path] of [
-      ['sidebar-nav-board', '/'],
-      ['sidebar-nav-report', '/report'],
-      ['sidebar-nav-settings', '/settings'],
-    ] as const) {
-      const p = (async () => {
-        try {
-          const { listen } = await import('@tauri-apps/api/event')
-          return listen(event, () => navigate(path))
-        } catch { return null }
-      })()
-      listeners.push(p)
+    // Main dispatcher for registered shortcuts
+    // NOTE: no global isInput check — original code only blocked Arrow/N in inputs,
+    // while modifier shortcuts (Cmd+Q, Cmd+T, etc.) worked everywhere
+    const dispatcher = (e: KeyboardEvent) => {
+      // Skip zoom shortcuts (handled by useTauriZoom)
+      const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+      const mod = isMac ? e.metaKey : e.ctrlKey
+      if (mod && ['+', '-', '=', '0'].includes(e.key)) return
+
+      // Dispatch to registry
+      if (dispatchShortcut(e)) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
     }
-    return () => { listeners.forEach(p => p.then(fn => fn?.())) }
-  }, [navigate])
+    window.addEventListener('keydown', dispatcher, true)
+
+    return () => {
+      for (const unregister of unregisters) unregister()
+      document.removeEventListener('keydown', escapeHandler, true)
+      window.removeEventListener('keydown', dispatcher, true)
+    }
+  }, []) // Empty deps — registered once on mount
   return (
     <div className="flex h-screen">
       <Sidebar />
