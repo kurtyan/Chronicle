@@ -7,7 +7,7 @@ import { X, AlertTriangle, Copy, Search, Pin, PauseCircle } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
-import { getTaskExtraInfoValue } from '@/services/api'
+import { getTaskExtraInfoValue, getNextTaskId } from '@/services/api'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
@@ -33,14 +33,18 @@ export function BoardPage() {
   const { t } = useI18n()
   const {
     tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
-    statusFilter, isTodayFilter, draftTask, currentSession, lastAfkTime, pinnedIds,
+    statusFilter, isTodayFilter, draftTask, draftTaskId, currentSession, lastAfkTime, pinnedIds,
     searchMode, searchQuery, searchResults, searchTokens,
     loadTodos, setActiveTask, updateTask, markDone, setOnHold,
     submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
     startDraft, commitDraft, cancelDraft,
     takeOver, doAfk, autoTakeOver, doDrop, loadCurrentSession, loadPinnedIds, togglePinned,
     setSearchMode, doSearch,
+    setLogContentDraft, clearLogContentDraft,
   } = useTaskStore()
+
+  // Per-task log drafts from store
+  const logContent = activeTaskId ? (useTaskStore.getState().logContentDraft[activeTaskId] || '') : ''
 
   // Load current session and pinned IDs on mount
   useEffect(() => {
@@ -162,14 +166,14 @@ export function BoardPage() {
     return () => clearAutoCollapseTimer()
   }, [expandedFilter, statusFilter])
 
-  // Log editing state (persists across task switches)
-  const [logContent, setLogContent] = useState('')
+  // Log editing state — per-task drafts stored in useTaskStore
+  // (was: const [logContent, setLogContent] = useState(''))
 
   // Auto take over when log content becomes non-empty
   const prevLogEmpty = useRef(true)
   const handleLogContentChange = useCallback((html: string) => {
     const isEmpty = isHtmlEmpty(html)
-    setLogContent(html)
+    setLogContentDraft(activeTaskId ?? '', html)
     // Auto take over when content transitions from empty to non-empty
     if (prevLogEmpty.current && !isEmpty && activeTaskId && activeTaskId !== DRAFT_ID) {
       autoTakeOver(activeTaskId)
@@ -233,7 +237,6 @@ export function BoardPage() {
     draftPriority,
     draftTags,
     draftDueDate,
-    logContent,
     editingEntryId,
     showDropDialog,
     showCancelConfirm,
@@ -255,7 +258,6 @@ export function BoardPage() {
       draftPriority,
       draftTags,
       draftDueDate,
-      logContent,
       editingEntryId,
       showDropDialog,
       showCancelConfirm,
@@ -290,15 +292,18 @@ export function BoardPage() {
       }
     } else if (s.editingEntryId) {
       setEditingEntryId(null)
-    } else if (!isHtmlEmpty(s.logContent)) {
-      try {
-        await submitEntry(s.activeTaskId!, s.logContent.trim(), 'log')
-        setLogContent('')
-      } catch (err) {
-        console.error('Failed to submit entry:', err)
-      }
     } else {
-      setLogContent('')
+      const storeLog = s.activeTaskId ? (useTaskStore.getState().logContentDraft[s.activeTaskId] || '') : ''
+      if (!isHtmlEmpty(storeLog)) {
+        try {
+          await submitEntry(s.activeTaskId!, storeLog.trim(), 'log')
+          clearLogContentDraft(s.activeTaskId!)
+        } catch (err) {
+          console.error('Failed to submit entry:', err)
+        }
+      } else {
+        clearLogContentDraft(s.activeTaskId!)
+      }
     }
   }, [])
 
@@ -332,9 +337,12 @@ export function BoardPage() {
         if (s.activeTaskId === DRAFT_ID && s.draftTitle.trim()) {
           startDraft({ title: s.draftTitle, body: s.draftBody, type: s.draftType, priority: s.draftPriority, tags: s.draftTags.split(',').map((x: string) => x.trim()).filter(Boolean), dueDate: s.draftDueDate ? new Date(s.draftDueDate).getTime() : null })
           commitDraft().catch((err: Error) => console.error('Failed to commit draft:', err))
-        } else if (s.activeTaskId && !isHtmlEmpty(s.logContent)) {
-          submitEntry(s.activeTaskId, s.logContent.trim(), 'log').catch((err: Error) => console.error('Failed to submit entry:', err))
-          setLogContent('')
+        } else if (s.activeTaskId) {
+          const storeLog = useTaskStore.getState().logContentDraft[s.activeTaskId] || ''
+          if (!isHtmlEmpty(storeLog)) {
+            submitEntry(s.activeTaskId, storeLog.trim(), 'log').catch((err: Error) => console.error('Failed to submit entry:', err))
+            clearLogContentDraft(s.activeTaskId)
+          }
         }
       },
     }))
@@ -356,30 +364,6 @@ export function BoardPage() {
       },
     }))
 
-    // Arrow Left: Blur editor, return focus to task list
-    unregisters.push(registerShortcut({
-      id: 'blur-to-task-list',
-      combo: 'ArrowLeft',
-      label: 'Blur editor, focus task',
-      scope: 'page',
-      context: () => {
-        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
-        return isInEditor
-      },
-      handler: () => {
-        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
-        if (isInEditor) {
-          const activeEl = document.activeElement as HTMLElement
-          activeEl?.blur()
-        }
-        // Focus the active task button
-        const s = stateRef.current
-        if (s.activeTaskId && s.activeTaskId !== DRAFT_ID) {
-          const taskBtn = document.querySelector(`[data-task-id="${s.activeTaskId}"]`) as HTMLElement
-          taskBtn?.focus()
-        }
-      },
-    }))
 
     // Arrow Up: Navigate to previous task
     unregisters.push(registerShortcut({
@@ -430,10 +414,12 @@ export function BoardPage() {
       label: 'New task',
       scope: 'page',
       context: notEditing,
-      handler: () => {
+      handler: async () => {
         const s = stateRef.current
         if (s.currentSession) doAfk()
         const prevTaskId = s.activeTaskId && s.activeTaskId !== DRAFT_ID ? s.activeTaskId : null
+        // Get a real taskId from server for attachment support
+        const taskId = await getNextTaskId()
         setDraftTitle('')
         setDraftBody('')
         setDraftType('TODO')
@@ -441,7 +427,7 @@ export function BoardPage() {
         setDraftTags('')
         setDraftDueDate('')
         startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null })
-        useTaskStore.setState({ previousActiveTaskId: prevTaskId })
+        useTaskStore.setState({ previousActiveTaskId: prevTaskId, draftTaskId: taskId })
         setActiveTask(DRAFT_ID)
       },
     }))
@@ -652,6 +638,13 @@ export function BoardPage() {
     // Store previous task for restoration
     useTaskStore.setState({ previousActiveTaskId: prevTaskId })
     setActiveTask(DRAFT_ID)
+    // Get taskId asynchronously for attachment support (non-blocking)
+    getNextTaskId().then((id) => {
+      useTaskStore.setState({ draftTaskId: id })
+    }).catch(() => {
+      // Fallback: use DRAFT_ID if server is unavailable
+      useTaskStore.setState({ draftTaskId: DRAFT_ID })
+    })
   }
 
   async function handleCancelDraft() {
@@ -744,7 +737,7 @@ export function BoardPage() {
     if (!activeTaskId || isDraftActive) return
     if (!isHtmlEmpty(logContent)) {
       await submitEntry(activeTaskId, logContent.trim(), 'log')
-      setLogContent('')
+      clearLogContentDraft(activeTaskId)
     }
     // markDone now auto-AFKs if working on this task
     await markDone(activeTaskId)
@@ -895,7 +888,7 @@ export function BoardPage() {
   const handleSubmitLog = async () => {
     if (!activeTaskId || isHtmlEmpty(logContent) || isDraftActive) return
     await submitEntry(activeTaskId, logContent.trim(), 'log')
-    setLogContent('')
+    clearLogContentDraft(activeTaskId)
   }
 
   // ==================== Render ====================
@@ -1361,7 +1354,7 @@ export function BoardPage() {
                       content={draftBody}
                       onChange={handleDraftBodyChange}
                       placeholder={t('task.bodyPlaceholder')}
-                      taskId={activeTaskId ?? undefined}
+                      taskId={draftTaskId ?? undefined}
                       onNavigateUp={() => {
                         // Focus back to title input
                         titleInputRef.current?.focus()
@@ -1676,9 +1669,10 @@ export function BoardPage() {
                                 e.preventDefault()
                                 e.stopPropagation()
                                 const s = stateRef.current
-                                if (s.activeTaskId && !isHtmlEmpty(s.logContent)) {
-                                  submitEntry(s.activeTaskId, s.logContent.trim(), 'log')
-                                  setLogContent('')
+                                const storeLog = s.activeTaskId ? (useTaskStore.getState().logContentDraft[s.activeTaskId] || '') : ''
+                                if (s.activeTaskId && !isHtmlEmpty(storeLog)) {
+                                  submitEntry(s.activeTaskId, storeLog.trim(), 'log')
+                                  clearLogContentDraft(s.activeTaskId)
                                 }
                               }
                             }}

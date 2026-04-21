@@ -2,6 +2,7 @@ import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
+  getNextTaskId(): Promise<string>
   getTaskById(id: string): Promise<Task | null>
   createTask(req: CreateTaskRequest): Promise<Task>
   updateTask(id: string, req: UpdateTaskRequest): Promise<Task | null>

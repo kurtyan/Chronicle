@@ -24,6 +24,8 @@ interface TaskState {
   isTodayFilter: boolean
   savedFilterTypes: TaskType[]
   draftTask: DraftTask | null
+  draftTaskId: string | null
+  logContentDraft: Record<string, string>
   currentSession: WorkSession | null
   lastAfkTime: number | null
   previousActiveTaskId: string | null
@@ -53,6 +55,8 @@ interface TaskState {
   doAfk: () => Promise<void>
   autoTakeOver: (taskId: string) => Promise<void>
   doDrop: (id: string, reason: string) => Promise<Task | null>
+  setLogContentDraft: (taskId: string, content: string) => void
+  clearLogContentDraft: (taskId: string) => void
   loadCurrentSession: () => Promise<void>
   // Search actions
   setSearchMode: (on: boolean) => void
@@ -75,6 +79,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   isTodayFilter: false,
   savedFilterTypes: [],
   draftTask: null,
+  draftTaskId: null,
+  logContentDraft: {},
   currentSession: null,
   lastAfkTime: null,
   previousActiveTaskId: null,
@@ -249,6 +255,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   submitEntry: async (taskId, content, type) => {
     const entry = await api.submitTaskEntry(taskId, content, type)
+    // Clear the draft log content for this task
+    set((state) => {
+      const { [taskId]: _, ...rest } = state.logContentDraft
+      return { logContentDraft: rest }
+    })
     // Re-fetch the task to get updated updated_at, and refresh entries
     const [updatedTask, freshEntries] = await Promise.all([
       api.getTaskById(taskId),
@@ -307,6 +318,19 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // Restore previous filterTypes when exiting Today view
       set({ isTodayFilter: false, filterTypes: get().savedFilterTypes })
     }
+  },
+
+  setLogContentDraft: (taskId, content) => {
+    set((state) => ({
+      logContentDraft: { ...state.logContentDraft, [taskId]: content },
+    }))
+  },
+
+  clearLogContentDraft: (taskId) => {
+    set((state) => {
+      const { [taskId]: _, ...rest } = state.logContentDraft
+      return { logContentDraft: rest }
+    })
   },
 
   startDraft: (data) => set({ draftTask: data }),

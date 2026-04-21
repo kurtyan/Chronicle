@@ -72,6 +72,11 @@ export const httpApi: ApiInterface = {
     return data
   },
 
+  async getNextTaskId(): Promise<string> {
+    const { data } = await (await withClientId()).get<{ id: string }>('/api/tasks/next-id')
+    return data.id
+  },
+
   async getTaskById(id: string): Promise<Task | null> {
     const { data } = await (await withClientId()).get<Task>(`/api/tasks/${id}`)
     return data

@@ -5,7 +5,7 @@ import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import { Bold, Italic, List, ListOrdered, Code, Link2, Image as ImageIcon, Strikethrough, Heading1, Heading2, Quote } from 'lucide-react'
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useRef, useMemo, useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
 
@@ -83,6 +83,7 @@ function RichEditorInner({
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
   const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
+  const [isDragOver, setIsDragOver] = useState(false)
 
   const extensions = useMemo(() => [
     StarterKit.configure({
@@ -98,6 +99,7 @@ function RichEditorInner({
     ImageResize,
     Link.configure({
       openOnClick: false,
+      protocols: ['file'],
     }),
     Placeholder.configure({
       placeholder: placeholder ?? t('editor.placeholder'),
@@ -117,25 +119,40 @@ function RichEditorInner({
       },
       handleDOMEvents: {
           dragstart: (_view, event) => {
-            event.preventDefault()
-            return true
+            if (event.target instanceof HTMLImageElement) {
+              event.preventDefault()
+              return true
+            }
+            return false
+          },
+          dragover: (_view, event) => {
+            if (event.dataTransfer?.types.includes('Files')) {
+              event.preventDefault()
+              return true
+            }
+            return false
           },
           drop: (_view, event) => {
             const files = event.dataTransfer?.files
             if (!files?.length) return false
 
-            // Check if any non-image file needs attachment handling
-            const nonImageFiles: File[] = []
-            for (let i = 0; i < files.length; i++) {
-              const f = files[i]
-              if (!f.type.startsWith('image/')) {
-                nonImageFiles.push(f)
-              }
-            }
+            // Prevent browser navigation for all file drops
+            event.preventDefault()
 
-            if (nonImageFiles.length > 0 && taskId) {
-              event.preventDefault()
-              nonImageFiles.forEach((file) => {
+            // Handle each file
+            for (const file of Array.from(files)) {
+              if (file.type.startsWith('image/')) {
+                // Image: insert into editor
+                const reader = new FileReader()
+                reader.onload = (e) => {
+                  const ed = editorRef.current
+                  if (ed) {
+                    ed.chain().focus().setImage({ src: e.target?.result as string }).run()
+                  }
+                }
+                reader.readAsDataURL(file)
+              } else if (taskId) {
+                // Non-image: save as attachment
                 const ts = Date.now()
                 const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
                 const fileName = `${ts}_${safeName}`
@@ -150,24 +167,26 @@ function RichEditorInner({
                       fileName,
                       data: Array.from(uint8),
                     })
-                    // Insert attachment link HTML
-                    const linkHtml = `<a class="chronicle-attachment" data-file-path="${filePath}" href="#">📎 ${file.name}</a>`
-                    // Use editor's insertContent command
-                    editorRef.current?.commands.insertContent(linkHtml)
+                    const ed2 = editorRef.current
+                    if (ed2) {
+                      const { tr } = ed2.state
+                      const linkMark = ed2.schema.marks.link.create({
+                        href: `file://${filePath}?chronicle_attachment=1`,
+                      })
+                      const textNode = ed2.schema.text(`📎 ${file.name}`, [linkMark])
+                      tr.insert(tr.selection.from, textNode)
+                      ed2.view.dispatch(tr)
+                      ed2.commands.focus()
+                    }
                   } catch (err) {
                     console.error('Failed to copy attachment:', err)
                   }
                 }
                 reader.readAsArrayBuffer(file)
-              })
-              return true
+              }
             }
 
-            // For image drops, let TipTap/browser handle or prevent
-            if (event.dataTransfer?.getData('text/html').includes('<img')) {
-              event.preventDefault()
-            }
-            return false
+            return true
           },
         },
       handleKeyDown: (view, event) => {
@@ -177,6 +196,16 @@ function RichEditorInner({
           const isAtStart = selection.$anchor.pos === 1 && selection.$head.pos === 1
           if (isAtStart) {
             onNavigateUp()
+            return true
+          }
+        }
+        // Left arrow at start of document → blur editor
+        if (event.key === 'ArrowLeft' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+          const { state } = view
+          const { selection } = state
+          const isAtStart = selection.$anchor.pos === 1 && selection.$head.pos === 1
+          if (isAtStart) {
+            editor.commands.blur()
             return true
           }
         }
@@ -255,21 +284,49 @@ function RichEditorInner({
     return () => document.removeEventListener('keydown', handler, true)
   }, [onKeyDown, editor])
 
-  // Prevent drag on images
+  // DOM-level drag handlers for visual feedback when files are dragged over
   useEffect(() => {
-    if (!containerRef.current) return
-
     const container = containerRef.current
-    const preventDrag = (e: DragEvent) => {
-      if (e.target instanceof HTMLImageElement) {
+    if (!container) return
+
+    const handleDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) {
         e.preventDefault()
-        e.stopPropagation()
+        setIsDragOver(true)
+      }
+    }
+    const handleDragLeave = (e: DragEvent) => {
+      const rect = container.getBoundingClientRect()
+      if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
+        setIsDragOver(false)
+      }
+    }
+    const handleDrop = () => {
+      setIsDragOver(false)
+    }
+    const handleDragEnter = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) {
+        e.preventDefault()
+        setIsDragOver(true)
       }
     }
 
-    container.addEventListener('dragstart', preventDrag, true)
+    // Use capture phase to intercept before ProseMirror
+    container.addEventListener('dragenter', handleDragEnter, true)
+    container.addEventListener('dragover', handleDragOver, true)
+    container.addEventListener('dragleave', handleDragLeave, true)
+    container.addEventListener('drop', handleDrop, true)
     return () => {
-      container.removeEventListener('dragstart', preventDrag, true)
+      container.removeEventListener('dragenter', handleDragEnter, true)
+      container.removeEventListener('dragover', handleDragOver, true)
+      container.removeEventListener('dragleave', handleDragLeave, true)
+      container.removeEventListener('drop', handleDrop, true)
+    }
+  }, [])
+
+  // Cleanup FileReader refs on unmount
+  useEffect(() => {
+    return () => {
       const readers = (window as unknown as { __richEditorReaders?: FileReader[] }).__richEditorReaders
       if (readers) {
         readers.forEach(r => {
@@ -283,7 +340,7 @@ function RichEditorInner({
   if (!editor) return null
 
   return (
-    <div ref={containerRef} data-rich-editor="true" className={cn('border rounded-lg overflow-hidden', variant === 'minimal' && 'border-none rounded-none')}>
+    <div ref={containerRef} data-rich-editor="true" className={cn('border rounded-lg overflow-hidden transition-colors', variant === 'minimal' && 'border-none rounded-none', isDragOver && 'border-primary bg-primary/5')}>
       {variant === 'full' && (
         <div className="flex items-center gap-0.5 p-2 border-b bg-muted/30 flex-wrap">
           <ToolbarButton

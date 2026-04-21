@@ -2,8 +2,13 @@ import { getDb } from '../db'
 import { indexTask, removeTaskFromIndex, indexEntry, removeEntryFromIndex } from './searchService'
 
 function generateTaskId(): string {
-  const row = getDb().prepare('SELECT COUNT(*) as count FROM tasks').get() as { count: number }
-  return `T${String(row.count + 1).padStart(10, '0')}`
+  const row = getDb().prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as maxId FROM tasks').get() as { maxId: number | null }
+  const next = (row.maxId ?? 0) + 1
+  return `T${String(next).padStart(10, '0')}`
+}
+
+export function getNextTaskId(): string {
+  return generateTaskId()
 }
 
 export interface Task {

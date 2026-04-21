@@ -51,6 +51,10 @@ app.get('/api/tasks/today', async (c) => {
   return c.json(await service.fetchTodayTasks())
 })
 
+app.get('/api/tasks/next-id', async (c) => {
+  return c.json({ id: service.getNextTaskId() })
+})
+
 app.post('/api/tasks', async (c) => {
   const body = await c.req.json()
   const task = await service.createTask(body)

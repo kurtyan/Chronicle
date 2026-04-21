@@ -3,7 +3,7 @@ import {
   getTaskEntries, createTaskEntry, updateTaskEntry, markTaskDone,
   startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
   setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
-  createAfkEvent, updateAfkEvent, getAfkEvents,
+  createAfkEvent, updateAfkEvent, getAfkEvents, getNextTaskId,
   type Task, type TaskEntry, type WorkSession, type TaskExtraInfo, type AfkEvent,
 } from './taskService'
 import { getDb } from '../db'
@@ -30,6 +30,10 @@ export class AppService {
     body?: string
   }): Promise<Task> {
     return createTask(data)
+  }
+
+  getNextTaskId(): string {
+    return getNextTaskId()
   }
 
   async updateTask(id: string, data: {

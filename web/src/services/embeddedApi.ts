@@ -174,6 +174,14 @@ export class EmbeddedApiProvider implements ApiInterface {
     return this.queryAll(sql, params).map(taskRowToTask)
   }
 
+  async getNextTaskId(): Promise<string> {
+    await this.ensureDb()
+    const rows = this.queryAll('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as maxId FROM tasks')
+    const maxId = rows.length > 0 && rows[0].maxId ? rows[0].maxId : 0
+    const next = maxId + 1
+    return `T${String(next).padStart(10, '0')}`
+  }
+
   async getTaskById(id: string): Promise<Task | null> {
     await this.ensureDb()
     const row = this.queryOne('SELECT * FROM tasks WHERE id = ?', [id])

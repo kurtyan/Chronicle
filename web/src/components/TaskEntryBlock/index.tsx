@@ -127,22 +127,46 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
     if (Math.sqrt(dx * dx + dy * dy) > 3) return // was a drag/selection, not a click
 
     // Handle attachment link clicks — open file in Finder
-    const attachmentEl = (e.target as HTMLElement).closest('.chronicle-attachment') as HTMLElement | null
-    if (attachmentEl) {
-      e.preventDefault()
-      const filePath = attachmentEl.dataset.filePath
+    console.log('[TaskEntryBlock] click target:', e.target)
+    const linkEl = (e.target as HTMLElement).closest('a') as HTMLAnchorElement | null
+    console.log('[TaskEntryBlock] closest a:', linkEl)
+    if (linkEl) {
+      console.log('[TaskEntryBlock] link href:', linkEl.href)
+      let filePath: string | null = null
+
+      // Check for data-file-path attribute (legacy format)
+      if (linkEl.dataset.filePath) {
+        filePath = linkEl.dataset.filePath
+        console.log('[TaskEntryBlock] Found data-file-path:', filePath)
+      }
+      // Check for file:// URL with chronicle_attachment query param (new format)
+      else if (linkEl.href.startsWith('file://') && linkEl.href.includes('chronicle_attachment')) {
+        // Extract path: file:///absolute/path?chronicle_attachment=1
+        filePath = linkEl.href.replace('file://', '').replace(/\?.*$/, '')
+        console.log('[TaskEntryBlock] Found file:// URL, path:', filePath)
+      } else {
+        console.log('[TaskEntryBlock] Link is not an attachment, skipping')
+      }
+
       if (filePath) {
+        e.preventDefault()
+        e.stopPropagation()
+        console.log('[TaskEntryBlock] Opening attachment:', filePath)
         import('@tauri-apps/api/core').then(({ invoke }) => {
-          invoke('reveal_file_in_finder', { path: filePath }).catch(console.error)
+          console.log('[TaskEntryBlock] Invoking reveal_file_in_finder:', filePath)
+          invoke('reveal_file_in_finder', { path: filePath })
+            .then(() => console.log('[TaskEntryBlock] Finder revealed'))
+            .catch((err) => console.error('[TaskEntryBlock] reveal_file_in_finder failed:', err))
         }).catch(() => {
-          // Fallback for non-Tauri environment
+          console.log('[TaskEntryBlock] Non-Tauri env, using window.open')
           window.open(`file://${filePath}`)
         })
+        return
       }
-      return
     }
 
-    if ((e.target as HTMLElement).closest('a')) return
+    console.log('[TaskEntryBlock] Falling through to handleEdit')
+    if (linkEl) return
     handleEdit()
   }
 
@@ -159,7 +183,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
       </div>
       <div
         className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"
-        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(entry.content, highlightTokens) : entry.content) }}
+        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(entry.content, highlightTokens) : entry.content, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
       />
     </div>
   )

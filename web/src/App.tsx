@@ -17,7 +17,14 @@ function useSystemBrowserLinks() {
     if (!(window as any).__TAURI__) return
     const handler = (e: MouseEvent) => {
       const link = (e.target as HTMLElement).closest('a')
+      console.log('[useSystemBrowserLinks] click on:', link, link?.href)
       if (link?.href) {
+        // Skip attachment links — let TaskEntryBlock handle them
+        if (link.href.startsWith('file://') && link.href.includes('chronicle_attachment')) {
+          console.log('[useSystemBrowserLinks] Skipping attachment link')
+          return
+        }
+        console.log('[useSystemBrowserLinks] Opening link in system browser:', link.href)
         e.preventDefault()
         e.stopPropagation()
         import('@tauri-apps/plugin-shell').then(m => m.open(link.href))
@@ -307,6 +314,28 @@ function Layout() {
       window.removeEventListener('keydown', dispatcher, true)
     }
   }, []) // Empty deps — registered once on mount
+
+  // Prevent file drag from navigating to file content outside the editor
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) {
+        e.preventDefault()
+      }
+    }
+    const handleDrop = (e: DragEvent) => {
+      // Only prevent default if not dropping inside the rich editor
+      const editorEl = (e.target as HTMLElement)?.closest('[data-rich-editor="true"]')
+      if (e.dataTransfer?.types.includes('Files') && !editorEl) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('dragover', handleDragOver, true)
+    window.addEventListener('drop', handleDrop, true)
+    return () => {
+      window.removeEventListener('dragover', handleDragOver, true)
+      window.removeEventListener('drop', handleDrop, true)
+    }
+  }, [])
   return (
     <div className="flex h-screen">
       <Sidebar />

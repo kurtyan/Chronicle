@@ -19,6 +19,9 @@ async function getApi(): Promise<ApiInterface> {
 export async function fetchTodos(type?: string, status?: string): Promise<Task[]> {
   return (await getApi()).fetchTodos(type, status)
 }
+export async function getNextTaskId(): Promise<string> {
+  return (await getApi()).getNextTaskId()
+}
 export async function getTaskById(id: string): Promise<Task | null> {
   return (await getApi()).getTaskById(id)
 }
