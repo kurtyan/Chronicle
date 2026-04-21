@@ -104,6 +104,12 @@ export async function setTaskExtraInfo(taskId: string, key: string, value: strin
 export async function deleteTaskExtraInfo(taskId: string, key: string): Promise<boolean> {
   return (await getApi()).deleteTaskExtraInfo(taskId, key)
 }
+export async function togglePinned(taskId: string): Promise<boolean> {
+  return (await getApi()).togglePinned(taskId)
+}
+export async function getPinnedTaskIds(): Promise<string[]> {
+  return (await getApi()).getPinnedTaskIds()
+}
 
 // AFK Events
 export async function createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {

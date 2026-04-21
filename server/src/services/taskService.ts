@@ -373,6 +373,24 @@ export function getAllTasksWithPinned(): Array<Task & { pinned: boolean }> {
   return tasks.map((t) => ({ ...t, pinned: pinnedIds.has(t.id) }))
 }
 
+export function togglePinned(taskId: string): boolean {
+  const currentValue = getTaskExtraInfoValue(taskId, 'pinned')
+  if (currentValue === 'true') {
+    setTaskExtraInfo(taskId, 'pinned', 'false')
+    return false
+  }
+  setTaskExtraInfo(taskId, 'pinned', 'true')
+  return true
+}
+
+export function getPinnedTaskIds(): Set<string> {
+  return new Set(
+    queryAll(
+      "SELECT task_id FROM task_extra_info WHERE key = 'pinned' AND value = 'true'"
+    ).map((r) => r.task_id)
+  )
+}
+
 // --- AFK Events ---
 
 export interface AfkEvent {

@@ -13,13 +13,14 @@ export interface DraftTask {
 
 interface TaskState {
   tasks: Task[]
+  pinnedIds: Set<string>
   loading: boolean
   error: string | null
   activeTaskId: string | null
   entries: TaskEntry[]
   entryLoading: boolean
   filterTypes: TaskType[]
-  statusFilter: 'DONE' | 'DROPPED' | null
+  statusFilter: 'DONE' | 'DROPPED' | 'ON_HOLD' | null
   isTodayFilter: boolean
   savedFilterTypes: TaskType[]
   draftTask: DraftTask | null
@@ -42,7 +43,7 @@ interface TaskState {
   updateEntry: (taskId: string, entryId: string, content: string) => Promise<TaskEntry | null>
   setFilterTypes: (types: TaskType[]) => void
   toggleFilterType: (type: TaskType) => void
-  setStatusFilter: (filter: 'DONE' | 'DROPPED' | null) => void
+  setStatusFilter: (filter: 'DONE' | 'DROPPED' | 'ON_HOLD' | null) => void
   setTodayFilter: (on: boolean) => void
   startDraft: (data: DraftTask) => void
   commitDraft: () => Promise<void>
@@ -55,10 +56,14 @@ interface TaskState {
   // Search actions
   setSearchMode: (on: boolean) => void
   doSearch: (query: string) => Promise<void>
+  // Pinned tasks
+  loadPinnedIds: () => Promise<void>
+  togglePinned: (taskId: string) => Promise<void>
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
+  pinnedIds: new Set(),
   loading: false,
   error: null,
   activeTaskId: null,
@@ -88,19 +93,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         tasks = await api.fetchTodos(undefined, 'DONE')
       } else if (statusFilter === 'DROPPED') {
         tasks = await api.fetchTodos(undefined, 'DROPPED')
+      } else if (statusFilter === 'ON_HOLD') {
+        tasks = await api.fetchTodos(undefined, 'ON_HOLD')
       } else {
         // statusFilter === null: show non-done/non-dropped with OR type filter
         let tasks: Task[]
         if (filterTypes.length === 0) {
           // All types
-          tasks = await api.fetchTodos(undefined, 'PENDING,DOING')
+          tasks = await api.fetchTodos(undefined, 'PENDING,DOING,ON_HOLD')
         } else if (filterTypes.length === 1) {
           // Single type — direct call
-          tasks = await api.fetchTodos(filterTypes[0], 'PENDING,DOING')
+          tasks = await api.fetchTodos(filterTypes[0], 'PENDING,DOING,ON_HOLD')
         } else {
           // Multiple types — fetch each separately and merge (OR semantics)
           const results = await Promise.all(
-            filterTypes.map((type) => api.fetchTodos(type, 'PENDING,DOING'))
+            filterTypes.map((type) => api.fetchTodos(type, 'PENDING,DOING,ON_HOLD'))
           )
           const merged = results.flat()
           const ids = new Set<string>()
@@ -117,6 +124,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     } catch (e: any) {
       set({ error: e.message ?? 'Failed to load tasks', loading: false })
     }
+  },
+
+  loadPinnedIds: async () => {
+    try {
+      const ids = await api.getPinnedTaskIds()
+      set({ pinnedIds: new Set(ids) })
+    } catch {
+      // ignore
+    }
+  },
+
+  togglePinned: async (taskId: string) => {
+    const pinned = await api.togglePinned(taskId)
+    set((state) => {
+      const next = new Set(state.pinnedIds)
+      if (pinned) next.add(taskId)
+      else next.delete(taskId)
+      return { pinnedIds: next }
+    })
   },
 
   setActiveTask: async (id) => {

@@ -91,6 +91,7 @@ export const translations: Record<string, TranslationEntry> = {
   'status.doing': { 'zh-CN': '进行中', en: 'In Progress' },
   'status.done': { 'zh-CN': '已完成', en: 'Done' },
   'status.dropped': { 'zh-CN': '已废弃', en: 'Dropped' },
+  'status.onHold': { 'zh-CN': '已搁置', en: 'On Hold' },
   'priority.high': { 'zh-CN': '高', en: 'High' },
   'priority.medium': { 'zh-CN': '中', en: 'Medium' },
   'priority.low': { 'zh-CN': '低', en: 'Low' },
@@ -99,6 +100,7 @@ export const translations: Record<string, TranslationEntry> = {
   'filter.active': { 'zh-CN': '进行中', en: 'Active' },
   'filter.done': { 'zh-CN': '完成', en: 'Done' },
   'filter.dropped': { 'zh-CN': '废弃', en: 'Dropped' },
+  'filter.onHold': { 'zh-CN': '搁置', en: 'On Hold' },
 
   // Workspace new
   'workspace.drop': { 'zh-CN': '废弃', en: 'Drop' },
@@ -182,4 +184,11 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.languageAuto': { 'zh-CN': '跟随系统', en: 'Auto' },
   'settings.languageDesc': { 'zh-CN': '切换界面显示语言，即时生效', en: 'Switch UI display language, applies immediately' },
   'settings.languageSaved': { 'zh-CN': '语言设置已保存', en: 'Language setting saved' },
+
+  // Pin
+  'task.pin': { 'zh-CN': '置顶', en: 'Pin' },
+  'task.unpin': { 'zh-CN': '取消置顶', en: 'Unpin' },
+
+  // Claude
+  'workspace.claude': { 'zh-CN': 'Claude', en: 'Claude' },
 }

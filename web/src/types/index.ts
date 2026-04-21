@@ -1,6 +1,6 @@
 export type TaskType = 'TODO' | 'TOREAD' | 'DAILY_IMPROVE'
 
-export type TaskStatus = 'PENDING' | 'DOING' | 'DONE' | 'DROPPED'
+export type TaskStatus = 'PENDING' | 'DOING' | 'DONE' | 'DROPPED' | 'ON_HOLD'
 
 export type Priority = 'HIGH' | 'MEDIUM' | 'LOW'
 

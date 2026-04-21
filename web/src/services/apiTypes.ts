@@ -42,6 +42,8 @@ export interface ApiInterface {
   getTaskExtraInfoValue(taskId: string, key: string): Promise<string | null>
   setTaskExtraInfo(taskId: string, key: string, value: string): Promise<TaskExtraInfo>
   deleteTaskExtraInfo(taskId: string, key: string): Promise<boolean>
+  togglePinned(taskId: string): Promise<boolean>
+  getPinnedTaskIds(): Promise<string[]>
   // AFK Events
   createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent>
   updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null>

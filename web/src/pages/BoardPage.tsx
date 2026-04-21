@@ -3,16 +3,21 @@ import { useTaskStore } from '@/stores/taskStore'
 import type { Task, TaskType, TaskEntry, SearchResult } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { X, AlertTriangle, Copy, Search } from 'lucide-react'
+import { X, AlertTriangle, Copy, Search, Pin } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
+import { getTaskExtraInfoValue } from '@/services/api'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
 import { registerShortcut } from '@/shortcuts/registry'
 
 const DRAFT_ID = '__draft__'
+
+function isTauriEnv(): boolean {
+  return typeof window !== 'undefined' && !!(window as any).__TAURI__
+}
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -28,18 +33,19 @@ export function BoardPage() {
   const { t } = useI18n()
   const {
     tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
-    statusFilter, isTodayFilter, draftTask, currentSession, lastAfkTime,
+    statusFilter, isTodayFilter, draftTask, currentSession, lastAfkTime, pinnedIds,
     searchMode, searchQuery, searchResults, searchTokens,
-    loadTodos, setActiveTask, updateTask, deleteTask, markDone,
+    loadTodos, setActiveTask, updateTask, markDone,
     submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
     startDraft, commitDraft, cancelDraft,
-    takeOver, doAfk, autoTakeOver, doDrop, loadCurrentSession,
+    takeOver, doAfk, autoTakeOver, doDrop, loadCurrentSession, loadPinnedIds, togglePinned,
     setSearchMode, doSearch,
   } = useTaskStore()
 
-  // Load current session on mount
+  // Load current session and pinned IDs on mount
   useEffect(() => {
     loadCurrentSession()
+    loadPinnedIds()
   }, [])
 
   // Reload todos when filter changes
@@ -182,6 +188,9 @@ export function BoardPage() {
   const [dropReason, setDropReason] = useState('')
   const [showDropDialog, setShowDropDialog] = useState(false)
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+
+  // Pin context menu
+  const [pinMenuId, setPinMenuId] = useState<string | null>(null)
 
   // Cancel confirm dialog
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
@@ -697,12 +706,11 @@ export function BoardPage() {
 
   const isDraftActive = activeTaskId === DRAFT_ID
   const activeTask = tasks.find(t => t.id === activeTaskId) || null
-
-  const handleDeleteTask = async (task: Task) => {
-    if (confirm(t('board.deleteConfirm', { title: task.title }))) {
-      await deleteTask(task.id)
-    }
-  }
+  const sortedTasks = [...tasks].sort((a, b) => {
+    const aPinned = pinnedIds.has(a.id) ? 1 : 0
+    const bPinned = pinnedIds.has(b.id) ? 1 : 0
+    return bPinned - aPinned || b.updatedAt - a.updatedAt
+  })
 
   const handleStartTask = async () => {
     if (!activeTaskId || isDraftActive) return
@@ -736,6 +744,35 @@ export function BoardPage() {
     setShowDropDialog(false)
     setDropReason('')
     setDropTargetId(null)
+    setPinMenuId(null)
+  }
+
+  const handleTogglePin = async (taskId: string) => {
+    await togglePinned(taskId)
+    setPinMenuId(null)
+    loadTodos() // Refresh the list
+  }
+
+  const handleClaudeSession = async () => {
+    if (!activeTaskId) return
+    const conversationId = await getTaskExtraInfoValue(activeTaskId, 'claude_conversation_id')
+    const cmd = conversationId
+      ? `cd ~/IdeaProjects && claude -r ${conversationId}`
+      : `cd ~/IdeaProjects && claude 'chronicle taskId: ${activeTaskId}'`
+
+    // Try Tauri first, fall back to clipboard
+    if (isTauriEnv()) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('run_terminal_command', { command: cmd })
+        return
+      } catch {
+        // Fall back to clipboard
+      }
+    }
+    // Browser fallback: copy command to clipboard
+    await navigator.clipboard.writeText(cmd)
+    alert(`Copied to clipboard:\n${cmd}`)
   }
 
   const handleTakeOver = async () => {
@@ -1002,6 +1039,24 @@ export function BoardPage() {
                 >
                   {t('filter.dropped')}
                 </button>
+                <button
+                  className={`text-xs px-2 py-0.5 rounded transition whitespace-nowrap ${
+                    statusFilter === 'ON_HOLD'
+                      ? 'bg-primary text-primary-foreground'
+                      : 'hover:bg-muted text-muted-foreground'
+                  }`}
+                  onClick={() => {
+                    if (statusFilter === 'ON_HOLD') {
+                      setStatusFilter(null)
+                      clearAutoCollapseTimer()
+                      collapseWithDelay()
+                    } else {
+                      setStatusFilter('ON_HOLD')
+                    }
+                  }}
+                >
+                  {t('filter.onHold')}
+                </button>
               </span>
             </div>
           </div>
@@ -1096,21 +1151,38 @@ export function BoardPage() {
               {tasks.length === 0 && !draftTask ? (
                 <div className="text-sm text-muted-foreground text-center py-8">{t('board.empty')}</div>
               ) : (
-                tasks.map((task) => (
+                sortedTasks.map((task) => {
+                  const isPinned = pinnedIds.has(task.id)
+                  return (
                   <div key={task.id} className="group relative">
                     <TodoItem
                       task={task}
                       isActive={task.id === activeTaskId}
+                      pinned={isPinned}
                       onClick={() => setActiveTask(task.id === activeTaskId ? null : task.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setPinMenuId(task.id === pinMenuId ? null : task.id)
+                      }}
                     />
-                    <button
-                      className="absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive hover:text-white transition"
-                      onClick={(e) => { e.stopPropagation(); handleDeleteTask(task) }}
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
+                    {pinMenuId === task.id && (
+                      <div
+                        className="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-popover border rounded-md shadow-md py-1 min-w-[120px]"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          className="w-full text-left text-sm px-3 py-1.5 hover:bg-muted flex items-center gap-2"
+                          onClick={() => handleTogglePin(task.id)}
+                        >
+                          <Pin className="w-3.5 h-3.5" />
+                          {isPinned ? t('task.unpin') : t('task.pin')}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                ))
+                  )
+                })
               )}
             </>
             )}
@@ -1271,6 +1343,7 @@ export function BoardPage() {
                         activeTask.status === 'DONE' ? 'bg-green-500/10 text-green-600' :
                         activeTask.status === 'DOING' ? 'bg-blue-500/10 text-blue-600' :
                         activeTask.status === 'DROPPED' ? 'bg-red-500/10 text-red-600' :
+                        activeTask.status === 'ON_HOLD' ? 'bg-orange-500/10 text-orange-600' :
                         'bg-muted text-muted-foreground'
                       }`}>
                         {t(`status.${activeTask.status.toLowerCase()}`)}
@@ -1316,6 +1389,22 @@ export function BoardPage() {
                         </button>
                       )}
                       {activeTask.status === 'DROPPED' && null /* No buttons */}
+                      {activeTask.status === 'ON_HOLD' && (
+                        <>
+                          <button
+                            className="text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition"
+                            onClick={handleContinueTask}
+                          >
+                            {t('workspace.continue')}
+                          </button>
+                          <button
+                            className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 transition"
+                            onClick={() => handleDropTask(activeTaskId!)}
+                          >
+                            {t('workspace.drop')}
+                          </button>
+                        </>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       {/* Session status indicator */}
@@ -1398,6 +1487,13 @@ export function BoardPage() {
                         title="Copy ID"
                       >
                         <Copy className="w-3 h-3" />
+                      </button>
+                      <button
+                        className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded text-xs font-medium"
+                        onClick={(e) => { e.stopPropagation(); handleClaudeSession() }}
+                        title={t('workspace.claude')}
+                      >
+                        {t('workspace.claude')}
                       </button>
                     </div>
                   </div>

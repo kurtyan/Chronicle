@@ -2,7 +2,7 @@ import {
   getAllTasks, getTaskById, createTask, updateTask, deleteTask,
   getTaskEntries, createTaskEntry, updateTaskEntry, markTaskDone,
   startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
-  setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned,
+  setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
   createAfkEvent, updateAfkEvent, getAfkEvents,
   type Task, type TaskEntry, type WorkSession, type TaskExtraInfo, type AfkEvent,
 } from './taskService'
@@ -201,6 +201,14 @@ export class AppService {
 
   async getAllTasksWithPinned(): Promise<Array<Task & { pinned: boolean }>> {
     return getAllTasksWithPinned()
+  }
+
+  async togglePinned(taskId: string): Promise<boolean> {
+    return togglePinned(taskId)
+  }
+
+  async getPinnedTaskIds(): Promise<string[]> {
+    return [...getPinnedTaskIds()]
   }
 
   // --- AFK Events ---

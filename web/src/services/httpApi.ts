@@ -200,6 +200,16 @@ export const httpApi: ApiInterface = {
     return data.ok
   },
 
+  async togglePinned(taskId: string): Promise<boolean> {
+    const { data } = await (await withClientId()).post<{ pinned: boolean }>(`/api/tasks/${taskId}/pin`)
+    return data.pinned
+  },
+
+  async getPinnedTaskIds(): Promise<string[]> {
+    const { data } = await (await withClientId()).get<{ ids: string[] }>('/api/tasks/pinned')
+    return data.ids
+  },
+
   // AFK Events
   async createAfkEvent(reason: string, triggeredAt: number): Promise<AfkEvent> {
     const { data } = await (await withClientId()).post<AfkEvent>('/api/afk-events', { reason, triggeredAt })

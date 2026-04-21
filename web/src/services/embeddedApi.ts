@@ -538,6 +538,22 @@ export class EmbeddedApiProvider implements ApiInterface {
     return map.delete(key)
   }
 
+  async togglePinned(taskId: string): Promise<boolean> {
+    const current = this.extraInfoStore.get(taskId)?.get('pinned') ?? 'false'
+    const next = current === 'true' ? 'false' : 'true'
+    if (!this.extraInfoStore.has(taskId)) this.extraInfoStore.set(taskId, new Map())
+    this.extraInfoStore.get(taskId)!.set('pinned', next)
+    return next === 'true'
+  }
+
+  async getPinnedTaskIds(): Promise<string[]> {
+    const ids: string[] = []
+    for (const [taskId, map] of this.extraInfoStore.entries()) {
+      if (map.get('pinned') === 'true') ids.push(taskId)
+    }
+    return ids
+  }
+
   // --- AFK Events (stub: in-memory store) ---
   private afkEvents: AfkEvent[] = []
 

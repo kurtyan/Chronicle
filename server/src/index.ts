@@ -162,6 +162,15 @@ app.delete('/api/tasks/:id/extra-info/:key', async (c) => {
   return c.json({ ok: true })
 })
 
+app.post('/api/tasks/:id/pin', async (c) => {
+  const pinned = await service.togglePinned(c.req.param('id'))
+  return c.json({ pinned })
+})
+
+app.get('/api/tasks/pinned', async (c) => {
+  return c.json({ ids: await service.getPinnedTaskIds() })
+})
+
 // --- AFK Events API ---
 app.post('/api/afk-events', async (c) => {
   const body = await c.req.json()
