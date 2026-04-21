@@ -1361,6 +1361,7 @@ export function BoardPage() {
                       content={draftBody}
                       onChange={handleDraftBodyChange}
                       placeholder={t('task.bodyPlaceholder')}
+                      taskId={activeTaskId ?? undefined}
                       onNavigateUp={() => {
                         // Focus back to title input
                         titleInputRef.current?.focus()
@@ -1642,6 +1643,7 @@ export function BoardPage() {
                             onSave={(id, newContent) => updateEntry(activeTask.id, id, newContent)}
                             editing={editingEntryId === entry.id}
                             highlightTokens={searchMode ? searchTokens : undefined}
+                            taskId={activeTask.id}
                             onEditingChange={(editing) => {
                               if (editing) {
                                 setEditingEntryId(entry.id)
@@ -1668,6 +1670,7 @@ export function BoardPage() {
                             onChange={handleLogContentChange}
                             placeholder={t('task.logPlaceholder')}
                             variant="full"
+                            taskId={activeTaskId ?? undefined}
                             onKeyDown={(e) => {
                               if (e.ctrlKey && e.key === 'Enter') {
                                 e.preventDefault()

@@ -12,6 +12,20 @@
   text-decoration: underline;
 }
 
+.prose-mirror-display a.chronicle-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.5rem;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.25rem;
+  font-size: 0.8125rem;
+  text-decoration: none;
+  color: hsl(var(--foreground));
+  cursor: pointer;
+}
+
 .prose-mirror-display blockquote {
   border-left: 3px solid hsl(var(--border));
   padding-left: 1rem;

@@ -22,9 +22,10 @@ interface TaskEntryBlockProps {
   editing?: boolean
   onEditingChange?: (editing: boolean) => void
   highlightTokens?: string[]
+  taskId?: string
 }
 
-export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEditingChange, highlightTokens }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEditingChange, highlightTokens, taskId }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(entry.content)
@@ -84,6 +85,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
           placeholder={t('entry.editPlaceholder')}
           minHeight="120px"
           autoFocus
+          taskId={taskId}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.preventDefault()
@@ -123,6 +125,23 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
     const dx = e.clientX - mouseDownPos.current.x
     const dy = e.clientY - mouseDownPos.current.y
     if (Math.sqrt(dx * dx + dy * dy) > 3) return // was a drag/selection, not a click
+
+    // Handle attachment link clicks — open file in Finder
+    const attachmentEl = (e.target as HTMLElement).closest('.chronicle-attachment') as HTMLElement | null
+    if (attachmentEl) {
+      e.preventDefault()
+      const filePath = attachmentEl.dataset.filePath
+      if (filePath) {
+        import('@tauri-apps/api/core').then(({ invoke }) => {
+          invoke('reveal_file_in_finder', { path: filePath }).catch(console.error)
+        }).catch(() => {
+          // Fallback for non-Tauri environment
+          window.open(`file://${filePath}`)
+        })
+      }
+      return
+    }
+
     if ((e.target as HTMLElement).closest('a')) return
     handleEdit()
   }

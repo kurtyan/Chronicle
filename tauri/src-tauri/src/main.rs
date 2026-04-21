@@ -199,6 +199,25 @@ fn set_ui_language(language: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn copy_attachment_file(task_id: String, file_name: String, data: Vec<u8>) -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let dir = format!("{}/.chronicle/attachment/{}", home, task_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {}", e))?;
+    let path = format!("{}/{}", dir, file_name);
+    std::fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))?;
+    Ok(path)
+}
+
+#[tauri::command]
+fn reveal_file_in_finder(path: String) -> Result<(), String> {
+    std::process::Command::new("open")
+        .args(["-R", &path])
+        .spawn()
+        .map_err(|e| format!("Failed to open Finder: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn run_terminal_command(command: String) -> Result<(), String> {
     use std::process::Command;
     // Open Terminal.app and run the command
@@ -357,6 +376,8 @@ fn main() {
             get_ui_language,
             set_ui_language,
             run_terminal_command,
+            copy_attachment_file,
+            reveal_file_in_finder,
         ])
         .setup(|app| {
             // Note: Cmd+Shift+T and Cmd+1/2/3 are now handled in-browser (not global shortcuts)

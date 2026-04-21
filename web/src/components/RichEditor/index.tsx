@@ -40,6 +40,7 @@ interface RichEditorProps {
   onKeyDown?: (e: KeyboardEvent) => void
   variant?: 'full' | 'minimal'
   onNavigateUp?: () => void
+  taskId?: string
 }
 
 const ToolbarButton = ({
@@ -75,11 +76,13 @@ function RichEditorInner({
   onKeyDown,
   variant = 'full',
   onNavigateUp,
+  taskId,
 }: RichEditorProps) {
   const { t } = useI18n()
   const contentRef = useRef(content)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
 
   const extensions = useMemo(() => [
     StarterKit.configure({
@@ -113,17 +116,60 @@ function RichEditorInner({
         class: 'prose prose-sm max-w-none focus:outline-none min-h-[200px] p-4',
       },
       handleDOMEvents: {
-        dragstart: (_view, event) => {
-          event.preventDefault()
-          return true
-        },
-        drop: (_view, event) => {
-          if (event.dataTransfer?.files.length || event.dataTransfer?.getData('text/html').includes('<img')) {
+          dragstart: (_view, event) => {
             event.preventDefault()
-          }
-          return false
+            return true
+          },
+          drop: (_view, event) => {
+            const files = event.dataTransfer?.files
+            if (!files?.length) return false
+
+            // Check if any non-image file needs attachment handling
+            const nonImageFiles: File[] = []
+            for (let i = 0; i < files.length; i++) {
+              const f = files[i]
+              if (!f.type.startsWith('image/')) {
+                nonImageFiles.push(f)
+              }
+            }
+
+            if (nonImageFiles.length > 0 && taskId) {
+              event.preventDefault()
+              nonImageFiles.forEach((file) => {
+                const ts = Date.now()
+                const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+                const fileName = `${ts}_${safeName}`
+                const reader = new FileReader()
+                reader.onload = async (e) => {
+                  const arrayBuffer = e.target?.result as ArrayBuffer
+                  const uint8 = new Uint8Array(arrayBuffer)
+                  try {
+                    const { invoke } = await import('@tauri-apps/api/core')
+                    const filePath = await invoke<string>('copy_attachment_file', {
+                      taskId,
+                      fileName,
+                      data: Array.from(uint8),
+                    })
+                    // Insert attachment link HTML
+                    const linkHtml = `<a class="chronicle-attachment" data-file-path="${filePath}" href="#">📎 ${file.name}</a>`
+                    // Use editor's insertContent command
+                    editorRef.current?.commands.insertContent(linkHtml)
+                  } catch (err) {
+                    console.error('Failed to copy attachment:', err)
+                  }
+                }
+                reader.readAsArrayBuffer(file)
+              })
+              return true
+            }
+
+            // For image drops, let TipTap/browser handle or prevent
+            if (event.dataTransfer?.getData('text/html').includes('<img')) {
+              event.preventDefault()
+            }
+            return false
+          },
         },
-      },
       handleKeyDown: (view, event) => {
         if (event.key === 'ArrowUp' && onNavigateUp) {
           const { state } = view
@@ -163,6 +209,11 @@ function RichEditorInner({
       },
     },
   })
+
+  // Keep editorRef in sync for use inside async closures (e.g. attachment drop handler)
+  useEffect(() => {
+    editorRef.current = editor
+  }, [editor])
 
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -366,6 +417,19 @@ function RichEditorInner({
         .ProseMirror a {
           color: hsl(var(--primary));
           text-decoration: underline;
+        }
+        .ProseMirror a.chronicle-attachment {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.25rem;
+          padding: 0.125rem 0.5rem;
+          background: hsl(var(--muted));
+          border: 1px solid hsl(var(--border));
+          border-radius: 0.25rem;
+          font-size: 0.8125rem;
+          text-decoration: none;
+          color: hsl(var(--foreground));
+          cursor: pointer;
         }
         .ProseMirror blockquote {
           border-left: 3px solid hsl(var(--border));
