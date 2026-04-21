@@ -194,18 +194,40 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   submitEntry: async (taskId, content, type) => {
     const entry = await api.submitTaskEntry(taskId, content, type)
-    set((state) => ({
-      entries: [...state.entries, entry],
-    }))
+    // Re-fetch the task to get updated updated_at, and refresh entries
+    const [updatedTask, freshEntries] = await Promise.all([
+      api.getTaskById(taskId),
+      api.fetchTaskEntries(taskId),
+    ])
+    set((state) => {
+      const nextTasks = updatedTask
+        ? state.tasks.map((t) => (t.id === taskId ? updatedTask : t)).sort((a, b) => b.updatedAt - a.updatedAt)
+        : state.tasks
+      return {
+        entries: freshEntries,
+        tasks: nextTasks,
+      }
+    })
     return entry
   },
 
   updateEntry: async (taskId, entryId, content) => {
     const entry = await api.updateTaskEntry(taskId, entryId, content)
     if (!entry) return null
-    set((state) => ({
-      entries: state.entries.map((e) => (e.id === entryId ? entry : e)),
-    }))
+    // Re-fetch the task to get updated updated_at, and refresh entries
+    const [updatedTask, freshEntries] = await Promise.all([
+      api.getTaskById(taskId),
+      api.fetchTaskEntries(taskId),
+    ])
+    set((state) => {
+      const nextTasks = updatedTask
+        ? state.tasks.map((t) => (t.id === taskId ? updatedTask : t)).sort((a, b) => b.updatedAt - a.updatedAt)
+        : state.tasks
+      return {
+        entries: freshEntries,
+        tasks: nextTasks,
+      }
+    })
     return entry
   },
 
