@@ -185,31 +185,70 @@ export class AppService {
     }
   }
 
-  /** Fetch tasks created in range with body content and work session totals */
-  async fetchReportTasks(start: number, end: number): Promise<Array<Task & { body: string; workMs: number }>> {
-    const tasks = getAllTasks()
-    const inRange = tasks.filter(t => t.createdAt >= start && t.createdAt <= end)
+  /** Fetch report tasks based on filter type with optional pagination */
+  async fetchReportTasks(
+    start: number, end: number,
+    filter: 'NEW' | 'COMPLETED' | 'IN_PROGRESS' | 'ALL' = 'NEW',
+    page: number = 1, pageSize: number = 50,
+  ): Promise<{ items: Array<Task & { body: string; workMs: number }>; total: number; hasMore: boolean }> {
+    const allTasks = getAllTasks()
+    const now = Date.now()
+    let filtered: Task[]
 
-    const result = inRange.map(task => {
-      // Get body entries
+    switch (filter) {
+      case 'NEW':
+        filtered = allTasks.filter(t => t.createdAt >= start && t.createdAt <= end)
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+        break
+      case 'COMPLETED':
+        filtered = allTasks.filter(t => t.completedAt != null && t.completedAt >= start && t.completedAt <= end)
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+        break
+      case 'IN_PROGRESS': {
+        // Tasks not DONE/DROPPED that have work sessions starting in range
+        const activeIds = new Set(
+          getDb().prepare(
+            `SELECT DISTINCT task_id FROM work_sessions WHERE started_at >= ? AND started_at <= ?`
+          ).all(start, end).map(r => (r as { task_id: string }).task_id)
+        )
+        filtered = allTasks.filter(t =>
+          !['DONE', 'DROPPED'].includes(t.status) && activeIds.has(t.id)
+        ).sort((a, b) => b.updatedAt - a.updatedAt)
+        break
+      }
+      case 'ALL':
+      default:
+        filtered = [...allTasks].sort((a, b) => b.updatedAt - a.updatedAt)
+        break
+    }
+
+    // Paginate for ALL, return everything for others
+    if (filter === 'ALL') {
+      const total = filtered.length
+      const items = filtered.slice((page - 1) * pageSize, page * pageSize)
+      return { items: this.enrichTasks(items, now), total, hasMore: page * pageSize < total }
+    }
+
+    return { items: this.enrichTasks(filtered, now), total: filtered.length, hasMore: false }
+  }
+
+  private enrichTasks(tasks: Task[], now: number): Array<Task & { body: string; workMs: number }> {
+    return tasks.map(task => {
       const entries = getDb().prepare(
         'SELECT content FROM task_entries WHERE task_id = ? AND type = ? ORDER BY created_at ASC'
       ).all(task.id, 'body') as { content: string }[]
       const body = entries.map(e => e.content).join('\n\n')
 
-      // Sum work session duration
       const sessions = getDb().prepare(
         'SELECT started_at, ended_at FROM work_sessions WHERE task_id = ?'
       ).all(task.id) as { started_at: number; ended_at: number | null }[]
       let workMs = 0
       for (const s of sessions) {
-        workMs += (s.ended_at ?? Date.now()) - s.started_at
+        workMs += (s.ended_at ?? now) - s.started_at
       }
 
       return { ...task, body, workMs }
     })
-
-    return result.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
   // --- Task Extra Info ---

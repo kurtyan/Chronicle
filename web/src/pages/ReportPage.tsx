@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
@@ -33,7 +33,8 @@ function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000)
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
-  return `${hours}h ${minutes}m`
+  const seconds = totalSeconds % 60
+  return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`
 }
 
 export function ReportPage() {
@@ -57,7 +58,11 @@ export function ReportPage() {
 
   // Task list from new API
   const [reportTasks, setReportTasks] = useState<ReportTask[]>([])
+  const [allTasksTotal, setAllTasksTotal] = useState(0)
+  const [allTasksPage, setAllTasksPage] = useState(1)
+  const [allTasksHasMore, setAllTasksHasMore] = useState(false)
   const [selectedStatFilter, setSelectedStatFilter] = useState<StatFilter>('COMPLETED')
+  const [allTasksLoading, setAllTasksLoading] = useState(false)
 
   // Side panel
   const [selectedTask, setSelectedTask] = useState<ReportTask | null>(null)
@@ -70,6 +75,29 @@ export function ReportPage() {
   })
 
   const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(val, max))
+
+  // Live timer: only tick when viewing a period that includes today
+  const [nowTick, setNowTick] = useState(Date.now())
+  const nowTickRef = useRef(nowTick)
+  nowTickRef.current = nowTick
+  const isCurrentDay = (): boolean => {
+    const today = new Date()
+    if (timeView === 'day') return isSameDay(selectedDate, today)
+    if (timeView === 'week') {
+      const ws = dfStartOfWeek(selectedDate, { weekStartsOn: 1 })
+      const we = addDays(ws, 7)
+      const tws = dfStartOfWeek(today, { weekStartsOn: 1 })
+      const twe = addDays(tws, 7)
+      return ws.getTime() === tws.getTime() && we.getTime() === twe.getTime()
+    }
+    return selectedDate.getMonth() === today.getMonth() && selectedDate.getFullYear() === today.getFullYear()
+  }
+  useEffect(() => {
+    if (!isCurrentDay()) return
+    setNowTick(Date.now())
+    const timer = setInterval(() => setNowTick(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [timeView, selectedDate])
 
   const getDayRange = (): { start: number; end: number } => {
     if (timeView === 'day') {
@@ -179,19 +207,43 @@ export function ReportPage() {
       }
     })
 
-    // Fetch report tasks
-    fetch(`http://localhost:9983/api/reports/tasks?start=${start}&end=${end}`)
+    return () => { isStale = true; abortController.abort() }
+  }, [timeView, selectedDate, workDayOffset])
+
+  // Fetch report tasks when filter or date range changes
+  useEffect(() => {
+    const abortController = new AbortController()
+    const { start, end } = getDayRange()
+    let isStale = false
+
+    if (selectedStatFilter === 'ALL') {
+      setAllTasksLoading(true)
+      setAllTasksPage(1)
+    }
+
+    const page = selectedStatFilter === 'ALL' ? 1 : 1
+    const pageSize = selectedStatFilter === 'ALL' ? 50 : 1000
+
+    fetch(`http://localhost:9983/api/reports/tasks?start=${start}&end=${end}&filter=${selectedStatFilter}&page=${page}&pageSize=${pageSize}`)
       .then(r => r.json())
       .then(data => {
         if (isStale || abortController.signal.aborted) return
-        setReportTasks(data)
+        setReportTasks(data.items)
+        if (selectedStatFilter === 'ALL') {
+          setAllTasksTotal(data.total)
+          setAllTasksHasMore(data.hasMore)
+          setAllTasksLoading(false)
+        }
       })
       .catch(() => {
-        if (!isStale && !abortController.signal.aborted) setReportTasks([])
+        if (!isStale && !abortController.signal.aborted) {
+          setReportTasks([])
+          if (selectedStatFilter === 'ALL') setAllTasksLoading(false)
+        }
       })
 
     return () => { isStale = true; abortController.abort() }
-  }, [timeView, selectedDate, workDayOffset])
+  }, [selectedStatFilter, timeView, selectedDate, workDayOffset])
 
   // When stat filter or reportTasks change, update selectedTask if it no longer matches
   useEffect(() => {
@@ -205,27 +257,29 @@ export function ReportPage() {
   const stats = useMemo(() => {
     const range = getDayRange()
     const days = getDaysInRange(range.start, range.end)
+    const current = isCurrentDay()
     let totalOnDuty = 0
     let totalWorkTime = 0
     for (const { dayStart, dayEnd, daySessions } of days) {
       if (daySessions.length === 0) continue
       const firstTakeover = Math.min(...daySessions.map(s => s.startedAt))
       const lastAfk = daySessions.some(s => !s.endedAt)
-        ? dayEnd
+        ? Math.min(dayEnd, current ? nowTickRef.current : Date.now())
         : Math.max(...daySessions.map(s => s.endedAt!))
       totalOnDuty += lastAfk - firstTakeover
       totalWorkTime += daySessions.reduce((sum, s) => {
-        const sessionEnd = s.endedAt ?? dayEnd
+        const sessionEnd = s.endedAt ?? Math.min(dayEnd, current ? nowTickRef.current : Date.now())
         return sum + Math.max(0, clamp(sessionEnd, dayStart, dayEnd) - clamp(s.startedAt, dayStart, dayEnd))
       }, 0)
     }
     return { onDuty: totalOnDuty, workTime: totalWorkTime, idleTime: Math.max(0, totalOnDuty - totalWorkTime) }
-  }, [sessions, timeView, selectedDate, workDayOffset])
+  }, [sessions, timeView, selectedDate, workDayOffset, nowTick])
 
   // Group sessions by offset-based day
   const groupedSessions = useMemo(() => {
     const range = getDayRange()
     const days = getDaysInRange(range.start, range.end)
+    const current = isCurrentDay()
     return days
       .filter(d => d.daySessions.length > 0)
       .map(d => ({
@@ -233,11 +287,11 @@ export function ReportPage() {
         sessions: [...d.daySessions].sort((a, b) => b.startedAt - a.startedAt),
         firstTakeOver: Math.min(...d.daySessions.map(s => s.startedAt)),
         lastAfk: d.daySessions.some(s => !s.endedAt)
-          ? d.dayEnd
+          ? Math.min(d.dayEnd, current ? nowTickRef.current : Date.now())
           : Math.max(...d.daySessions.map(s => s.endedAt!)),
       }))
       .sort((a, b) => b.date.getTime() - a.date.getTime())
-  }, [sessions, timeView, selectedDate, workDayOffset])
+  }, [sessions, timeView, selectedDate, workDayOffset, nowTick])
 
   // Date display
   const dateDisplay = useMemo(() => {
@@ -271,15 +325,23 @@ export function ReportPage() {
 
   const navigateReset = () => setSelectedDate(new Date())
 
-  // Filtered tasks based on selected stat
-  const filteredTasks = useMemo(() => {
-    switch (selectedStatFilter) {
-      case 'NEW': return reportTasks
-      case 'COMPLETED': return reportTasks.filter(t => t.status === 'DONE')
-      case 'IN_PROGRESS': return reportTasks.filter(t => t.status === 'DOING')
-      case 'ALL': return reportTasks
-    }
-  }, [reportTasks, selectedStatFilter])
+  // Filtered tasks — server-side filtered, no client-side filtering needed
+  const filteredTasks = reportTasks
+
+  const loadMoreAllTasks = () => {
+    if (!allTasksHasMore) return
+    const nextPage = allTasksPage + 1
+    setAllTasksPage(nextPage)
+    const { start, end } = getDayRange()
+    fetch(`http://localhost:9983/api/reports/tasks?start=${start}&end=${end}&filter=ALL&page=${nextPage}&pageSize=50`)
+      .then(r => r.json())
+      .then(data => {
+        setReportTasks(prev => [...prev, ...data.items])
+        setAllTasksTotal(data.total)
+        setAllTasksHasMore(data.hasMore)
+      })
+      .catch(() => {})
+  }
 
   // Open side panel for a task
   const openTaskDetail = async (task: ReportTask) => {
@@ -309,12 +371,12 @@ export function ReportPage() {
 
   return (
     <div className="flex h-full">
-      <div className="flex flex-col gap-6 p-4 flex-1 overflow-y-auto">
+      <div className="flex flex-col gap-4 p-4 flex-1 min-h-0 overflow-hidden">
         <h1 className="text-2xl font-bold">{t('report.title')}</h1>
         <p className="text-muted-foreground">{today}</p>
 
         {/* Date view tabs + navigation */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 shrink-0">
           <div className="flex gap-1">
             {([
               { key: 'day' as TimeView, label: 'day' },
@@ -408,7 +470,7 @@ export function ReportPage() {
             ) : sessions.length === 0 ? (
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.noSessions')}</div>
             ) : (
-              <div className="divide-y max-h-[400px] overflow-y-auto">
+              <div className="divide-y max-h-[300px] overflow-y-auto">
                 {groupedSessions.map(({ date, sessions: daySessions, firstTakeOver, lastAfk }) => (
                   <div key={format(date, 'yyyy-MM-dd')}>
                     <div className="px-4 py-2 bg-muted/30 text-sm">
@@ -422,7 +484,7 @@ export function ReportPage() {
                     {daySessions.map(session => (
                       <SessionRow key={session.id} session={session} task={sessionTasks[session.taskId]} dayEnd={
                         (() => { const d = getDaysInRange(getDayRange().start, getDayRange().end).find(dd => dd.daySessions.some(s => s.id === session.id)); return d?.dayEnd ?? Date.now() })()
-                      } />
+                      } nowTick={nowTick} />
                     ))}
                   </div>
                 ))}
@@ -439,18 +501,25 @@ export function ReportPage() {
           <StatCard icon={<BarChart3 className="w-5 h-5" />} label="All Tasks" value={summary?.totalTasks ?? 0} active={selectedStatFilter === 'ALL'} onClick={() => setSelectedStatFilter('ALL')} />
         </div>
 
-        {/* Task list */}
-        <div className="border rounded-lg">
-          <div className="px-4 py-3 border-b flex items-center justify-between">
-            <span className="text-sm font-medium">{filteredTasks.length} task{filteredTasks.length !== 1 ? 's' : ''}</span>
+        {/* Task list — fills remaining vertical space */}
+        <div className="border rounded-lg flex flex-col min-h-0 flex-1">
+          <div className="px-4 py-3 border-b flex items-center justify-between shrink-0">
+            <span className="text-sm font-medium">
+              {selectedStatFilter === 'ALL'
+                ? `${filteredTasks.length} / ${allTasksTotal} tasks`
+                : `${filteredTasks.length} task${filteredTasks.length !== 1 ? 's' : ''}`}
+            </span>
             <span className="text-xs text-muted-foreground">
               {selectedStatFilter === 'NEW' ? 'New tasks' : selectedStatFilter === 'COMPLETED' ? 'Completed tasks' : selectedStatFilter === 'IN_PROGRESS' ? 'In progress tasks' : 'All tasks'}
             </span>
           </div>
-          {filteredTasks.length === 0 ? (
+          {allTasksLoading ? (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.loading')}</div>
+          ) : filteredTasks.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.noTasks')}</div>
           ) : (
-            <div className="divide-y max-h-[400px] overflow-y-auto">
+            <>
+              <div className="divide-y flex-1 min-h-0 overflow-y-auto">
               {filteredTasks.map(task => (
                 <div
                   key={task.id}
@@ -467,6 +536,17 @@ export function ReportPage() {
                 </div>
               ))}
             </div>
+              {selectedStatFilter === 'ALL' && allTasksHasMore && (
+                <div className="px-4 py-3 border-t text-center">
+                  <button
+                    className="text-sm text-muted-foreground hover:text-foreground transition"
+                    onClick={loadMoreAllTasks}
+                  >
+                    Load more ({allTasksTotal - filteredTasks.length} remaining)
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -523,12 +603,11 @@ export function ReportPage() {
   )
 }
 
-function SessionRow({ session, task, dayEnd }: { session: WorkSession; task?: Task; dayEnd?: number }) {
+function SessionRow({ session, task, dayEnd, nowTick }: { session: WorkSession; task?: Task; dayEnd?: number; nowTick: number }) {
   const { t, dateLocale } = useI18n()
   const startedAt = new Date(session.startedAt)
   const endedAt = session.endedAt ? new Date(session.endedAt) : null
-  // Fix: use Math.min(dayEnd, Date.now()) for ongoing sessions
-  const now = Math.min(dayEnd ?? Date.now(), Date.now())
+  const now = Math.min(dayEnd ?? nowTick, nowTick)
   const duration = endedAt ? session.endedAt! - session.startedAt : now - session.startedAt
 
   return (

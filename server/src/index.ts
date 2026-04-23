@@ -217,7 +217,10 @@ app.get('/api/reports/range-stats', async (c) => {
 app.get('/api/reports/tasks', async (c) => {
   const start = parseInt(c.req.query('start') || '0')
   const end = parseInt(c.req.query('end') || String(Date.now()))
-  return c.json(await service.fetchReportTasks(start, end))
+  const filter = (c.req.query('filter') as 'NEW' | 'COMPLETED' | 'IN_PROGRESS' | 'ALL') || 'NEW'
+  const page = parseInt(c.req.query('page') || '1')
+  const pageSize = parseInt(c.req.query('pageSize') || '50')
+  return c.json(await service.fetchReportTasks(start, end, filter, page, pageSize))
 })
 
 // --- Search API ---
