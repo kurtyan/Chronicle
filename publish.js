@@ -64,7 +64,7 @@ if (!fs.existsSync(path.join(PUBLISH_DIR, 'mcp'))) {
   fs.mkdirSync(path.join(PUBLISH_DIR, 'mcp'), { recursive: true })
 }
 fs.copyFileSync(
-  path.join(ROOT_DIR, 'server', 'src', 'mcp', 'stdio-bridge.mjs'),
+  path.join(ROOT_DIR, 'skills', 'mcp-bridge.mjs'),
   path.join(PUBLISH_DIR, 'mcp', 'stdio-bridge.mjs')
 )
 

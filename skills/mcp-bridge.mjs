@@ -3,7 +3,7 @@
  * Stdio MCP server for Chronicle.
  * Bridges Claude Code (stdio) → Chronicle HTTP API.
  *
- * Usage: node stdio-bridge.mjs [--base-url http://127.0.0.1:9983]
+ * Usage: node mcp-bridge.mjs [--base-url http://127.0.0.1:9983]
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -35,9 +35,13 @@ const baseUrl = (() => {
 
 async function api(path, options = {}) {
   const url = `${baseUrl}${path}`
+  const headers = { 'Content-Type': 'application/json' }
+  if (options.conversationId) {
+    headers['X-Claude-Conversation-Id'] = options.conversationId
+  }
   const res = await fetch(url, {
     method: options.method ?? 'GET',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: options.body ? JSON.stringify(options.body) : undefined,
   })
   if (!res.ok) {
@@ -45,6 +49,10 @@ async function api(path, options = {}) {
     throw new Error(`API ${res.status}: ${text}`)
   }
   return res.json()
+}
+
+function conversationIdSchema() {
+  return z.string().optional().describe('Current Claude conversation ID. Retrieved from ~/.claude/sessions/<PID>.json by the caller.')
 }
 
 const server = new McpServer(
@@ -79,13 +87,15 @@ server.registerTool(
     description: 'Get a task by ID along with its log entries.',
     inputSchema: {
       taskId: z.string().describe('The task ID, e.g. "T0000000001".'),
+      conversationId: conversationIdSchema(),
     },
   },
-  async ({ taskId }) => {
-    const task = await api(`/api/tasks/${taskId}`)
+  async ({ taskId, conversationId }) => {
+    const task = await api(`/api/tasks/${taskId}`, { conversationId })
     if (task.error) return { content: [{ type: 'text', text: `Task "${taskId}" not found.` }], isError: true }
-    const logs = await api(`/api/tasks/${taskId}/logs`)
-    return { content: [{ type: 'text', text: JSON.stringify({ task, logs }, null, 2) }] }
+    const logs = await api(`/api/tasks/${taskId}/logs`, { conversationId })
+    const cid = task.claude_conversation_id ?? null
+    return { content: [{ type: 'text', text: JSON.stringify({ task, logs, claude_conversation_id: cid }, null, 2) }] }
   }
 )
 
@@ -110,17 +120,20 @@ server.registerTool(
     description: 'Take over a task: reads history, returns summary, marks DOING, starts session.',
     inputSchema: {
       taskId: z.string().describe('The task ID to take over.'),
+      conversationId: conversationIdSchema(),
     },
   },
-  async ({ taskId }) => {
-    const task = await api(`/api/tasks/${taskId}`)
+  async ({ taskId, conversationId }) => {
+    const task = await api(`/api/tasks/${taskId}`, { conversationId })
     if (task.error) return { content: [{ type: 'text', text: `Task "${taskId}" not found.` }], isError: true }
-    const logs = await api(`/api/tasks/${taskId}/logs`)
-    const session = await api(`/api/tasks/${taskId}/takeover`, { method: 'POST' })
+    const logs = await api(`/api/tasks/${taskId}/logs`, { conversationId })
+    const session = await api(`/api/tasks/${taskId}/takeover`, { method: 'POST', conversationId })
 
     const logSummary = logs.length > 0
       ? logs.map(l => `[${new Date(l.createdAt).toISOString()}] [${l.type}] ${l.content}`).join('\n')
       : 'No logs yet.'
+
+    const cid = task.claude_conversation_id ?? null
 
     return {
       content: [{
@@ -137,6 +150,7 @@ server.registerTool(
           logSummary,
           '',
           `Session started at: ${new Date(session.startedAt).toISOString()}`,
+          cid ? `Claude conversation ID: ${cid}` : '',
         ].join('\n'),
       }],
     }
@@ -153,14 +167,17 @@ server.registerTool(
       priority: z.string().optional().describe('Priority: HIGH, MEDIUM, or LOW. Default: MEDIUM.'),
       tags: z.array(z.string()).optional().describe('Optional tags.'),
       dueDate: z.number().optional().describe('Optional due date (unix timestamp, ms).'),
+      conversationId: conversationIdSchema(),
     },
   },
-  async ({ title, type, priority, tags, dueDate }) => {
+  async ({ title, type, priority, tags, dueDate, conversationId }) => {
     const task = await api('/api/tasks', {
       method: 'POST',
       body: { title, type: type ?? 'TODO', priority: priority ?? 'MEDIUM', tags, dueDate },
+      conversationId,
     })
-    return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }
+    const cid = task.claude_conversation_id ?? null
+    return { content: [{ type: 'text', text: JSON.stringify({ task, claude_conversation_id: cid }, null, 2) }] }
   }
 )
 
@@ -171,12 +188,14 @@ server.registerTool(
     inputSchema: {
       taskId: z.string().describe('The task ID.'),
       status: z.string().describe('New status: PENDING, DOING, DONE, or DROPPED.'),
+      conversationId: conversationIdSchema(),
     },
   },
-  async ({ taskId, status }) => {
+  async ({ taskId, status, conversationId }) => {
     const task = await api(`/api/tasks/${taskId}`, {
       method: 'PUT',
       body: { status },
+      conversationId,
     })
     return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }
   }
@@ -190,12 +209,14 @@ server.registerTool(
       taskId: z.string().describe('The task ID.'),
       content: z.string().describe('Log content.'),
       type: z.string().optional().describe('Entry type: "log" or "body". Default: log.'),
+      conversationId: conversationIdSchema(),
     },
   },
-  async ({ taskId, content, type }) => {
+  async ({ taskId, content, type, conversationId }) => {
     const entry = await api(`/api/tasks/${taskId}/logs`, {
       method: 'POST',
       body: { content, type: type ?? 'log' },
+      conversationId,
     })
     return { content: [{ type: 'text', text: JSON.stringify(entry, null, 2) }] }
   }

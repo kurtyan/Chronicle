@@ -65,8 +65,9 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
       }
       const logs = await service.fetchTaskEntries(taskId)
       saveConversationIdIfPresent(claudeConversationId, taskId)
+      const conversationId = await service.getTaskExtraInfoValue(taskId, 'claude_conversation_id')
       return {
-        content: [{ type: 'text', text: JSON.stringify({ task, logs }, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify({ task, logs, claude_conversation_id: conversationId }, null, 2) }],
       }
     }
   )
@@ -111,6 +112,7 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
       const logs = await service.fetchTaskEntries(taskId)
       const { session } = await service.takeOverTask(taskId)
       saveConversationIdIfPresent(claudeConversationId, taskId)
+      const conversationId = await service.getTaskExtraInfoValue(taskId, 'claude_conversation_id')
 
       const logSummary =
         logs.length > 0
@@ -134,6 +136,7 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         logSummary,
         '',
         `Session started at: ${new Date(session.startedAt).toISOString()}`,
+        conversationId ? `Claude conversation ID: ${conversationId}` : '',
       ].join('\n')
 
       return { content: [{ type: 'text', text: summary }] }

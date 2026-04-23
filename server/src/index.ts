@@ -85,7 +85,8 @@ app.post('/api/tasks', async (c) => {
 app.get('/api/tasks/:id', async (c) => {
   const task = await service.getTaskById(c.req.param('id'))
   if (!task) return c.json({ error: 'Not found' }, 404)
-  return c.json(task)
+  const claudeConversationId = await service.getTaskExtraInfoValue(c.req.param('id'), 'claude_conversation_id')
+  return c.json({ ...task, claude_conversation_id: claudeConversationId ?? null })
 })
 
 app.put('/api/tasks/:id', async (c) => {

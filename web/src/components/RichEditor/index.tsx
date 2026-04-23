@@ -1,4 +1,5 @@
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
+import type { NodeViewRenderer, NodeViewRendererProps } from '@tiptap/core'
 import StarterKit from '@tiptap/starter-kit'
 import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
@@ -122,18 +123,20 @@ const ChronicleImage = ImageResize.extend({
     return ['img', attrs]
   },
   addNodeView() {
-    return ({ node, editor, getPos }) => {
-      const fp = (node.attrs as Record<string, unknown>).fullpath as string | null
-      let resolvedNode = node
-      if (fp && isTauri() && !node.attrs.src) {
+    return ((props: NodeViewRendererProps) => {
+      const fp = (props.node.attrs as Record<string, unknown>).fullpath as string | null
+      let resolvedNode = props.node
+      if (fp && isTauri() && !props.node.attrs.src) {
         const assetUrl = (window as any).__TAURI__.core.convertFileSrc(fp)
-        resolvedNode = editor.view.state.schema.nodes.imageResize.create({
-          ...node.attrs,
+        resolvedNode = props.editor.view.state.schema.nodes.imageResize.create({
+          ...props.node.attrs,
           src: assetUrl,
         })
       }
-      return this.parent?.()({ node: resolvedNode, editor, getPos })
-    }
+      const parentResult = this.parent?.()
+      if (parentResult) return parentResult({ ...props, node: resolvedNode })
+      return null
+    }) as unknown as NodeViewRenderer
   },
 })
 
@@ -142,7 +145,7 @@ function resolveImageSrcsInEditor() {
   if (!isTauri()) return
   try {
     const tauriCore = (window as any).__TAURI__.core
-    document.querySelectorAll('img[data-fullpath]').forEach(img => {
+    document.querySelectorAll<HTMLImageElement>('img[data-fullpath]').forEach(img => {
       const fullpath = img.getAttribute('data-fullpath')
       if (fullpath) {
         const assetUrl = tauriCore.convertFileSrc(fullpath)
@@ -179,12 +182,7 @@ function RichEditorInner({
       heading: { levels: [1, 2] },
     }),
     ChronicleImage.configure({
-      allowBase64: true,
       inline: false,
-      HTMLAttributes: {
-        class: 'rounded-md max-w-full',
-        draggable: 'false',
-      },
     }),
     Link.configure({
       openOnClick: false,

@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "skills": [
+    { "name": "chronicle-bind", "file": "chronicle/bind.md" },
+    { "name": "chronicle-send", "file": "chronicle/send.md" },
+    { "name": "chronicle-summarize", "file": "chronicle/summarize.md" },
+    { "name": "chronicle-check-updates", "file": "chronicle/check-updates.md" }
+  ]
+}
