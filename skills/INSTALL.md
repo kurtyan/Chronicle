@@ -2,49 +2,39 @@
 
 This file contains instructions for installing Chronicle skills in Claude Code.
 
+**`source_root`** — the directory containing `skills/INSTALL.md` and `skills/manifest.json`. Determine it by finding the nearest parent directory with `skills/manifest.json`.
+
+**`target_root`** — the current working directory (where Claude Code is running).
+
 ## Installation Steps
 
-Perform all of the following steps:
+### 1. Read manifest
 
-### 1. Create directories
+Read `source_root/manifest.json`. Extract the `version` and `skills` array.
 
-Create `~/.claude/commands/chronicle/` if it doesn't exist.
+### 2. Check if update needed
 
-Create `~/.chronicle/` and `~/.chronicle/bindings/` if they don't exist.
+Read `target_root/.claude/commands/chronicle/version`.
 
-### 2. Copy skill files
+- If it exists and matches manifest version: "Chronicle skills v{version} already installed. Nothing to do."
+- If it doesn't exist or is older: proceed to step 3.
 
-Copy all files from `skills/chronicle/` to `~/.claude/commands/chronicle/`:
-- `skills/chronicle/bind.md` → `~/.claude/commands/chronicle/bind.md`
-- `skills/chronicle/send.md` → `~/.claude/commands/chronicle/send.md`
-- `skills/chronicle/summarize.md` → `~/.claude/commands/chronicle/summarize.md`
-- `skills/chronicle/check-updates.md` → `~/.claude/commands/chronicle/check-updates.md`
+### 3. Install / update skills
 
-Use the absolute paths of the skill files — they are located at `<project-root>/skills/chronicle/`.
+Create `target_root/.claude/commands/chronicle/` if it doesn't exist.
 
-### 3. Register MCP server in Claude Code settings
+For each entry in `manifest.json.skills`:
+1. Read `source_root/chronicle/<file>` (the `file` field from manifest, relative to `skills/chronicle/`)
+2. Write the content to `target_root/.claude/commands/chronicle/<file>`
 
-Read `~/.claude/settings.json`. Add or update the `mcpServers` section to include:
+### 4. Write version
 
-```json
-{
-  "mcpServers": {
-    "chronicle": {
-      "command": "node",
-      "args": ["<ABSOLUTE-PATH-TO-PROJECT>/skills/mcp-bridge.mjs"]
-    }
-  }
-}
-```
+Write `manifest.json.version` to `target_root/.claude/commands/chronicle/version`.
 
-Replace `<ABSOLUTE-PATH-TO-PROJECT>` with the absolute path to the Chronicle project root (the directory containing `skills/`). Preserve any existing `mcpServers` entries — do not overwrite them.
+### 5. Register MCP server
 
-If `~/.claude/settings.json` doesn't exist, create it with `{"mcpServers":{"chronicle":{"command":"node","args":["..."]}}}`.
+Read `target_root/.mcp.json` if it exists, otherwise start with `{}`. Parse as JSON, ensure `mcpServers.chronicle` is set to `{ "command": "chronicle-mcp" }`, preserving any existing entries. Write the result back to `target_root/.mcp.json`.
 
-### 4. Write installed version
+### 6. Verify
 
-Write `"1.0.0"` to `~/.chronicle/skills-version`.
-
-### 5. Verify
-
-Confirm all files are in place and report the installed version.
+Confirm all skill files from the manifest are present in `target_root/.claude/commands/chronicle/` and report: "Installed Chronicle skills v{version}: {list of skill names}."

@@ -11,7 +11,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsup",
     "start": "node dist/index.js",
-    "mcp": "node ../skills/mcp-bridge.mjs",
+    "mcp": "node src/mcp/mcp-bridge.mjs",
     "postinstall": "node -e \"try{var fs=require('fs');if(fs.existsSync('dist/setup.js')){require('child_process').execSync('node dist/setup.js',{stdio:'inherit'})}}catch(e){}\""
   },
   "dependencies": {

@@ -17,13 +17,13 @@ Save the output as `conversationId`.
 
 ## Step 2: Save binding
 
-Write the binding to `<project>/.chronicle/bindings/<conversationId>.json`:
+Write the binding to `<target_root>/.chronicle/bindings/<conversationId>.json`:
 
 ```json
 { "taskId": "<the task ID>", "boundAt": "<ISO timestamp>" }
 ```
 
-The project root is the directory containing the `skills/` folder (e.g. `/Users/yanke/IdeaProjects/Chronicle`).
+`<target_root>` is the current working directory.
 
 ## Step 3: Confirm
 
@@ -33,9 +33,9 @@ Do NOT query any Chronicle APIs. Just save the binding and confirm.
 
 ## Recovery after compaction
 
-If the conversation was compacted and the user references a task, recover the binding:
+If the conversation was compacted and the user references a task:
 1. Run the same bash command to get the current `conversationId`
-2. Read `<project>/.chronicle/bindings/<conversationId>.json` to find the bound taskId
+2. Read `<target_root>/.chronicle/bindings/<conversationId>.json` to find the bound taskId
 3. Use that taskId for subsequent Chronicle operations
 
 ## Important
