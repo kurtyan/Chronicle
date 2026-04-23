@@ -192,6 +192,11 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.languageDesc': { 'zh-CN': '切换界面显示语言，即时生效', en: 'Switch UI display language, applies immediately' },
   'settings.languageSaved': { 'zh-CN': '语言设置已保存', en: 'Language setting saved' },
 
+  // Version
+  'settings.versionInfo': { 'zh-CN': '版本信息', en: 'Version Info' },
+  'settings.uiVersion': { 'zh-CN': '前端版本', en: 'UI Version' },
+  'settings.serverVersion': { 'zh-CN': 'Server 版本', en: 'Server Version' },
+
   // Pin
   'task.pin': { 'zh-CN': '置顶', en: 'Pin' },
   'task.unpin': { 'zh-CN': '取消置顶', en: 'Unpin' },

@@ -1,6 +1,6 @@
 [package]
 name = "chronicle-tauri"
-version = "1.0.0"
+version = "1.1.0-20260423101333"
 description = "Chronicle Desktop App"
 authors = ["you"]
 edition = "2021"
@@ -14,6 +14,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+chrono = "0.4"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 system-idle-time = "1"

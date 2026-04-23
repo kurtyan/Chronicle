@@ -10,9 +10,23 @@ const webRoot = path.resolve(projectRoot, '../web')
 const devPort = parseInt(process.env.PORT || '5180', 10)
 const serverPort = parseInt(process.env.CHRONICLE_SERVER_PORT || '9983', 10)
 
+// Version: env var (dev) > VERSION_BUILD file (build) > fallback
+import { readFileSync } from 'fs'
+let chronicleVersion = process.env.CHRONICLE_VERSION || ''
+if (!chronicleVersion) {
+  try {
+    chronicleVersion = readFileSync(path.resolve(projectRoot, '..', 'VERSION_BUILD'), 'utf-8').trim()
+  } catch {
+    chronicleVersion = 'v0.0.0-dev'
+  }
+}
+
 export default defineConfig(({ command }) => ({
   plugins: [react()],
   root: webRoot,
+  define: {
+    '__CHRONICLE_VERSION__': JSON.stringify(chronicleVersion),
+  },
   resolve: {
     alias: {
       '@': path.resolve(webRoot, 'src'),

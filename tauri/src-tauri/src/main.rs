@@ -5,6 +5,8 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{Manager, Emitter};
+use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
+use tauri_plugin_dialog::DialogExt;
 use serde::{Deserialize, Serialize};
 
 #[tauri::command]
@@ -35,13 +37,14 @@ fn get_client_log() -> Result<String, String> {
 }
 
 fn init_client_log() {
+    use chrono::Local;
     if let Ok(home) = std::env::var("HOME") {
         let log_dir = format!("{}/.chronicle/logs", home);
         let _ = create_dir_all(&log_dir);
         let log_path = format!("{}/client.log", log_dir);
-        // Truncate existing log
+        let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         if let Ok(mut f) = OpenOptions::new().create(true).write(true).truncate(true).open(&log_path) {
-            let _ = writeln!(f, "Chronicle client log initialized");
+            let _ = writeln!(f, "[{}] Chronicle client log initialized", ts);
         }
     }
 }
@@ -56,6 +59,7 @@ fn set_zoom(app_handle: tauri::AppHandle, scale: f64) -> Result<(), String> {
 
 #[tauri::command]
 fn write_client_log(message: String) -> Result<(), String> {
+    use chrono::Local;
     let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
     let log_path = format!("{}/.chronicle/logs/client.log", home);
     let mut f = OpenOptions::new()
@@ -63,7 +67,8 @@ fn write_client_log(message: String) -> Result<(), String> {
         .append(true)
         .open(&log_path)
         .map_err(|e| format!("Failed to open log: {}", e))?;
-    writeln!(f, "{}", message)
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    writeln!(f, "[{}] {}", ts, message)
         .map_err(|e| format!("Failed to write log: {}", e))
 }
 
@@ -353,6 +358,24 @@ fn main() {
             copy_attachment_file,
             reveal_file_in_finder,
         ])
+        .menu(|app| {
+            let menu = Menu::with_items(app, &[
+                &Submenu::with_items(app, "Chronicle", true, &[
+                    &MenuItem::with_id(app, "about", "About Chronicle", true, None::<&str>)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, None)?,
+                ])?,
+            ])?;
+            Ok(menu)
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == "about" {
+                let version = env!("CARGO_PKG_VERSION");
+                let _ = app.dialog().message(format!("Chronicle\nVersion {}", version))
+                    .title("About Chronicle")
+                    .blocking_show();
+            }
+        })
         .setup(|app| {
             // Note: Cmd+Shift+T and Cmd+1/2/3 are now handled in-browser (not global shortcuts)
             // This allows other apps to use these shortcuts when Chronicle is not focused
@@ -371,6 +394,11 @@ fn main() {
             }
 
             let window = app.get_webview_window("main").unwrap();
+
+            // Dev mode: set window title with version
+            if let Ok(version) = std::env::var("CHRONICLE_VERSION") {
+                let _ = window.set_title(&format!("Chronicle DEV — {}", version));
+            }
 
             window.on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {

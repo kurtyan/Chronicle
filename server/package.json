@@ -12,7 +12,7 @@
     "build": "tsup",
     "start": "node dist/index.js",
     "mcp": "node src/mcp/stdio-bridge.mjs",
-    "postinstall": "node -e \"try{require('child_process').execSync('node dist/setup.js',{stdio:'inherit'})}catch(e){}\""
+    "postinstall": "node -e \"try{var fs=require('fs');if(fs.existsSync('dist/setup.js')){require('child_process').execSync('node dist/setup.js',{stdio:'inherit'})}}catch(e){}\""
   },
   "dependencies": {
     "@hono/node-server": "^1.11.0",

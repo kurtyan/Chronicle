@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
-import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Languages } from 'lucide-react'
+import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Languages, Info } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
@@ -44,6 +44,7 @@ export function SettingsPage() {
   const [clientLog, setClientLog] = useState('')
   const [logLoading, setLogLoading] = useState(false)
   const [uiLanguage, setUiLanguage] = useState<string>('auto')
+  const [serverVersion, setServerVersion] = useState('')
 
   // Auto-AFK state
   const [autoAfkEnabled, setAutoAfkEnabled] = useState(false)
@@ -84,6 +85,14 @@ export function SettingsPage() {
     if (!isTauriEnv) return
     ;(window as any).__TAURI__.core.invoke('get_ui_language')
       .then((lang: string) => setUiLanguage(lang))
+      .catch(() => {})
+  }, [])
+
+  // Fetch server version
+  useEffect(() => {
+    apiFetch('/api/version')
+      .then(r => r.json())
+      .then(data => setServerVersion(data.version))
       .catch(() => {})
   }, [])
 
@@ -281,6 +290,28 @@ export function SettingsPage() {
               placeholder={logLoading ? 'Loading...' : 'No log available'}
             />
           )}
+        </div>
+      )}
+
+      {/* Version Info (Tauri only) */}
+      {isTauriEnv && (
+        <div className="bg-card rounded-lg border p-4 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Info className="w-5 h-5 text-muted-foreground" />
+            <h2 className="text-lg font-medium">{t('settings.versionInfo')}</h2>
+          </div>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">{t('settings.uiVersion')}</span>
+              <span className="font-mono text-xs">{__CHRONICLE_VERSION__}</span>
+            </div>
+            {serverVersion && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t('settings.serverVersion')}</span>
+                <span className="font-mono text-xs">{serverVersion}</span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

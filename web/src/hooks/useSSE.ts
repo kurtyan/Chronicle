@@ -130,6 +130,7 @@ export function useSSE() {
   const loadTodos = useTaskStore((s) => s.loadTodos)
   const setActiveTask = useTaskStore((s) => s.setActiveTask)
   const loadCurrentSession = useTaskStore((s) => s.loadCurrentSession)
+  const loadPinnedIds = useTaskStore((s) => s.loadPinnedIds)
 
   const activeTaskIdRef = useRef(activeTaskId)
   const sseRef = useRef<AbortController | null>(null)
@@ -189,6 +190,7 @@ export function useSSE() {
         db_imported: () => {
           console.log('[SSE] db_imported')
           loadTodos()
+          loadPinnedIds()
           loadCurrentSession()
           if (activeTaskIdRef.current) setActiveTask(activeTaskIdRef.current)
         },
@@ -205,6 +207,8 @@ export function useSSE() {
           setError(null)
           globalError = null
           retryRef.current = 0
+          // Reload pins on first connect — server may not have been ready during initial load
+          loadPinnedIds()
         },
         (errMsg) => {
           if (destroyed) return

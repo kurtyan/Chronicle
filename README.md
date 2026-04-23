@@ -14,6 +14,7 @@ A local-first task management app with a Tauri desktop shell and a local Hono + 
 │  Hono Server        │  ← Bundled Node.js (tsup, ~22 KB)
 │  better-sqlite3     │  ← On-disk SQLite, WAL mode
 │  FTS5 + nodejieba   │  ← Full-text Chinese + English
+│  MCP Server         │  ← Model Context Protocol bridge
 └────────┬────────────┘
          │
 ┌────────▼────────────┐
@@ -55,13 +56,11 @@ cd tauri && npm install && npm run tauri:dev
 
 ## Build
 
-### Server + Tauri app (one command)
+### All-in-one release build
 
 ```bash
-npm run build:all
+npm run release   # generate version → build → install locally → build Tauri app
 ```
-
-Builds web → bundles server → produces `Chronicle.app`.
 
 ### Individual builds
 
@@ -70,7 +69,7 @@ npm run build              # web + server artifact → ./dist/chronicle/
 cd tauri && npm run tauri:build   # macOS .app only (no DMG)
 ```
 
-### Release build & install (one command)
+### Local install
 
 ```bash
 npm run publish:local        # clean → build → pack → install globally
@@ -79,55 +78,10 @@ chronicle status             # verify
 chronicle stop               # stop
 ```
 
-### Manual steps
-
-```bash
-npm run clean
-npm run publish:prepare      # builds web + server, creates package in dist/chronicle-npm/
-cd dist/chronicle-npm
-npm pack                     # creates chronicle-1.0.0.tgz
-npm install -g chronicle-1.0.0.tgz
-```
-
 ### Publish to npm registry (optional)
 
 ```bash
 npm run publish:npm          # builds and publishes to remote npm
-```
-
----
-
-## Release Build & Install
-
-### Build the server npm package
-
-```bash
-npm run clean                    # remove old build artifacts
-npm run publish:prepare          # builds web + server, creates package in dist/chronicle-npm/
-```
-
-### Pack and install from tarball
-
-```bash
-cd dist/chronicle-npm
-npm pack                         # creates chronicle-1.0.0.tgz
-npm install -g chronicle-1.0.0.tgz   # real copy, not symlink
-```
-
-### Verify
-
-```bash
-chronicle start                  # start server
-curl http://127.0.0.1:8083/api/reports/summary   # check API
-curl http://127.0.0.1:8083/                       # check web UI
-chronicle stop                   # stop server
-```
-
-### Publish to remote npm registry (optional)
-
-```bash
-cd dist/chronicle-npm
-npm publish
 ```
 
 ---
@@ -255,6 +209,16 @@ A plist file at `~/Library/LaunchAgents/com.chronicle.server.plist` that:
 | `DELETE` | `/api/tasks/:id` | Delete task |
 | `PUT`    | `/api/tasks/:id/done` | Mark done |
 | `POST`   | `/api/tasks/:id/drop` | Drop with reason |
+| `POST`   | `/api/tasks/:id/pin` | Pin/unpin task |
+| `GET`    | `/api/tasks/pinned` | Get pinned task IDs |
+
+### Task Extra Info
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`    | `/api/tasks/:id/extra-info` | Get all extra info |
+| `PUT`    | `/api/tasks/:id/extra-info/:key` | Set a key-value pair |
+| `DELETE` | `/api/tasks/:id/extra-info/:key` | Remove a key-value pair |
 
 ### Logs / Entries
 
@@ -272,6 +236,14 @@ A plist file at `~/Library/LaunchAgents/com.chronicle.server.plist` that:
 | `POST` | `/api/afk` | Go AFK |
 | `GET`  | `/api/sessions/current` | Current session |
 | `GET`  | `/api/sessions` | List sessions (`?start=`, `?end=` timestamps) |
+
+### AFK Events
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/afk-events` | Create AFK event |
+| `PUT`  | `/api/afk-events/:id` | Update AFK event |
+| `GET`  | `/api/afk-events` | Query AFK events |
 
 ### Reports
 
@@ -292,13 +264,19 @@ A plist file at `~/Library/LaunchAgents/com.chronicle.server.plist` that:
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET`  | `/api/settings/info` | DB info |
 | `GET`  | `/api/settings/export` | Download database |
 | `POST` | `/api/settings/import` | Import database |
-| `GET`  | `/api/settings/info` | DB info |
 | `GET`  | `/api/settings/launchd/status` | launchd status |
 | `POST` | `/api/settings/launchd/install` | Install launchd |
 | `POST` | `/api/settings/launchd/uninstall` | Uninstall launchd |
 | `GET`  | `/api/settings/launchd/plist` | Get plist content |
+
+### Version
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/api/version` | Server version string |
 
 ### Real-time Events
 
@@ -308,6 +286,14 @@ A plist file at `~/Library/LaunchAgents/com.chronicle.server.plist` that:
 
 Events: `task_created`, `task_updated`, `task_deleted`, `entry_created`, `entry_updated`, `session_started`, `session_ended`, `db_imported`.
 
+### MCP (Model Context Protocol)
+
+| Transport | Description |
+|-----------|-------------|
+| Stdio | `chronicle-mcp` CLI bridge (`stdio-bridge.mjs`) |
+
+MCP tools: `query_tasks`, `get_task`, `query_sessions`, `takeover_task`, `create_task`, `update_task_status`, `add_log`, `search_tasks`.
+
 ---
 
 ## Features
@@ -315,11 +301,19 @@ Events: `task_created`, `task_updated`, `task_deleted`, `entry_created`, `entry_
 ### Task Board
 
 - **Multi-type filter** (OR logic): Task, To Read, Daily Improve. None = all non-done/dropped
+- **Pinned tasks**: pin important tasks for quick access at the top
 - **Today view**: high-priority incomplete + earliest daily improve + earliest to-read
 - **Status filters**: New / Done / Dropped in animated expand/collapse panel
 - **Rich text editor** (TipTap): bold, italic, strikethrough, headings, lists, blockquotes, code, links, images (paste/drag-drop with resize)
 - **Created time**: relative within 7 days, absolute otherwise
-- **Full-text search**: FTS5 + nodejieba, inline results with title/content highlighting
+- **Full-text search**: FTS5 + nodejieba, inline results with title/content highlighting, keyboard shortcut `Cmd+Shift+F`
+
+### Work Sessions & Time Tracking
+
+- **Session tracking**: start/resume work, automatic time logging
+- **AFK detection**: manual AFK events with reason and duration
+- **Auto-AFK** (desktop only): detect screen lock and input idle to automatically end sessions
+- **Idle timeout**: configurable 1–60 minutes
 
 ### Keyboard Shortcuts
 
@@ -337,16 +331,33 @@ Events: `task_created`, `task_updated`, `task_deleted`, `entry_created`, `entry_
 | `→` | Focus log editor for selected task |
 | `Esc` | Close dialogs / cancel draft / exit search |
 
+### MCP Integration
+
+- **8 MCP tools** for AI clients (Claude Code, etc.) to interact with tasks
+- **Stdio bridge**: connect via `chronicle-mcp` CLI
+- **Query, create, update, search** tasks programmatically
+- **Session management** and work log tracking via MCP
+
 ### Desktop Shell
 
 - Tauri v2, single-instance (re-focuses existing window on second launch)
 - Default window: 1200×800, resizable, min 800×600
-- Devtools enabled in release builds: `Cmd+Option+I`
+- Devtools in release builds: `Cmd+Option+I`
 - Prevents accidental close via Cmd+W / Cmd+Q
+- **About menu**: version info in native macOS menu
+- **Zoom controls**: Cmd+/-, Cmd+0 for UI zoom
+- **Auto-AFK**: screen lock + input idle detection (macOS native)
+- **Client log viewer**: access debug logs from Settings
+
+### Real-time Sync
+
+- **SSE (Server-Sent Events)**: live updates for task/entry/session changes
+- **Connection status indicator**: dot in sidebar (green/yellow/red)
 
 ### Localization
 
 - English (en) and Simplified Chinese (zh-CN) via `@/i18n/context`
+- Configurable language in Settings (auto / Chinese / English)
 
 ---
 
@@ -358,6 +369,7 @@ Events: `task_created`, `task_updated`, `task_deleted`, `entry_created`, `entry_
 | Build | Vite (web), Tauri CLI (native), tsup (server) |
 | Backend | Hono (Node.js), better-sqlite3 |
 | Search | SQLite FTS5 + nodejieba |
+| MCP | @modelcontextprotocol/sdk |
 | Desktop | Tauri v2 (single-instance plugin) |
 | Database | SQLite (WAL mode) |
 | macOS Service | launchd (LaunchAgents) |

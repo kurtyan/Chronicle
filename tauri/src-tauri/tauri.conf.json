@@ -1,10 +1,10 @@
 {
   "productName": "Chronicle",
-  "version": "1.0.0",
+  "version": "1.1.0-20260423101333",
   "identifier": "com.chronicle.app",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:5180",
+    "devUrl": "http://localhost:18090",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -28,7 +28,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": [
+      "app"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

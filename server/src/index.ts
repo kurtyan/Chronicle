@@ -9,6 +9,7 @@ import { startBackupService } from './services/backupService'
 import { exportDatabase, importDatabase, getSettingsInfo } from './services/settingsService'
 import { generatePlist, installLaunchd, uninstallLaunchd, isInstalled } from './services/launchdService'
 import { getLogger } from './logging'
+import { getVersion } from './version'
 import { createSSEStream, broadcastEvent } from './services/eventBus'
 import fs from 'fs'
 import path from 'path'
@@ -63,6 +64,11 @@ app.get('/api/tasks/today', async (c) => {
 
 app.get('/api/tasks/next-id', async (c) => {
   return c.json({ id: service.getNextTaskId() })
+})
+
+app.get('/api/tasks/pinned', async (c) => {
+  const ids = await service.getPinnedTaskIds()
+  return c.json({ ids: [...ids] })
 })
 
 app.post('/api/tasks', async (c) => {
@@ -191,10 +197,6 @@ app.post('/api/tasks/:id/pin', async (c) => {
   return c.json({ pinned })
 })
 
-app.get('/api/tasks/pinned', async (c) => {
-  return c.json({ ids: await service.getPinnedTaskIds() })
-})
-
 // --- AFK Events API ---
 app.post('/api/afk-events', async (c) => {
   const body = await c.req.json()
@@ -291,6 +293,10 @@ app.get('/api/settings/info', async (c) => {
   return c.json(getSettingsInfo())
 })
 
+app.get('/api/version', async (c) => {
+  return c.json({ version: getVersion() })
+})
+
 // --- Launchd Management ---
 app.get('/api/settings/launchd/status', async (c) => {
   return c.json({ installed: isInstalled() })
@@ -365,7 +371,7 @@ if (storedVersion !== CURRENT_TOKENIZER_VERSION) {
 startBackupService()
 
 serve({ fetch: app.fetch, port, hostname: host })
-getLogger().info(`Server running at http://${host}:${port}`)
+getLogger().info(`Chronicle ${getVersion()} — Server running at http://${host}:${port}`)
 
 import { createServer } from 'http'
 import { handleMcpRequest } from './mcp/start'
@@ -376,7 +382,7 @@ if (config.mcp.enabled) {
     handleMcpRequest(req, res, service)
   })
   mcpHttpServer.listen(config.mcp.port, () => {
-    getLogger().info(`MCP server running at http://localhost:${config.mcp.port}`)
+    getLogger().info(`Chronicle ${getVersion()} — MCP server running at http://localhost:${config.mcp.port}`)
   })
   mcpHttpServer.on('error', (err) => {
     getLogger().error('MCP HTTP server error:', err)

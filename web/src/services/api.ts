@@ -124,3 +124,7 @@ export async function updateAfkEventApi(id: string, userNote: string): Promise<A
 export async function getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]> {
   return (await getApi()).getAfkEvents(start, end)
 }
+
+export async function fetchReportTasks(params: { start: number; end: number; filter: string; page?: number; pageSize?: number }) {
+  return (await getApi()).fetchReportTasks(params)
+}

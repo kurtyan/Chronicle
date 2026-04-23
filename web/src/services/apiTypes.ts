@@ -49,4 +49,10 @@ export interface ApiInterface {
   createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent>
   updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null>
   getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]>
+  // Report tasks
+  fetchReportTasks(params: { start: number; end: number; filter: string; page?: number; pageSize?: number }): Promise<{
+    items: any[]
+    total: number
+    hasMore: boolean
+  }>
 }

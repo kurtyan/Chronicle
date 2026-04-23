@@ -27,3 +27,6 @@ web/data/
 
 # Dev data (isolated from production)
 .dev-data/
+
+# Build version (generated at build time)
+VERSION_BUILD

@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
-import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats } from '@/services/api'
+import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats, fetchReportTasks } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
 import type { Task, WorkSession } from '@/types'
@@ -224,8 +224,7 @@ export function ReportPage() {
     const page = selectedStatFilter === 'ALL' ? 1 : 1
     const pageSize = selectedStatFilter === 'ALL' ? 50 : 1000
 
-    fetch(`http://localhost:9983/api/reports/tasks?start=${start}&end=${end}&filter=${selectedStatFilter}&page=${page}&pageSize=${pageSize}`)
-      .then(r => r.json())
+    fetchReportTasks({ start, end, filter: selectedStatFilter, page, pageSize })
       .then(data => {
         if (isStale || abortController.signal.aborted) return
         setReportTasks(data.items)
@@ -333,8 +332,7 @@ export function ReportPage() {
     const nextPage = allTasksPage + 1
     setAllTasksPage(nextPage)
     const { start, end } = getDayRange()
-    fetch(`http://localhost:9983/api/reports/tasks?start=${start}&end=${end}&filter=ALL&page=${nextPage}&pageSize=50`)
-      .then(r => r.json())
+    fetchReportTasks({ start, end, filter: 'ALL', page: nextPage, pageSize: 50 })
       .then(data => {
         setReportTasks(prev => [...prev, ...data.items])
         setAllTasksTotal(data.total)

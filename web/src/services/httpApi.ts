@@ -233,4 +233,17 @@ export const httpApi: ApiInterface = {
     const { data } = await (await withClientId()).get<AfkEvent[]>('/api/afk-events', { params })
     return data
   },
+
+  async fetchReportTasks(params: { start: number; end: number; filter: string; page?: number; pageSize?: number }) {
+    const { data } = await (await withClientId()).get('/api/reports/tasks', {
+      params: {
+        start: params.start,
+        end: params.end,
+        filter: params.filter,
+        page: params.page ?? 1,
+        pageSize: params.pageSize ?? 50,
+      },
+    })
+    return data
+  },
 }

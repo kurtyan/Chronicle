@@ -196,6 +196,39 @@ function Sidebar() {
   )
 }
 
+// Global version badge — fixed bottom-right, z-index on top of all components
+// Shows both frontend and server version in dev mode
+function DevVersionBadge() {
+  const [serverVersion, setServerVersion] = useState('')
+
+  useEffect(() => {
+    fetch('/api/version')
+      .then(r => r.json())
+      .then(data => setServerVersion(data.version))
+      .catch(() => {})
+  }, [])
+
+  return createPortal(
+    <div
+      className="fixed bottom-2 right-2 flex flex-col items-end gap-1 pointer-events-none"
+      style={{ zIndex: 999999 }}
+    >
+      <div className="bg-amber-500/20 text-amber-500 text-[9px] font-bold px-2 py-0.5 rounded pointer-events-auto">
+        DEV
+      </div>
+      <div className="bg-black/60 text-white text-[9px] font-mono px-2 py-0.5 rounded pointer-events-auto">
+        UI {__CHRONICLE_VERSION__}
+      </div>
+      {serverVersion && (
+        <div className="bg-black/60 text-white text-[9px] font-mono px-2 py-0.5 rounded pointer-events-auto">
+          API {serverVersion}
+        </div>
+      )}
+    </div>,
+    document.body
+  )
+}
+
 import { useTaskStore } from '@/stores/taskStore'
 import { AutoAfkDialog } from '@/components/AutoAfkDialog'
 
@@ -356,6 +389,7 @@ function Layout() {
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
+      {import.meta.env.DEV && <DevVersionBadge />}
       <AutoAfkDialog
         open={afkDialog.open}
         reason={afkDialog.reason}

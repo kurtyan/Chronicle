@@ -116,3 +116,11 @@ if (process.argv.includes('--publish')) {
   run('npm publish', PUBLISH_DIR)
   console.log('Published successfully!')
 }
+
+if (process.argv.includes('--local-publish')) {
+  console.log('\n=== Installing locally ===')
+  run('rm -f chronicle-*.tgz', PUBLISH_DIR)
+  run('npm pack', PUBLISH_DIR)
+  run('npm install -g chronicle-*.tgz', PUBLISH_DIR)
+  console.log('Installed globally!')
+}

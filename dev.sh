@@ -26,16 +26,21 @@ DEV_DB_DIR="$PWD/.dev-data"
 mkdir -p "$DEV_DB_DIR"
 DEV_DB="$DEV_DB_DIR/tasks-dev.db"
 
+# Generate unique dev version (per-session, no file written — avoids multi-session conflict)
+DEV_VERSION=$(node "$PWD/scripts/generate-version.js")
+
 # Export env vars — all child processes inherit them
 export CHRONICLE_SERVER_PORT=$SERVER_PORT
 export CHRONICLE_DB_PATH=$DEV_DB
 export CHRONICLE_LAURI_SERVER_PORT=$SERVER_PORT
+export CHRONICLE_VERSION=$DEV_VERSION
 export PORT=$TAURI_VITE_PORT
 
 echo "=== Chronicle Dev Environment ==="
-echo "Server port:       $SERVER_PORT"
-echo "Tauri dev URL:     http://localhost:$TAURI_VITE_PORT"
-echo "Database:          $DEV_DB"
+echo "Version:         $DEV_VERSION"
+echo "Server port:     $SERVER_PORT"
+echo "Tauri dev URL:   http://localhost:$TAURI_VITE_PORT"
+echo "Database:        $DEV_DB"
 echo "================================="
 echo ""
 

@@ -38,18 +38,25 @@ function copyDir(src, dest) {
 
 console.log('=== Building Chronicle ===\n')
 
+// Step 0: Generate version
+console.log('[0/5] Generating version...')
+run('node scripts/generate-version.js --write', ROOT_DIR)
+const CHRONICLE_VERSION = fs.readFileSync(path.join(ROOT_DIR, 'VERSION_BUILD'), 'utf-8').trim()
+process.env.CHRONICLE_VERSION = CHRONICLE_VERSION
+console.log(`  Version: ${CHRONICLE_VERSION}`)
+
 // Step 1: Build web frontend
-console.log('[1/4] Building web frontend...')
+console.log('\n[1/5] Building web frontend...')
 run('npm install', path.join(ROOT_DIR, 'web'))
 run('npm run build', path.join(ROOT_DIR, 'web'))
 
 // Step 2: Build server
-console.log('\n[2/4] Building server...')
+console.log('\n[2/5] Building server...')
 run('npm install', path.join(ROOT_DIR, 'server'))
 run('npm run build', path.join(ROOT_DIR, 'server'))
 
 // Step 3: Create output directory
-console.log('\n[3/4] Creating artifact...')
+console.log('\n[3/5] Creating artifact...')
 const artifactDir = path.resolve(ROOT_DIR, OUTPUT_DIR)
 if (fs.existsSync(artifactDir)) {
   fs.rmSync(artifactDir, { recursive: true })
@@ -59,6 +66,9 @@ fs.mkdirSync(artifactDir, { recursive: true })
 // Copy server files
 copyDir(path.join(ROOT_DIR, 'server/dist'), path.join(artifactDir, 'dist'))
 copyDir(path.join(ROOT_DIR, 'server/public'), path.join(artifactDir, 'public'))
+
+// Copy version file
+fs.copyFileSync(path.join(ROOT_DIR, 'VERSION_BUILD'), path.join(artifactDir, 'VERSION_BUILD'))
 
 // Copy package.json and install production dependencies
 const serverPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'server/package.json'), 'utf-8'))
@@ -106,7 +116,7 @@ if (process.platform !== 'win32') {
 }
 
 // Step 4: Install production dependencies in artifact
-console.log('\n[4/4] Installing production dependencies...')
+console.log('\n[4/5] Installing production dependencies...')
 run('npm install --production', artifactDir)
 
 // Create a README

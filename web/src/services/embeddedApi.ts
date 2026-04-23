@@ -592,6 +592,11 @@ export class EmbeddedApiProvider implements ApiInterface {
     }
     return events.sort((a, b) => b.triggeredAt - a.triggeredAt)
   }
+
+  // --- Report Tasks (stub: not supported in embedded mode) ---
+  async fetchReportTasks(_params: { start: number; end: number; filter: string; page?: number; pageSize?: number }) {
+    return { items: [], total: 0, hasMore: false }
+  }
 }
 
 export const embeddedApi = new EmbeddedApiProvider()
