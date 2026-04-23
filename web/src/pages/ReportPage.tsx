@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
@@ -61,7 +61,7 @@ export function ReportPage() {
 
   // Side panel
   const [selectedTask, setSelectedTask] = useState<ReportTask | null>(null)
-  const [taskEntries, setTaskEntries] = useState<{ content: string; type: string; createdAt: number }[]>([])
+  const [taskEntries, setTaskEntries] = useState<{ id: string; content: string; type: string; createdAt: number }[]>([])
 
   // Work day offset
   const [workDayOffset, setWorkDayOffset] = useState(() => {
