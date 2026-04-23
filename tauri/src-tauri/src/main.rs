@@ -5,8 +5,6 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{Manager, Emitter};
-use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
-use tauri_plugin_dialog::DialogExt;
 use serde::{Deserialize, Serialize};
 
 #[tauri::command]
@@ -192,11 +190,49 @@ fn set_ui_language(language: String) -> Result<(), String> {
 #[tauri::command]
 fn copy_attachment_file(task_id: String, file_name: String, data: Vec<u8>) -> Result<String, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let dir = format!("{}/.chronicle/attachment/{}", home, task_id);
+    let base_dir = std::env::var("CHRONICLE_ATTACHMENT_DIR")
+        .unwrap_or_else(|_| format!("{}/.chronicle/attachment", home));
+    let dir = format!("{}/{}", base_dir, task_id);
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {}", e))?;
     let path = format!("{}/{}", dir, file_name);
     std::fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))?;
     Ok(path)
+}
+
+/// Save an image pasted into the RichEditor.
+/// Saves to filesystem and returns the file path for direct reference in HTML.
+#[tauri::command]
+fn save_editor_image(task_id: String, file_name: String, data: Vec<u8>) -> Result<serde_json::Value, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let base_dir = std::env::var("CHRONICLE_ATTACHMENT_DIR")
+        .unwrap_or_else(|_| format!("{}/.chronicle/attachment", home));
+    let dir = format!("{}/{}", base_dir, task_id);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create dir: {}", e))?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let safe_name = file_name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-' && c != '_', "_");
+    let saved_name = format!("{}_{}", ts, safe_name);
+    let path = format!("{}/{}", dir, saved_name);
+
+    std::fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))?;
+
+    Ok(serde_json::json!({
+        "fileName": saved_name,
+        "filePath": path,
+    }))
+}
+
+/// Resolve an attachment file path for the image viewer.
+/// Returns the full path given task_id and file_name, respecting CHRONICLE_ATTACHMENT_DIR.
+#[tauri::command]
+fn resolve_attachment_path(task_id: String, file_name: String) -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    let base_dir = std::env::var("CHRONICLE_ATTACHMENT_DIR")
+        .unwrap_or_else(|_| format!("{}/.chronicle/attachment", home));
+    Ok(format!("{}/{}/{}", base_dir, task_id, file_name))
 }
 
 #[tauri::command]
@@ -356,26 +392,10 @@ fn main() {
             set_ui_language,
             run_terminal_command,
             copy_attachment_file,
+            save_editor_image,
+            resolve_attachment_path,
             reveal_file_in_finder,
         ])
-        .menu(|app| {
-            let menu = Menu::with_items(app, &[
-                &Submenu::with_items(app, "Chronicle", true, &[
-                    &MenuItem::with_id(app, "about", "About Chronicle", true, None::<&str>)?,
-                    &PredefinedMenuItem::separator(app)?,
-                    &PredefinedMenuItem::quit(app, None)?,
-                ])?,
-            ])?;
-            Ok(menu)
-        })
-        .on_menu_event(|app, event| {
-            if event.id() == "about" {
-                let version = env!("CARGO_PKG_VERSION");
-                let _ = app.dialog().message(format!("Chronicle\nVersion {}", version))
-                    .title("About Chronicle")
-                    .blocking_show();
-            }
-        })
         .setup(|app| {
             // Note: Cmd+Shift+T and Cmd+1/2/3 are now handled in-browser (not global shortcuts)
             // This allows other apps to use these shortcuts when Chronicle is not focused

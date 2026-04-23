@@ -72,6 +72,11 @@ export const translations: Record<string, TranslationEntry> = {
   'editor.link': { 'zh-CN': '插入链接', en: 'Insert Link' },
   'editor.image': { 'zh-CN': '插入图片', en: 'Insert Image' },
 
+  // Image viewer
+  'imageViewer.zoomIn': { 'zh-CN': '放大', en: 'Zoom In' },
+  'imageViewer.zoomOut': { 'zh-CN': '缩小', en: 'Zoom Out' },
+  'imageViewer.fitScreen': { 'zh-CN': '适应屏幕', en: 'Fit Screen' },
+
   // Report page
   'report.loading': { 'zh-CN': '加载中...', en: 'Loading...' },
   'report.title': { 'zh-CN': '工作报告', en: 'Work Report' },

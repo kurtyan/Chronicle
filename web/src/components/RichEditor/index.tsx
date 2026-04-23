@@ -1,6 +1,5 @@
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
-import TipTapImage from '@tiptap/extension-image'
 import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
@@ -9,26 +8,45 @@ import { useEffect, useRef, useMemo, useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
 
-const IMAGE_MAX_SIZE = 80
+/** Detect Tauri environment */
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && !!(window as any).__TAURI__
+}
 
-/** Insert image with auto-resize: scale down so max(width,height) ≤ 80px */
-function insertImageWithResize(ed: Editor | null, src: string) {
-  if (!ed) return
-  const img = new Image()
-  img.onload = () => {
-    let w = img.naturalWidth
-    let h = img.naturalHeight
-    if (w > IMAGE_MAX_SIZE || h > IMAGE_MAX_SIZE) {
-      const scale = IMAGE_MAX_SIZE / Math.max(w, h)
-      w = Math.round(w * scale)
-      h = Math.round(h * scale)
-    }
-    ed.chain().focus().setImage({ src, width: w, height: h }).run()
+/** Insert image with a default width */
+function insertImageWithAttrs(ed: Editor, filePath: string, filename?: string) {
+  const src = isTauri()
+    ? (window as any).__TAURI__.core.convertFileSrc(filePath)
+    : `file://${filePath}`
+  const { tr } = ed.state
+  const imageNode = ed.schema.nodes.imageResize.create({
+    src,
+    width: 500,
+    containerStyle: `width: 500px; height: auto; cursor: pointer;`,
+    fullpath: filePath,
+    filename,
+  })
+  tr.insert(tr.selection.from, imageNode)
+  ed.view.dispatch(tr)
+  ed.commands.focus()
+}
+
+/** Upload image via Tauri invoke and insert into editor */
+async function uploadAndInsertImage(ed: Editor | null, taskId: string, file: File) {
+  if (!ed || !isTauri()) return
+  try {
+    const arrayBuffer = await file.arrayBuffer()
+    const uint8 = new Uint8Array(arrayBuffer)
+    const { invoke } = await import('@tauri-apps/api/core')
+    const result = await invoke<{ fileName: string; filePath: string }>('save_editor_image', {
+      taskId,
+      fileName: file.name,
+      data: Array.from(uint8),
+    })
+    insertImageWithAttrs(ed, result.filePath, result.fileName)
+  } catch (err) {
+    console.error('Failed to save editor image:', err)
   }
-  img.onerror = () => {
-    ed.chain().focus().setImage({ src }).run()
-  }
-  img.src = src
 }
 
 interface RichEditorProps {
@@ -67,6 +85,75 @@ const ToolbarButton = ({
   </button>
 )
 
+// Custom Image extension with data-fullpath and data-filename support, extending ImageResize for resize capability
+const ChronicleImage = ImageResize.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      fullpath: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-fullpath'),
+        renderHTML: attributes => {
+          if (!attributes.fullpath) return {}
+          return { 'data-fullpath': attributes.fullpath }
+        },
+      },
+      filename: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-filename'),
+        renderHTML: attributes => {
+          if (!attributes.filename) return {}
+          return { 'data-filename': attributes.filename }
+        },
+      },
+    }
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    // For serialization: convert asset:// src back to empty src + data-fullpath
+    // This ensures the DB stores file paths, not ephemeral asset:// URLs
+    const attrs = { ...HTMLAttributes }
+    const fp = (node.attrs as Record<string, unknown>).fullpath as string | null
+    if (attrs.src && attrs.src.startsWith('asset://')) {
+      if (fp) {
+        attrs.src = ''
+        attrs['data-fullpath'] = fp
+      }
+    }
+    return ['img', attrs]
+  },
+  addNodeView() {
+    return ({ node, editor, getPos }) => {
+      const fp = (node.attrs as Record<string, unknown>).fullpath as string | null
+      let resolvedNode = node
+      if (fp && isTauri() && !node.attrs.src) {
+        const assetUrl = (window as any).__TAURI__.core.convertFileSrc(fp)
+        resolvedNode = editor.view.state.schema.nodes.imageResize.create({
+          ...node.attrs,
+          src: assetUrl,
+        })
+      }
+      return this.parent?.()({ node: resolvedNode, editor, getPos })
+    }
+  },
+})
+
+/** Resolve data-fullpath to Tauri asset URL for images already in the DOM (fallback for re-renders) */
+function resolveImageSrcsInEditor() {
+  if (!isTauri()) return
+  try {
+    const tauriCore = (window as any).__TAURI__.core
+    document.querySelectorAll('img[data-fullpath]').forEach(img => {
+      const fullpath = img.getAttribute('data-fullpath')
+      if (fullpath) {
+        const assetUrl = tauriCore.convertFileSrc(fullpath)
+        if (img.src !== assetUrl) {
+          img.src = assetUrl
+        }
+      }
+    })
+  } catch { /* ignore */ }
+}
+
 function RichEditorInner({
   content,
   onChange,
@@ -85,18 +172,20 @@ function RichEditorInner({
   const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
 
+  const canSaveImage = isTauri() && !!taskId
+
   const extensions = useMemo(() => [
     StarterKit.configure({
       heading: { levels: [1, 2] },
     }),
-    TipTapImage.configure({
+    ChronicleImage.configure({
       allowBase64: true,
+      inline: false,
       HTMLAttributes: {
         class: 'rounded-md max-w-full',
         draggable: 'false',
       },
     }),
-    ImageResize,
     Link.configure({
       openOnClick: false,
       protocols: ['file'],
@@ -142,15 +231,12 @@ function RichEditorInner({
             // Handle each file
             for (const file of Array.from(files)) {
               if (file.type.startsWith('image/')) {
-                // Image: insert into editor
-                const reader = new FileReader()
-                reader.onload = (e) => {
+                // Image: save to filesystem via Tauri (only in Tauri env)
+                if (canSaveImage) {
                   const ed = editorRef.current
-                  if (ed) {
-                    ed.chain().focus().setImage({ src: e.target?.result as string }).run()
-                  }
+                  if (ed) uploadAndInsertImage(ed, taskId!, file)
                 }
-                reader.readAsDataURL(file)
+                // Non-Tauri: silently ignore image drops
               } else if (taskId) {
                 // Non-image: save as attachment
                 const ts = Date.now()
@@ -199,7 +285,6 @@ function RichEditorInner({
             return true
           }
         }
-        // Left arrow at start of document → blur editor
         if (event.key === 'ArrowLeft' && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
           const { state } = view
           const { selection } = state
@@ -212,28 +297,21 @@ function RichEditorInner({
         return false
       },
       handlePaste: (_view, event) => {
-        const items = Array.from(event.clipboardData?.items || [])
-        for (const item of items) {
-          if (item.type.startsWith('image/')) {
+        // Check for image paste using types/files (doesn't consume clipboard data)
+        if (canSaveImage) {
+          const types = event.clipboardData?.types || []
+          const hasImageFile = types.includes('Files') && (event.clipboardData?.files?.length ?? 0) > 0
+          if (hasImageFile) {
             event.preventDefault()
-            const file = item.getAsFile()
-            if (file) {
-              const reader = new FileReader()
-              const readers = (window as unknown as { __richEditorReaders?: FileReader[] }).__richEditorReaders || []
-              readers.push(reader)
-              ;(window as unknown as { __richEditorReaders: FileReader[] }).__richEditorReaders = readers
-
-              reader.onload = (e) => {
-                insertImageWithResize(editor, e.target?.result as string)
-              }
-              reader.onerror = () => {
-                console.error('Failed to read pasted image')
-              }
-              reader.readAsDataURL(file)
+            const file = event.clipboardData!.files[0]
+            if (file?.type.startsWith('image/')) {
+              const ed = editorRef.current
+              if (ed) uploadAndInsertImage(ed, taskId!, file)
             }
             return true
           }
         }
+        // Not an image paste — let ProseMirror handle text/HTML paste normally
         return false
       },
     },
@@ -243,6 +321,14 @@ function RichEditorInner({
   useEffect(() => {
     editorRef.current = editor
   }, [editor])
+
+  // Resolve data-fullpath → src for images in Tauri environment on initial load
+  useEffect(() => {
+    if (!editor) return
+    // Use setTimeout to wait for TipTap to finish rendering
+    const timer = setTimeout(resolveImageSrcsInEditor, 50)
+    return () => clearTimeout(timer)
+  }, [editor, content])
 
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -419,27 +505,26 @@ function RichEditorInner({
           >
             <Link2 className="w-4 h-4" />
           </ToolbarButton>
-          <ToolbarButton
-            onClick={() => {
-              const input = document.createElement('input')
-              input.type = 'file'
-              input.accept = 'image/*'
-              input.onchange = () => {
-                const file = input.files?.[0]
-                if (file) {
-                  const reader = new FileReader()
-                  reader.onload = (e) => {
-                    insertImageWithResize(editor, e.target?.result as string)
+          {canSaveImage && (
+            <ToolbarButton
+              onClick={() => {
+                const input = document.createElement('input')
+                input.type = 'file'
+                input.accept = 'image/*'
+                input.onchange = () => {
+                  const file = input.files?.[0]
+                  if (file) {
+                    const ed = editorRef.current
+                    if (ed) uploadAndInsertImage(ed, taskId!, file)
                   }
-                  reader.readAsDataURL(file)
                 }
-              }
-              input.click()
-            }}
-            title={t('editor.image')}
-          >
-            <ImageIcon className="w-4 h-4" />
-          </ToolbarButton>
+                input.click()
+              }}
+              title={t('editor.image')}
+            >
+              <ImageIcon className="w-4 h-4" />
+            </ToolbarButton>
+          )}
         </div>
       )}
       <EditorContent editor={editor} className="min-h-[200px]" />
@@ -511,28 +596,8 @@ function RichEditorInner({
         .ProseMirror ol { list-style-type: decimal; padding-left: 1.5rem; }
         .ProseMirror h1 { font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0; }
         .ProseMirror h2 { font-size: 1.25rem; font-weight: 600; margin: 0.5rem 0; }
-        .ProseMirror .resize-image-wrapper {
-          position: relative;
-          display: inline-block;
-          max-width: 100%;
-        }
-        .ProseMirror .resize-image-wrapper img {
-          display: block;
-          max-width: 100%;
-        }
-        .ProseMirror .resize-image-handle {
-          position: absolute;
-          width: 10px;
-          height: 10px;
-          background: hsl(var(--primary));
-          border-radius: 50%;
-          cursor: nwse-resize;
-          bottom: -5px;
-          right: -5px;
-          z-index: 1;
-        }
-        .ProseMirror .resize-image-wrapper:hover .resize-image-handle {
-          opacity: 1;
+        .ProseMirror > div > div[style*="border: 1px dashed"] {
+          border-radius: 0.375rem;
         }
       `}</style>
     </div>
