@@ -6,6 +6,10 @@ import { fileURLToPath } from 'url'
 const projectRoot = path.dirname(fileURLToPath(import.meta.url))
 const webRoot = path.resolve(projectRoot, '../web')
 
+// Dev environment ports (override via PORT and CHRONICLE_SERVER_PORT env vars)
+const devPort = parseInt(process.env.PORT || '5180', 10)
+const serverPort = parseInt(process.env.CHRONICLE_SERVER_PORT || '9983', 10)
+
 export default defineConfig(({ command }) => ({
   plugins: [react()],
   root: webRoot,
@@ -15,10 +19,10 @@ export default defineConfig(({ command }) => ({
     },
   },
   server: command === 'serve' ? {
-    port: 5180,
+    port: devPort,
     proxy: {
       '/api': {
-        target: 'http://localhost:9983',
+        target: `http://localhost:${serverPort}`,
         changeOrigin: true,
         configure: (proxy, _options) => {
           proxy.on('proxyReq', (proxyReq, req) => {

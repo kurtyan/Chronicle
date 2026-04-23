@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 
 #[tauri::command]
 fn get_server_url() -> Result<String, String> {
+    // Dev environment can override via CHRONICLE_LAURI_SERVER_PORT
+    if let Ok(port) = std::env::var("CHRONICLE_LAURI_SERVER_PORT") {
+        return Ok(format!("http://localhost:{}", port));
+    }
+
+    // Production: read from config file
     let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
     let config_path = format!("{}/.chronicle/config.json", home);
     let content = std::fs::read_to_string(&config_path)

@@ -29,11 +29,21 @@ const service = new AppService()
 
 app.use('/*', cors())
 
+import { setTaskExtraInfo } from './services/taskService'
+
 // Extract client ID from header for SSE source tracking
 app.use('/*', async (c, next) => {
   c.set('clientId', c.req.header('X-Client-Id') ?? '')
   await next()
 })
+
+// Extract claude conversation ID from header for task write operations
+function saveConversationId(c: any, taskId: string) {
+  const conversationId = c.req.header('X-Claude-Conversation-Id')
+  if (conversationId && taskId) {
+    setTaskExtraInfo(taskId, 'claude_conversation_id', conversationId)
+  }
+}
 
 // --- SSE Events ---
 function emitTaskChange(c: any, task: any) {
@@ -58,6 +68,10 @@ app.get('/api/tasks/next-id', async (c) => {
 app.post('/api/tasks', async (c) => {
   const body = await c.req.json()
   const task = await service.createTask(body)
+  const conversationId = c.req.header('X-Claude-Conversation-Id')
+  if (conversationId) {
+    setTaskExtraInfo(task.id, 'claude_conversation_id', conversationId)
+  }
   broadcastEvent('task_created', { id: task.id }, c.get('clientId'))
   return c.json(task, 201)
 })
@@ -72,6 +86,7 @@ app.put('/api/tasks/:id', async (c) => {
   const body = await c.req.json()
   const task = await service.updateTask(c.req.param('id'), body)
   if (!task) return c.json({ error: 'Not found' }, 404)
+  saveConversationId(c, c.req.param('id'))
   emitTaskChange(c, task)
   return c.json(task)
 })
@@ -94,6 +109,7 @@ app.get('/api/tasks/:id/logs', async (c) => {
 app.post('/api/tasks/:id/logs', async (c) => {
   const body = await c.req.json()
   const entry = await service.submitTaskEntry(c.req.param('id'), body.content, body.type ?? 'log')
+  saveConversationId(c, c.req.param('id'))
   broadcastEvent('entry_created', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
   return c.json(entry, 201)
 })
@@ -102,6 +118,7 @@ app.put('/api/tasks/:id/logs/:entryId', async (c) => {
   const body = await c.req.json()
   const entry = await service.updateTaskEntry(c.req.param('id'), c.req.param('entryId'), body.content)
   if (!entry) return c.json({ error: 'Not found' }, 404)
+  saveConversationId(c, c.req.param('id'))
   broadcastEvent('entry_updated', { taskId: c.req.param('id'), entryId: entry.id }, c.get('clientId'))
   return c.json(entry)
 })
@@ -109,6 +126,7 @@ app.put('/api/tasks/:id/logs/:entryId', async (c) => {
 app.put('/api/tasks/:id/done', async (c) => {
   const task = await service.markTaskDone(c.req.param('id'))
   if (!task) return c.json({ error: 'Not found' }, 404)
+  saveConversationId(c, c.req.param('id'))
   emitTaskChange(c, task)
   return c.json(task)
 })
@@ -116,6 +134,7 @@ app.put('/api/tasks/:id/done', async (c) => {
 // --- Work Session API ---
 app.post('/api/tasks/:id/takeover', async (c) => {
   const { session, task: changedTask } = await service.takeOverTask(c.req.param('id'))
+  saveConversationId(c, c.req.param('id'))
   if (changedTask) emitTaskChange(c, changedTask)
   broadcastEvent('session_started', { taskId: c.req.param('id'), startedAt: session.startedAt }, c.get('clientId'))
   return c.json(session, 201)
@@ -141,6 +160,7 @@ app.post('/api/tasks/:id/drop', async (c) => {
   const body = await c.req.json()
   const task = await service.dropTask(c.req.param('id'), body.reason ?? '')
   if (!task) return c.json({ error: 'Not found' }, 404)
+  saveConversationId(c, c.req.param('id'))
   emitTaskChange(c, task)
   return c.json(task)
 })

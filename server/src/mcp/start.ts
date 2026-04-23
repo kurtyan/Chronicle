@@ -3,10 +3,17 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { AppService } from '../services/appService'
 import { searchTasks } from '../services/searchService'
+import { setTaskExtraInfo } from '../services/taskService'
 import type { IncomingMessage, ServerResponse } from 'http'
 import * as z from 'zod/v4'
 
-function createMcpServer(service: AppService): McpServer {
+function saveConversationIdIfPresent(conversationId: string | undefined, taskId: string) {
+  if (conversationId && taskId) {
+    setTaskExtraInfo(taskId, 'claude_conversation_id', conversationId)
+  }
+}
+
+function createMcpServer(service: AppService, claudeConversationId?: string): McpServer {
   const server = new McpServer(
     { name: 'chronicle', version: '1.0.0' },
     {
@@ -57,6 +64,7 @@ function createMcpServer(service: AppService): McpServer {
         }
       }
       const logs = await service.fetchTaskEntries(taskId)
+      saveConversationIdIfPresent(claudeConversationId, taskId)
       return {
         content: [{ type: 'text', text: JSON.stringify({ task, logs }, null, 2) }],
       }
@@ -102,6 +110,7 @@ function createMcpServer(service: AppService): McpServer {
       }
       const logs = await service.fetchTaskEntries(taskId)
       const { session } = await service.takeOverTask(taskId)
+      saveConversationIdIfPresent(claudeConversationId, taskId)
 
       const logSummary =
         logs.length > 0
@@ -160,6 +169,7 @@ function createMcpServer(service: AppService): McpServer {
         tags,
         dueDate,
       })
+      saveConversationIdIfPresent(claudeConversationId, task.id)
       return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }
     }
   )
@@ -184,6 +194,7 @@ function createMcpServer(service: AppService): McpServer {
           isError: true,
         }
       }
+      saveConversationIdIfPresent(claudeConversationId, taskId)
       return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }
     }
   )
@@ -211,6 +222,7 @@ function createMcpServer(service: AppService): McpServer {
           content,
           (type as 'log' | 'body') ?? 'log'
         )
+        saveConversationIdIfPresent(claudeConversationId, taskId)
         return { content: [{ type: 'text', text: JSON.stringify(entry, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true }
@@ -245,7 +257,8 @@ export function handleMcpRequest(
   res: ServerResponse,
   service: AppService
 ): Promise<void> {
-  const server = createMcpServer(service)
+  const claudeConversationId = (req.headers['x-claude-conversation-id'] as string) || undefined
+  const server = createMcpServer(service, claudeConversationId)
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined, // stateless mode
   })

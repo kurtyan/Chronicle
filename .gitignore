@@ -24,3 +24,6 @@ coverage/
 
 # Web test data
 web/data/
+
+# Dev data (isolated from production)
+.dev-data/

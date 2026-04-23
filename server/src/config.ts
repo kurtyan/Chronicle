@@ -45,24 +45,46 @@ const configDir = path.join(os.homedir(), '.chronicle')
 const configPath = path.join(configDir, 'config.json')
 
 export function getConfig(): ChronicleConfig {
-  try {
-    if (fs.existsSync(configPath)) {
-      const raw = fs.readFileSync(configPath, 'utf-8')
-      const parsed = JSON.parse(raw) as Partial<ChronicleConfig>
-      return {
-        server: { ...defaultConfig.server, ...parsed.server },
-        mcp: { ...defaultConfig.mcp, ...(parsed as any).mcp },
-        lauri: { ...defaultConfig.lauri, ...parsed.lauri },
-        ui: { ...defaultConfig.ui, ...(parsed as any).ui },
+  // Environment variables override config file (for dev isolation)
+  const envPort = process.env.CHRONICLE_SERVER_PORT
+  const envMcpPort = process.env.CHRONICLE_MCP_PORT
+
+  const fileConfig: Partial<ChronicleConfig> = (() => {
+    try {
+      if (fs.existsSync(configPath)) {
+        return JSON.parse(fs.readFileSync(configPath, 'utf-8'))
       }
-    }
-  } catch {
-    // Use defaults
+    } catch { /* Use defaults */ }
+    return {}
+  })()
+
+  const serverPort = envPort ? parseInt(envPort, 10) : (fileConfig.server?.port ?? defaultConfig.server.port)
+  const mcpPort = envMcpPort ? parseInt(envMcpPort, 10) : (fileConfig.mcp?.port ?? defaultConfig.mcp.port)
+  const lauriServerPort = fileConfig.lauri?.serverPort ?? defaultConfig.lauri.serverPort
+
+  return {
+    server: {
+      host: fileConfig.server?.host ?? defaultConfig.server.host,
+      port: serverPort,
+      database: fileConfig.server?.database ?? defaultConfig.server.database,
+    },
+    mcp: {
+      enabled: fileConfig.mcp?.enabled ?? defaultConfig.mcp.enabled,
+      port: mcpPort,
+    },
+    lauri: {
+      serverHost: fileConfig.lauri?.serverHost ?? defaultConfig.lauri.serverHost,
+      serverPort: lauriServerPort,
+    },
+    ui: {
+      language: fileConfig.ui?.language ?? defaultConfig.ui.language,
+    },
   }
-  return defaultConfig
 }
 
 export function getDbPath(): string {
+  // Environment variable overrides config (for dev isolation)
+  if (process.env.CHRONICLE_DB_PATH) return process.env.CHRONICLE_DB_PATH
   const config = getConfig()
   if (config.server.database) return config.server.database
   return path.join(process.cwd(), 'data', 'tasks.db')
