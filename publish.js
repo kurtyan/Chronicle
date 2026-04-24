@@ -98,6 +98,13 @@ if (fs.existsSync(path.join(ROOT_DIR, 'README.md'))) {
   fs.copyFileSync(path.join(ROOT_DIR, 'README.md'), path.join(PUBLISH_DIR, 'README.md'))
 }
 
+// Copy version file (for /api/version endpoint)
+const versionBuildPath = path.join(ROOT_DIR, 'VERSION_BUILD')
+if (fs.existsSync(versionBuildPath)) {
+  fs.copyFileSync(versionBuildPath, path.join(PUBLISH_DIR, 'VERSION_BUILD'))
+  console.log(`  Version: ${fs.readFileSync(versionBuildPath, 'utf-8').trim()}`)
+}
+
 // Install production dependencies
 console.log('\n[4/4] Installing production dependencies...')
 run('npm install --production', PUBLISH_DIR)

@@ -77,7 +77,12 @@ function cmdStart() {
   const stdout = fs.openSync(outLog, 'a')
   const stderr = fs.openSync(errLog, 'a')
 
-  console.log(`[chronicle] Starting server in background at http://${host}:${port}...`)
+  const ver = (() => {
+    let v = process.env.CHRONICLE_VERSION
+    if (!v) try { const p = path.join(SCRIPT_DIR, '..', 'VERSION_BUILD'); if (fs.existsSync(p)) v = fs.readFileSync(p, 'utf-8').trim() } catch {}
+    return v ?? 'v0.0.0-dev'
+  })()
+  console.log(`[chronicle] Starting server (${ver}) in background at http://${host}:${port}...`)
 
   const child = spawn('node', [SERVER_INDEX, '--port', String(port)], {
     detached: true,

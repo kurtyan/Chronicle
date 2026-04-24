@@ -4,7 +4,7 @@ import { ReportPage } from './pages/ReportPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ListTodo, BarChart3, Settings } from 'lucide-react'
 import { useI18n } from './i18n/context'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useSSE } from './hooks/useSSE'
 import { isTauriEnv, apiBase } from './services/httpApi'
@@ -238,6 +238,7 @@ function useAutoAfk() {
   const [afkDialog, setAfkDialog] = useState<{ open: boolean; reason: string; triggeredAt: number }>({
     open: false, reason: '', triggeredAt: 0,
   })
+  const afkInProgressRef = useRef(false)
 
   useEffect(() => {
     const p = (async () => {
@@ -245,7 +246,12 @@ function useAutoAfk() {
         const { listen } = await import('@tauri-apps/api/event')
         const unlisten = await listen('auto-afk-triggered', async (event) => {
           const reason = event.payload as string
+          if (afkInProgressRef.current) {
+            console.log('[Auto-AFK] skipped: AFK already in progress')
+            return
+          }
           console.log('[Auto-AFK] event received:', reason)
+          afkInProgressRef.current = true
           // End the session (calls server API + clears local state) then show dialog
           useTaskStore.getState().doAfk()
           setAfkDialog({ open: true, reason, triggeredAt: Date.now() })
@@ -260,11 +266,16 @@ function useAutoAfk() {
     return () => { p.then(fn => fn?.()) }
   }, [])
 
+  const onClose = useCallback(() => {
+    afkInProgressRef.current = false
+    setAfkDialog(prev => ({ ...prev, open: false }))
+  }, [])
+
   return {
     open: afkDialog.open,
     reason: afkDialog.reason,
     triggeredAt: afkDialog.triggeredAt,
-    onClose: () => setAfkDialog(prev => ({ ...prev, open: false })),
+    onClose,
   }
 }
 
