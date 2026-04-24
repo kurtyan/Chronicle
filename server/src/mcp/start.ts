@@ -64,10 +64,8 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         }
       }
       const logs = await service.fetchTaskEntries(taskId)
-      saveConversationIdIfPresent(claudeConversationId, taskId)
-      const conversationId = await service.getTaskExtraInfoValue(taskId, 'claude_conversation_id')
       return {
-        content: [{ type: 'text', text: JSON.stringify({ task, logs, claude_conversation_id: conversationId }, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify({ task, logs }, null, 2) }],
       }
     }
   )
@@ -99,9 +97,17 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         'Take over a task: reads its history/logs, returns a summary, and marks the task as DOING (starts a work session).',
       inputSchema: {
         taskId: z.string().describe('The task ID to take over.'),
+        conversationId: z
+          .string()
+          .optional()
+          .describe(
+            'Current Claude conversation ID. Used to bind this task to the conversation. ' +
+            'To acquire, run the shell command in skills/send.md Step 1: traverse process tree to find ' +
+            'the claude session JSON and extract sessionId.'
+          ),
       },
     },
-    async ({ taskId }): Promise<CallToolResult> => {
+    async ({ taskId, conversationId }): Promise<CallToolResult> => {
       const task = await service.getTaskById(taskId)
       if (!task) {
         return {
@@ -111,8 +117,8 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
       }
       const logs = await service.fetchTaskEntries(taskId)
       const { session } = await service.takeOverTask(taskId)
-      saveConversationIdIfPresent(claudeConversationId, taskId)
-      const conversationId = await service.getTaskExtraInfoValue(taskId, 'claude_conversation_id')
+      saveConversationIdIfPresent(conversationId || claudeConversationId, taskId)
+      const claudeConvId = await service.getTaskExtraInfoValue(taskId, 'claude_conversation_id')
 
       const logSummary =
         logs.length > 0
@@ -136,7 +142,7 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         logSummary,
         '',
         `Session started at: ${new Date(session.startedAt).toISOString()}`,
-        conversationId ? `Claude conversation ID: ${conversationId}` : '',
+        claudeConvId ? `Claude conversation ID: ${claudeConvId}` : '',
       ].join('\n')
 
       return { content: [{ type: 'text', text: summary }] }
@@ -162,9 +168,17 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
           .number()
           .optional()
           .describe('Optional due date (unix timestamp, ms).'),
+        conversationId: z
+          .string()
+          .optional()
+          .describe(
+            'Current Claude conversation ID. Used to bind this task to the conversation. ' +
+            'To acquire, run the shell command in skills/send.md Step 1: traverse process tree to find ' +
+            'the claude session JSON and extract sessionId.'
+          ),
       },
     },
-    async ({ title, type, priority, tags, dueDate }): Promise<CallToolResult> => {
+    async ({ title, type, priority, tags, dueDate, conversationId }): Promise<CallToolResult> => {
       const task = await service.createTask({
         title,
         type: type ?? 'TODO',
@@ -172,7 +186,7 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         tags,
         dueDate,
       })
-      saveConversationIdIfPresent(claudeConversationId, task.id)
+      saveConversationIdIfPresent(conversationId || claudeConversationId, task.id)
       return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }
     }
   )
@@ -187,9 +201,17 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         status: z
           .string()
           .describe('New status: PENDING, DOING, DONE, or DROPPED.'),
+        conversationId: z
+          .string()
+          .optional()
+          .describe(
+            'Current Claude conversation ID. Used to bind this task to the conversation. ' +
+            'To acquire, run the shell command in skills/send.md Step 1: traverse process tree to find ' +
+            'the claude session JSON and extract sessionId.'
+          ),
       },
     },
-    async ({ taskId, status }): Promise<CallToolResult> => {
+    async ({ taskId, status, conversationId }): Promise<CallToolResult> => {
       const task = await service.updateTask(taskId, { status })
       if (!task) {
         return {
@@ -197,7 +219,7 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
           isError: true,
         }
       }
-      saveConversationIdIfPresent(claudeConversationId, taskId)
+      saveConversationIdIfPresent(conversationId || claudeConversationId, taskId)
       return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }
     }
   )
@@ -216,16 +238,24 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
           .describe(
             'Entry type: "log" for brief notes, "body" for detailed content. Default: log.'
           ),
+        conversationId: z
+          .string()
+          .optional()
+          .describe(
+            'Current Claude conversation ID. Used to associate this log entry with the conversation. ' +
+            'To acquire, run the shell command in skills/send.md Step 1: traverse process tree to find ' +
+            'the claude session JSON and extract sessionId.'
+          ),
       },
     },
-    async ({ taskId, content, type }): Promise<CallToolResult> => {
+    async ({ taskId, content, type, conversationId }): Promise<CallToolResult> => {
       try {
         const entry = await service.submitTaskEntry(
           taskId,
           content,
           (type as 'log' | 'body') ?? 'log'
         )
-        saveConversationIdIfPresent(claudeConversationId, taskId)
+        saveConversationIdIfPresent(conversationId || claudeConversationId, taskId)
         return { content: [{ type: 'text', text: JSON.stringify(entry, null, 2) }] }
       } catch (e: any) {
         return { content: [{ type: 'text', text: e.message }], isError: true }
