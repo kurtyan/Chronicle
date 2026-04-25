@@ -44,6 +44,10 @@ async function uploadAndInsertImage(ed: Editor | null, taskId: string, file: Fil
       fileName: file.name,
       data: Array.from(uint8),
     })
+    if (!result || typeof result.filePath !== 'string' || typeof result.fileName !== 'string') {
+      console.error('Invalid response from save_editor_image:', result)
+      return
+    }
     insertImageWithAttrs(ed, result.filePath, result.fileName)
   } catch (err) {
     console.error('Failed to save editor image:', err)
@@ -251,6 +255,10 @@ function RichEditorInner({
                       fileName,
                       data: Array.from(uint8),
                     })
+                    if (typeof filePath !== 'string' || !filePath) {
+                      console.error('Invalid response from copy_attachment_file:', filePath)
+                      return
+                    }
                     const ed2 = editorRef.current
                     if (ed2) {
                       const { tr } = ed2.state
@@ -497,7 +505,9 @@ function RichEditorInner({
             active={editor.isActive('link')}
             onClick={() => {
               const url = prompt(t('editor.linkPrompt'))
-              if (url) editor.chain().focus().setLink({ href: url }).run()
+              if (url && !url.startsWith('javascript:') && !url.startsWith('vbscript:')) {
+                editor.chain().focus().setLink({ href: url }).run()
+              }
             }}
             title={t('editor.link')}
           >

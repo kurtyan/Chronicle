@@ -4,7 +4,7 @@ import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Te
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
-import { isTauriEnv, ensureApiReady } from '@/services/httpApi'
+import { isTauriEnv, ensureApiReady, clientId } from '@/services/httpApi'
 
 interface SettingsInfo {
   dbPath: string
@@ -29,7 +29,13 @@ function formatTimestamp(ts: number | null): string {
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const base = isTauriEnv ? await ensureApiReady() : ''
   const url = `${base}${path}`
-  return fetch(url, init)
+  return fetch(url, {
+    ...init,
+    headers: {
+      ...init?.headers,
+      'X-Client-Id': clientId,
+    },
+  })
 }
 
 export function SettingsPage() {
@@ -166,12 +172,34 @@ export function SettingsPage() {
     }
   }
 
+  // SQLite magic bytes: "SQLite format 3\0"
+  const SQLITE_MAGIC = new Uint8Array([0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33, 0x00])
+
+  function isValidSqlite(file: File): Promise<boolean> {
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const arr = new Uint8Array(e.target?.result as ArrayBuffer)
+        resolve(arr.length >= 16 && arr.slice(0, 16).every((b, i) => b === SQLITE_MAGIC[i]))
+      }
+      reader.onerror = () => resolve(false)
+      reader.readAsArrayBuffer(file.slice(0, 16))
+    })
+  }
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    e.target.value = ''
+
+    const isValid = await isValidSqlite(file)
+    if (!isValid) {
+      setMessage({ type: 'error', text: t('settings.importInvalidFormat') })
+      return
+    }
+
     setPendingImportFile(file)
     setShowConfirmDialog(true)
-    e.target.value = ''
   }
 
   const confirmImport = async () => {
