@@ -1,8 +1,8 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
-import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats, fetchReportTasks } from '@/services/api'
+import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats, fetchReportTasks, getAfkEvents } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
-import type { Task, WorkSession } from '@/types'
+import type { Task, WorkSession, AfkEvent } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
 import { getTaskById, fetchTaskEntries } from '@/services/api'
@@ -37,6 +37,70 @@ function formatDuration(ms: number): string {
   return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`
 }
 
+type RecordType = 'work' | 'afk' | 'gap'
+
+interface TimeRecord {
+  type: RecordType
+  startedAt: number
+  endedAt: number
+  session?: WorkSession
+  afkEvent?: AfkEvent
+  task?: Task
+}
+
+function buildDayTimeline(
+  dayStart: number,
+  dayEnd: number,
+  daySessions: WorkSession[],
+  dayAfkEvents: AfkEvent[],
+  sessionTasks: Record<string, Task>,
+  now: number
+): TimeRecord[] {
+  const items: { type: 'work' | 'afk'; start: number; end: number; session?: WorkSession; afkEvent?: AfkEvent }[] = []
+
+  for (const s of daySessions) {
+    const start = Math.max(s.startedAt, dayStart)
+    const end = s.endedAt ? Math.min(s.endedAt, dayEnd) : Math.min(dayEnd, now)
+    if (start < end) items.push({ type: 'work', start, end, session: s })
+  }
+
+  for (const a of dayAfkEvents) {
+    const start = Math.max(a.triggeredAt, dayStart)
+    const end = a.submittedAt ? Math.min(a.submittedAt, dayEnd) : Math.min(dayEnd, now)
+    if (start < end) items.push({ type: 'afk', start, end, afkEvent: a })
+  }
+
+  items.sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start))
+
+  const records: TimeRecord[] = []
+  let cursor = dayStart
+
+  for (const item of items) {
+    if (item.end <= cursor) continue
+    if (item.start > cursor + 1000) {
+      records.push({ type: 'gap', startedAt: cursor, endedAt: item.start })
+    }
+    const effectiveStart = Math.max(item.start, cursor)
+    if (effectiveStart < item.end) {
+      records.push({
+        type: item.type,
+        startedAt: effectiveStart,
+        endedAt: item.end,
+        session: item.session,
+        afkEvent: item.afkEvent,
+        task: item.session ? sessionTasks[item.session.taskId] : undefined,
+      })
+    }
+    cursor = Math.max(cursor, item.end)
+  }
+
+  if (cursor < dayEnd - 1000) {
+    records.push({ type: 'gap', startedAt: cursor, endedAt: dayEnd })
+  }
+
+  return records
+}
+
 export function ReportPage() {
   const { t, dateLocale } = useI18n()
   const [_report, setReport] = useState<ReportData | null>(null)
@@ -49,9 +113,10 @@ export function ReportPage() {
 
   // Session data
   const [sessions, setSessions] = useState<WorkSession[]>([])
+  const [afkEvents, setAfkEvents] = useState<AfkEvent[]>([])
   const [sessionTasks, setSessionTasks] = useState<Record<string, Task>>({})
   const [sessionsLoading, setSessionsLoading] = useState(false)
-  const [sessionsExpanded, setSessionsExpanded] = useState(false)
+  const [activeSection, setActiveSection] = useState<'onDuty' | 'workTime' | 'idleTime' | null>(null)
 
   // Date-range stats
   const [dateRangeStats, setDateRangeStats] = useState({ total: 0, completed: 0, inProgress: 0 })
@@ -197,6 +262,16 @@ export function ReportPage() {
       }
     })
 
+    // Fetch AFK events
+    getAfkEvents(start, end).then(events => {
+      if (isStale || abortController.signal.aborted) return
+      setAfkEvents(events)
+    }).catch(() => {
+      if (!isStale && !abortController.signal.aborted) {
+        setAfkEvents([])
+      }
+    })
+
     // Fetch date-range stats
     fetchRangeStats(start, end).then(stats => {
       if (isStale || abortController.signal.aborted) return
@@ -252,27 +327,46 @@ export function ReportPage() {
     }
   }, [selectedStatFilter, reportTasks])
 
-  // Stats calculation — offset-based
+  // Stats calculation — offset-based, includes AFK events
   const stats = useMemo(() => {
     const range = getDayRange()
     const days = getDaysInRange(range.start, range.end)
     const current = isCurrentDay()
+    const now = current ? nowTickRef.current : Date.now()
     let totalOnDuty = 0
     let totalWorkTime = 0
     for (const { dayStart, dayEnd, daySessions } of days) {
-      if (daySessions.length === 0) continue
-      const firstTakeover = Math.min(...daySessions.map(s => s.startedAt))
-      const lastAfk = daySessions.some(s => !s.endedAt)
-        ? Math.min(dayEnd, current ? nowTickRef.current : Date.now())
-        : Math.max(...daySessions.map(s => s.endedAt!))
-      totalOnDuty += lastAfk - firstTakeover
+      const hasWork = daySessions.length > 0
+      const dayAfk = afkEvents.filter(a =>
+        (a.triggeredAt >= dayStart && a.triggeredAt < dayEnd) ||
+        (a.submittedAt && a.submittedAt >= dayStart && a.submittedAt < dayEnd) ||
+        (a.triggeredAt < dayStart && (!a.submittedAt || a.submittedAt >= dayStart))
+      )
+      const hasAfk = dayAfk.length > 0
+      if (!hasWork && !hasAfk) continue
+
+      const onDutyStart = hasWork
+        ? (hasAfk
+          ? Math.min(Math.min(...daySessions.map(s => s.startedAt)), Math.min(...dayAfk.map(a => a.triggeredAt)))
+          : Math.min(...daySessions.map(s => s.startedAt)))
+        : Math.min(...dayAfk.map(a => a.triggeredAt))
+
+      const lastSessionEnd = hasWork
+        ? (daySessions.some(s => !s.endedAt) ? Math.min(dayEnd, now) : Math.max(...daySessions.map(s => s.endedAt!)))
+        : -Infinity
+      const lastAfkEnd = hasAfk
+        ? (dayAfk.some(a => !a.submittedAt) ? Math.min(dayEnd, now) : Math.max(...dayAfk.map(a => a.submittedAt!)))
+        : -Infinity
+      const onDutyEnd = Math.max(lastSessionEnd, lastAfkEnd)
+
+      totalOnDuty += Math.max(0, onDutyEnd - onDutyStart)
       totalWorkTime += daySessions.reduce((sum, s) => {
-        const sessionEnd = s.endedAt ?? Math.min(dayEnd, current ? nowTickRef.current : Date.now())
+        const sessionEnd = s.endedAt ?? Math.min(dayEnd, now)
         return sum + Math.max(0, clamp(sessionEnd, dayStart, dayEnd) - clamp(s.startedAt, dayStart, dayEnd))
       }, 0)
     }
     return { onDuty: totalOnDuty, workTime: totalWorkTime, idleTime: Math.max(0, totalOnDuty - totalWorkTime) }
-  }, [sessions, timeView, selectedDate, workDayOffset, nowTick])
+  }, [sessions, afkEvents, timeView, selectedDate, workDayOffset, nowTick])
 
   // Group sessions by offset-based day
   const groupedSessions = useMemo(() => {
@@ -291,6 +385,44 @@ export function ReportPage() {
       }))
       .sort((a, b) => b.date.getTime() - a.date.getTime())
   }, [sessions, timeView, selectedDate, workDayOffset, nowTick])
+
+  // Merged day timelines (work + afk + gaps)
+  const dayTimelines = useMemo(() => {
+    const range = getDayRange()
+    const days = getDaysInRange(range.start, range.end)
+    const current = isCurrentDay()
+    const now = current ? nowTickRef.current : Date.now()
+
+    return days.map(d => {
+      const dayAfk = afkEvents.filter(a =>
+        (a.triggeredAt >= d.dayStart && a.triggeredAt < d.dayEnd) ||
+        (a.submittedAt && a.submittedAt >= d.dayStart && a.submittedAt < d.dayEnd) ||
+        (a.triggeredAt < d.dayStart && (!a.submittedAt || a.submittedAt >= d.dayStart))
+      )
+
+      const hasWork = d.daySessions.length > 0
+      const hasAfk = dayAfk.length > 0
+
+      const onDutyStart = hasWork
+        ? (hasAfk
+          ? Math.min(Math.min(...d.daySessions.map(s => s.startedAt)), Math.min(...dayAfk.map(a => a.triggeredAt)))
+          : Math.min(...d.daySessions.map(s => s.startedAt)))
+        : (hasAfk ? Math.min(...dayAfk.map(a => a.triggeredAt)) : d.dayStart)
+
+      const lastSessionEnd = hasWork
+        ? (d.daySessions.some(s => !s.endedAt) ? Math.min(d.dayEnd, now) : Math.max(...d.daySessions.map(s => s.endedAt!)))
+        : -Infinity
+      const lastAfkEnd = hasAfk
+        ? (dayAfk.some(a => !a.submittedAt) ? Math.min(d.dayEnd, now) : Math.max(...dayAfk.map(a => a.submittedAt!)))
+        : -Infinity
+      const onDutyEnd = Math.max(lastSessionEnd, lastAfkEnd, d.dayStart)
+
+      const records = buildDayTimeline(onDutyStart, onDutyEnd, d.daySessions, dayAfk, sessionTasks, now)
+
+      return { date: d.date, dayStart: d.dayStart, dayEnd: d.dayEnd, onDutyStart, onDutyEnd, records }
+    }).filter(d => d.records.length > 0)
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+  }, [sessions, afkEvents, sessionTasks, timeView, selectedDate, workDayOffset, nowTick])
 
   // Date display
   const dateDisplay = useMemo(() => {
@@ -441,34 +573,68 @@ export function ReportPage() {
           </div>
         </div>
 
-        {/* Work duration stats - collapsed, click to expand */}
+        {/* Stats row with expandable list */}
         <div className="border rounded-lg">
-          <div
-            className="px-4 py-3 grid grid-cols-3 gap-4 cursor-pointer hover:bg-muted/20 transition"
-            onClick={() => setSessionsExpanded(v => !v)}
-          >
-            <div>
+          <div className="grid grid-cols-3 divide-x">
+            <div className={`px-4 py-3 transition-colors ${activeSection === 'onDuty' ? 'bg-muted/20' : ''}`}>
               <div className="text-xs text-muted-foreground mb-1">{t('report.onDuty')}</div>
-              <div className="text-lg font-semibold">{formatDuration(stats.onDuty)}</div>
+              <button
+                className="text-lg font-semibold underline decoration-dotted hover:decoration-solid hover:text-foreground transition-all cursor-pointer"
+                onClick={() => setActiveSection(prev => prev === 'onDuty' ? null : 'onDuty')}
+              >
+                {formatDuration(stats.onDuty)}
+              </button>
             </div>
-            <div>
+            <div className={`px-4 py-3 transition-colors ${activeSection === 'workTime' ? 'bg-muted/20' : ''}`}>
               <div className="text-xs text-muted-foreground mb-1">{t('report.workTime')}</div>
-              <div className="text-lg font-semibold text-green-600">{formatDuration(stats.workTime)}</div>
+              <button
+                className="text-lg font-semibold text-green-600 underline decoration-dotted hover:decoration-solid hover:text-foreground transition-all cursor-pointer"
+                onClick={() => setActiveSection(prev => prev === 'workTime' ? null : 'workTime')}
+              >
+                {formatDuration(stats.workTime)}
+              </button>
             </div>
-            <div>
+            <div className={`px-4 py-3 transition-colors ${activeSection === 'idleTime' ? 'bg-muted/20' : ''}`}>
               <div className="text-xs text-muted-foreground mb-1">{t('report.idleTime')}</div>
-              <div className="text-lg font-semibold text-amber-600">{formatDuration(stats.idleTime)}</div>
+              <button
+                className="text-lg font-semibold text-amber-600 underline decoration-dotted hover:decoration-solid hover:text-foreground transition-all cursor-pointer"
+                onClick={() => setActiveSection(prev => prev === 'idleTime' ? null : 'idleTime')}
+              >
+                {formatDuration(stats.idleTime)}
+              </button>
             </div>
           </div>
 
-          {/* Session list - collapsed by default */}
-          {sessionsExpanded && (
-            sessionsLoading ? (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.loading')}</div>
-            ) : sessions.length === 0 ? (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t('report.noSessions')}</div>
+          {activeSection === 'onDuty' && (
+            dayTimelines.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground border-t">{t('report.noSessions')}</div>
             ) : (
-              <div className="divide-y max-h-[300px] overflow-y-auto">
+              <div className="divide-y max-h-[300px] overflow-y-auto border-t">
+                {dayTimelines.map(({ date, onDutyStart, onDutyEnd, records }) => (
+                  <div key={format(date, 'yyyy-MM-dd')}>
+                    <div className="px-4 py-2 bg-muted/30 text-sm">
+                      <span className="font-medium">
+                        {format(date, 'yyyy-MM-dd EEEE', { locale: dateLocale })}
+                      </span>
+                      <span className="text-muted-foreground ml-3">
+                        {format(new Date(onDutyStart), 'HH:mm')} — {format(new Date(onDutyEnd), 'HH:mm')}
+                      </span>
+                    </div>
+                    {records.map((record, idx) => (
+                      <TimeRecordRow key={idx} record={record} nowTick={nowTick} />
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )
+          )}
+          {activeSection === 'workTime' && (
+            sessionsLoading ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground border-t">{t('report.loading')}</div>
+            ) : sessions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground border-t">{t('report.noSessions')}</div>
+            ) : (
+              <div className="divide-y max-h-[300px] overflow-y-auto border-t">
                 {groupedSessions.map(({ date, sessions: daySessions, firstTakeOver, lastAfk }) => (
                   <div key={format(date, 'yyyy-MM-dd')}>
                     <div className="px-4 py-2 bg-muted/30 text-sm">
@@ -486,6 +652,30 @@ export function ReportPage() {
                     ))}
                   </div>
                 ))}
+              </div>
+            )
+          )}
+          {activeSection === 'idleTime' && (
+            dayTimelines.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground border-t">{t('report.noSessions')}</div>
+            ) : (
+              <div className="divide-y max-h-[300px] overflow-y-auto border-t">
+                {dayTimelines.map(({ date, records }) => {
+                  const idleRecords = records.filter(r => r.type === 'afk' || r.type === 'gap')
+                  if (idleRecords.length === 0) return null
+                  return (
+                    <div key={format(date, 'yyyy-MM-dd')}>
+                      <div className="px-4 py-2 bg-muted/30 text-sm">
+                        <span className="font-medium">
+                          {format(date, 'yyyy-MM-dd EEEE', { locale: dateLocale })}
+                        </span>
+                      </div>
+                      {idleRecords.map((record, idx) => (
+                        <TimeRecordRow key={idx} record={record} nowTick={nowTick} />
+                      ))}
+                    </div>
+                  )
+                })}
               </div>
             )
           )}
@@ -629,6 +819,49 @@ function SessionRow({ session, task, dayEnd, nowTick }: { session: WorkSession; 
           </div>
         ) : (
           <span className="text-muted-foreground">Unknown</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function TimeRecordRow({ record, nowTick }: { record: TimeRecord; nowTick: number }) {
+  const { t } = useI18n()
+  const now = Math.min(record.endedAt, nowTick)
+  const duration = Math.max(0, now - record.startedAt)
+
+  return (
+    <div className="px-4 py-3 flex items-center gap-6 text-sm">
+      <div className="w-32 flex-shrink-0">
+        <div className="font-medium">{format(new Date(record.startedAt), 'HH:mm')}</div>
+        <div className="text-muted-foreground">{format(new Date(now), 'HH:mm')}</div>
+      </div>
+      <div className="w-20 flex-shrink-0 font-medium tabular-nums">
+        {formatDuration(duration)}
+      </div>
+      <div className="flex-1 min-w-0">
+        {record.type === 'work' && record.task && (
+          <div className="flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${priorityColors[record.task.priority as keyof typeof priorityColors]}`} />
+            <span className="truncate">{record.task.title}</span>
+          </div>
+        )}
+        {record.type === 'work' && !record.task && (
+          <span className="text-muted-foreground">{t('report.unknownTask')}</span>
+        )}
+        {record.type === 'afk' && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+              {t('report.afkLabel')}
+            </span>
+            <span className="truncate text-muted-foreground">
+              {record.afkEvent?.reason}
+              {record.afkEvent?.userNote && ` — ${record.afkEvent.userNote}`}
+            </span>
+          </div>
+        )}
+        {record.type === 'gap' && (
+          <span className="text-muted-foreground italic">{t('report.notLabeled')}</span>
         )}
       </div>
     </div>

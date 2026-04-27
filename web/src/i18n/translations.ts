@@ -146,6 +146,10 @@ export const translations: Record<string, TranslationEntry> = {
   'report.workDayOffset': { 'zh-CN': '工作日偏移', en: 'Work Day Offset' },
   'report.workPeriod': { 'zh-CN': '工作时间', en: 'Work Period' },
   'report.trackedTask': { 'zh-CN': '追踪任务', en: 'Tracked Task' },
+  'report.afkLabel': { 'zh-CN': 'AFK', en: 'AFK' },
+  'report.notLabeled': { 'zh-CN': '未标记', en: 'Not Labeled' },
+  'report.unknownTask': { 'zh-CN': '未知任务', en: 'Unknown Task' },
+  'report.noAfkEvents': { 'zh-CN': '暂无 AFK 记录', en: 'No AFK events' },
 
   // Settings
   'sidebar.settings': { 'zh-CN': '设置', en: 'Settings' },
