@@ -226,13 +226,13 @@ export class AppService {
     if (filter === 'ALL') {
       const total = filtered.length
       const items = filtered.slice((page - 1) * pageSize, page * pageSize)
-      return { items: this.enrichTasks(items, now), total, hasMore: page * pageSize < total }
+      return { items: this.enrichTasks(items, now, start, end), total, hasMore: page * pageSize < total }
     }
 
-    return { items: this.enrichTasks(filtered, now), total: filtered.length, hasMore: false }
+    return { items: this.enrichTasks(filtered, now, start, end), total: filtered.length, hasMore: false }
   }
 
-  private enrichTasks(tasks: Task[], now: number): Array<Task & { body: string; workMs: number }> {
+  private enrichTasks(tasks: Task[], now: number, start?: number, end?: number): Array<Task & { body: string; workMs: number; rangeWorkMs: number }> {
     return tasks.map(task => {
       const entries = getDb().prepare(
         'SELECT content FROM task_entries WHERE task_id = ? AND type = ? ORDER BY created_at ASC'
@@ -243,11 +243,22 @@ export class AppService {
         'SELECT started_at, ended_at FROM work_sessions WHERE task_id = ?'
       ).all(task.id) as { started_at: number; ended_at: number | null }[]
       let workMs = 0
+      let rangeWorkMs = 0
       for (const s of sessions) {
-        workMs += (s.ended_at ?? now) - s.started_at
+        const sessionEnd = s.ended_at ?? now
+        workMs += sessionEnd - s.started_at
+        if (start !== undefined && end !== undefined) {
+          const clampedStart = Math.max(s.started_at, start)
+          const clampedEnd = Math.min(sessionEnd, end)
+          if (clampedStart < clampedEnd) {
+            rangeWorkMs += clampedEnd - clampedStart
+          }
+        } else {
+          rangeWorkMs = workMs
+        }
       }
 
-      return { ...task, body, workMs }
+      return { ...task, body, workMs, rangeWorkMs }
     })
   }
 

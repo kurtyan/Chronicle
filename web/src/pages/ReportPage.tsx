@@ -27,6 +27,7 @@ interface SummaryData {
 interface ReportTask extends Task {
   body: string
   workMs: number
+  rangeWorkMs: number
 }
 
 function formatDuration(ms: number): string {
@@ -720,7 +721,8 @@ export function ReportPage() {
                   {task.completedAt && (
                     <span className="text-xs text-green-600 w-24 text-right">{format(new Date(task.completedAt), 'MM-dd')}</span>
                   )}
-                  <span className="text-xs tabular-nums w-16 text-right">{formatDuration(task.workMs)}</span>
+                  <span className="text-xs tabular-nums w-20 text-right text-muted-foreground">{formatDuration(task.rangeWorkMs)}</span>
+                  <span className="text-xs tabular-nums w-20 text-right font-medium">{formatDuration(task.workMs)}</span>
                 </div>
               ))}
             </div>
