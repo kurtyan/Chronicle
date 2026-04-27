@@ -100,3 +100,39 @@ Bidirectional task management between Claude Code and Chronicle:
 Existing `tasks.db` is fully compatible.
 
 If your database contains base64-embedded images in task logs, run `node server/scripts/migrate-images.js` to extract them to file references and reduce database size.
+
+---
+
+## Post-v1.2.0 Changes
+
+### Report Page: AFK/Gap Timeline & Clickable Stats
+
+- **AFK event display** — AFK events are now visible in the report timeline alongside work sessions, with "AFK" badge and reason text.
+- **Gap detection** — Unlabeled periods between work/AFK events are displayed as italic "Not Labeled" gaps.
+- **Clickable stat sections** — On-duty, Work Time, and Idle Time durations are independently clickable (underlined with dotted style). Clicking a time value reveals its detailed timeline; clicking again folds it.
+- **AFK-inclusive stats** — On-duty and idle time calculations now include AFK event periods, not just work sessions.
+- **Split work time display** — Each task in the report shows two values: work time within the selected time range (day/week/month) in muted color, and total work time since creation in bold.
+- **i18n additions** — `report.noTasks`, `report.afkLabel`, `report.notLabeled`, `report.unknownTask`, `report.noAfkEvents` keys added.
+
+### Security Hardening
+
+- **Tauri invoke validation** — Return type validation for `save_editor_image` and `copy_attachment_file` commands to prevent runtime type mismatches.
+- **SQLite import guard** — Magic bytes check on database import files to reject malformed or non-SQLite files before processing.
+- **XSS link guard** — `javascript:` and `vbscript:` URLs blocked in the rich editor link insertion dialog.
+
+### MCP Tool Improvements
+
+- **`conversationId` as explicit parameter** — All mutation MCP tools (`takeover_task`, `create_task`, `update_task_status`, `add_log`) now accept `conversationId` as an optional parameter, taking precedence over the HTTP header. Parameter descriptions reference `skills/send.md` for the acquisition command.
+- **`get_task` cleanup** — Conversation binding side effect removed from the read-only `get_task` tool.
+
+### UI/UX Fixes
+
+- **Search result display** — Fixed DONE tasks found via search now display correctly in the detail panel. `activeTask` → `selectedTask` rename for clarity. Pre-search task selection restored when exiting search mode. Guard against stale async results.
+- **AutoAfk keyboard shortcut** — `Ctrl+Enter` / `Cmd+Enter` now submits the AFK reason in `AutoAfkDialog`.
+
+### Infrastructure
+
+- **Server startup logging** — Version number displayed in `[chronicle] Starting server (vX.X.X)...` log line, loaded from `VERSION_BUILD` or `CHRONICLE_VERSION` env var.
+- **`publish.js`** — Copies `VERSION_BUILD` to dist output for version endpoint support.
+- **`CLAUDE.md`** — Added with build, run, and release instructions for the project.
+- **Tauri config sync** — Configuration updates synced with server version.

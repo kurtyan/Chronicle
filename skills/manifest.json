@@ -3,6 +3,7 @@
   "skills": [
     { "name": "chronicle-bind", "file": "bind.md" },
     { "name": "chronicle-send", "file": "send.md" },
-    { "name": "chronicle-summarize", "file": "summarize.md" }
+    { "name": "chronicle-summarize", "file": "summarize.md" },
+    { "name": "chronicle-write-release-notes", "file": "write-chronicle-release-notes.md" }
   ]
 }
