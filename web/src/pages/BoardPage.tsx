@@ -32,7 +32,7 @@ function isHtmlEmpty(html: string): boolean {
 export function BoardPage() {
   const { t } = useI18n()
   const {
-    tasks, loading, error, activeTaskId, entries, entryLoading, filterTypes,
+    tasks, loading, error, activeTaskId, selectedTask, entries, entryLoading, filterTypes,
     statusFilter, isTodayFilter, draftTask, draftTaskId, currentSession, lastAfkTime, pinnedIds,
     searchMode, searchQuery, searchResults, searchTokens,
     loadTodos, setActiveTask, updateTask, markDone, setOnHold,
@@ -231,6 +231,7 @@ export function BoardPage() {
   // Refs to access latest state without stale closures - MUST be defined before handleEscKey
   const stateRef = useRef({
     activeTaskId,
+    selectedTask,
     draftTitle,
     draftBody,
     draftType,
@@ -252,6 +253,7 @@ export function BoardPage() {
   useEffect(() => {
     stateRef.current = {
       activeTaskId,
+      selectedTask,
       draftTitle,
       draftBody,
       draftType,
@@ -484,8 +486,7 @@ export function BoardPage() {
       scope: 'page',
       context: () => {
         const s = stateRef.current
-        const task = s.tasks.find(t => t.id === s.activeTaskId)
-        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && task?.status === 'PENDING')
+        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && s.selectedTask?.status === 'PENDING')
       },
       handler: () => {
         const s = stateRef.current
@@ -501,8 +502,7 @@ export function BoardPage() {
       scope: 'page',
       context: () => {
         const s = stateRef.current
-        const task = s.tasks.find(t => t.id === s.activeTaskId)
-        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && task?.status === 'DOING')
+        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && s.selectedTask?.status === 'DOING')
       },
       handler: () => {
         const s = stateRef.current
@@ -721,7 +721,6 @@ export function BoardPage() {
   // ==================== Task actions ====================
 
   const isDraftActive = activeTaskId === DRAFT_ID
-  const activeTask = tasks.find(t => t.id === activeTaskId) || null
   const sortedTasks = [...tasks].sort((a, b) => {
     const aPinned = pinnedIds.has(a.id) ? 1 : 0
     const bPinned = pinnedIds.has(b.id) ? 1 : 0
@@ -818,8 +817,8 @@ export function BoardPage() {
   }
 
   const handleTitleEdit = () => {
-    if (!activeTask) return
-    setTitleInput(activeTask.title)
+    if (!selectedTask) return
+    setTitleInput(selectedTask.title)
     setEditingTitle(true)
   }
 
@@ -1245,7 +1244,7 @@ export function BoardPage() {
       {/* Workspace */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Scenario A: No active task, no draft, or active task filtered out */}
-        {(!activeTaskId || !activeTask) && !draftTask ? (
+        {(!activeTaskId || !selectedTask) && !draftTask ? (
           <>
             {/* Top bar with tracking status */}
             <div className="flex-shrink-0 h-10 px-[30px] flex items-center justify-end">
@@ -1380,7 +1379,7 @@ export function BoardPage() {
                   </div>
                 </div>
               </>
-            ) : activeTask ? (
+            ) : selectedTask ? (
               /* Scenario C: Existing task active */
               <>
                 {/* Fixed top section */}
@@ -1389,18 +1388,18 @@ export function BoardPage() {
                   <div className="h-10 px-[30px] flex items-center justify-between" data-testid="workspace-info-bar">
                     <div className="flex items-center gap-3">
                       <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">
-                        {t(`type.${activeTask.type.toLowerCase()}`)}
+                        {t(`type.${selectedTask.type.toLowerCase()}`)}
                       </span>
                       <span className={`text-xs px-2 py-0.5 rounded ${
-                        activeTask.status === 'DONE' ? 'bg-green-500/10 text-green-600' :
-                        activeTask.status === 'DOING' ? 'bg-blue-500/10 text-blue-600' :
-                        activeTask.status === 'DROPPED' ? 'bg-red-500/10 text-red-600' :
-                        activeTask.status === 'ON_HOLD' ? 'bg-orange-500/10 text-orange-600' :
+                        selectedTask.status === 'DONE' ? 'bg-green-500/10 text-green-600' :
+                        selectedTask.status === 'DOING' ? 'bg-blue-500/10 text-blue-600' :
+                        selectedTask.status === 'DROPPED' ? 'bg-red-500/10 text-red-600' :
+                        selectedTask.status === 'ON_HOLD' ? 'bg-orange-500/10 text-orange-600' :
                         'bg-muted text-muted-foreground'
                       }`}>
-                        {t(`status.${activeTask.status.toLowerCase()}`)}
+                        {t(`status.${selectedTask.status.toLowerCase()}`)}
                       </span>
-                      {activeTask.status === 'PENDING' && (
+                      {selectedTask.status === 'PENDING' && (
                         <>
                           <button
                             className="text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition"
@@ -1416,7 +1415,7 @@ export function BoardPage() {
                           </button>
                         </>
                       )}
-                      {activeTask.status === 'DOING' && (
+                      {selectedTask.status === 'DOING' && (
                         <>
                           <button
                             className="text-xs px-3 py-1 rounded bg-green-500 text-white hover:bg-green-600 transition"
@@ -1432,7 +1431,7 @@ export function BoardPage() {
                           </button>
                         </>
                       )}
-                      {activeTask.status === 'DONE' && (
+                      {selectedTask.status === 'DONE' && (
                         <button
                           className="text-xs px-3 py-1 rounded border border-muted text-muted-foreground hover:bg-muted transition"
                           onClick={handleContinueTask}
@@ -1440,8 +1439,8 @@ export function BoardPage() {
                           {t('workspace.redo')}
                         </button>
                       )}
-                      {activeTask.status === 'DROPPED' && null /* No buttons */}
-                      {activeTask.status === 'ON_HOLD' && (
+                      {selectedTask.status === 'DROPPED' && null /* No buttons */}
+                      {selectedTask.status === 'ON_HOLD' && (
                         <>
                           <button
                             className="text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition"
@@ -1525,17 +1524,17 @@ export function BoardPage() {
                         onClick={handleTitleEdit}
                       >
                         {searchMode && searchTokens.length > 0
-                          ? highlightText(activeTask.title, searchTokens)
-                          : activeTask.title}
+                          ? highlightText(selectedTask.title, searchTokens)
+                          : selectedTask.title}
                       </h1>
                     )}
                     <div className="flex items-center gap-1 shrink-0 mt-1">
-                      <span className="text-xs text-muted-foreground/60 font-mono" title={activeTask.id}>
-                        {activeTask.id}
+                      <span className="text-xs text-muted-foreground/60 font-mono" title={selectedTask.id}>
+                        {selectedTask.id}
                       </span>
                       <button
                         className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded"
-                        onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(activeTask.id) }}
+                        onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(selectedTask.id) }}
                         title="Copy ID"
                       >
                         <Copy className="w-3 h-3" />
@@ -1633,10 +1632,10 @@ export function BoardPage() {
                           <TaskEntryBlock
                             key={entry.id}
                             entry={entry}
-                            onSave={(id, newContent) => updateEntry(activeTask.id, id, newContent)}
+                            onSave={(id, newContent) => updateEntry(selectedTask.id, id, newContent)}
                             editing={editingEntryId === entry.id}
                             highlightTokens={searchMode ? searchTokens : undefined}
-                            taskId={activeTask.id}
+                            taskId={selectedTask.id}
                             onEditingChange={(editing) => {
                               if (editing) {
                                 setEditingEntryId(entry.id)
@@ -1654,7 +1653,7 @@ export function BoardPage() {
                     ) : null}
 
                     {/* Quick log entry — hidden when editing an entry */}
-                    {activeTask.status !== 'DONE' && activeTask.status !== 'DROPPED' && !editingEntryId && (
+                    {selectedTask.status !== 'DONE' && selectedTask.status !== 'DROPPED' && !editingEntryId && (
                       <>
                         <div ref={logEditorRef}>
                           <RichEditor

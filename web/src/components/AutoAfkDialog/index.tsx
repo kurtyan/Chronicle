@@ -89,7 +89,16 @@ export function AutoAfkDialog({ open, reason, triggeredAt, onClose }: AutoAfkDia
             placeholder={t('afk.notePlaceholder')}
             value={userNote}
             onChange={(e) => setUserNote(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault()
+                handleSubmit()
+              }
+            }}
           />
+          <div className="text-xs text-muted-foreground text-right">
+            Ctrl+Enter {t('afk.submit')}
+          </div>
         </div>
 
         <DialogFooter>

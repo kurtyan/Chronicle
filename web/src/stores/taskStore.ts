@@ -17,6 +17,7 @@ interface TaskState {
   loading: boolean
   error: string | null
   activeTaskId: string | null
+  selectedTask: Task | null
   entries: TaskEntry[]
   entryLoading: boolean
   filterTypes: TaskType[]
@@ -29,6 +30,7 @@ interface TaskState {
   currentSession: WorkSession | null
   lastAfkTime: number | null
   previousActiveTaskId: string | null
+  preSearchTaskId: string | null
   // Search state
   searchMode: boolean
   searchQuery: string
@@ -72,6 +74,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   loading: false,
   error: null,
   activeTaskId: null,
+  selectedTask: null,
   entries: [],
   entryLoading: false,
   filterTypes: [],
@@ -84,6 +87,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   currentSession: null,
   lastAfkTime: null,
   previousActiveTaskId: null,
+  preSearchTaskId: null,
   searchMode: false,
   searchQuery: '',
   searchResults: [],
@@ -158,17 +162,23 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const [task, entries] = id
         ? await Promise.all([api.getTaskById(id), api.fetchTaskEntries(id)])
         : [null, []]
+      // Guard against stale async result: if activeTaskId changed during fetch, skip
+      if (get().activeTaskId !== id) return
       if (task) {
-        set((state) => ({
-          tasks: state.tasks.map((t) => (t.id === id ? task : t)),
-          entries,
-          entryLoading: false,
-        }))
+        set((state) => {
+          const exists = state.tasks.some((t) => t.id === id)
+          return {
+            tasks: exists ? state.tasks.map((t) => (t.id === id ? task : t)) : state.tasks,
+            selectedTask: task,
+            entries,
+            entryLoading: false,
+          }
+        })
       } else {
-        set({ entries, entryLoading: false })
+        set({ entries, entryLoading: false, selectedTask: null })
       }
     } catch {
-      set({ entries: [], entryLoading: false })
+      set({ entries: [], entryLoading: false, selectedTask: null })
     }
   },
 
@@ -183,6 +193,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (!updated) return null
     set((state) => ({
       tasks: state.tasks.map((t) => (t.id === id ? updated : t)).sort((a, b) => b.updatedAt - a.updatedAt),
+      selectedTask: state.activeTaskId === id ? updated : state.selectedTask,
     }))
     return updated
   },
@@ -192,6 +203,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set((state) => ({
       tasks: state.tasks.filter((t) => t.id !== id),
       activeTaskId: state.activeTaskId === id ? null : state.activeTaskId,
+      selectedTask: state.activeTaskId === id ? null : state.selectedTask,
       entries: state.activeTaskId === id ? [] : state.entries,
     }))
   },
@@ -211,14 +223,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       ).sort((a, b) => b.updatedAt - a.updatedAt)
       // When task is removed from list, select the next task at the same index
       let nextActiveId = state.activeTaskId
+      let nextSelectedTask: Task | null = state.selectedTask
       if (state.activeTaskId === id) {
         const oldIndex = state.tasks.findIndex(t => t.id === id)
         const nextTask = nextTasks[oldIndex] ?? nextTasks[oldIndex - 1] ?? null
         nextActiveId = nextTask?.id ?? null
+        if (nextActiveId === id) {
+          nextSelectedTask = updated
+        } else {
+          nextSelectedTask = nextTask
+        }
       }
       return {
         tasks: nextTasks,
         activeTaskId: nextActiveId,
+        selectedTask: nextSelectedTask,
         entries: state.activeTaskId === id ? [] : state.entries,
       }
     })
@@ -239,14 +258,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         : state.tasks.filter((t) => t.id !== id)
       ).sort((a, b) => b.updatedAt - a.updatedAt)
       let nextActiveId = state.activeTaskId
+      let nextSelectedTask: Task | null = state.selectedTask
       if (state.activeTaskId === id) {
         const oldIndex = state.tasks.findIndex(t => t.id === id)
         const nextTask = nextTasks[oldIndex] ?? nextTasks[oldIndex - 1] ?? null
         nextActiveId = nextTask?.id ?? null
+        if (nextActiveId === id) {
+          nextSelectedTask = updated
+        } else {
+          nextSelectedTask = nextTask
+        }
       }
       return {
         tasks: nextTasks,
         activeTaskId: nextActiveId,
+        selectedTask: nextSelectedTask,
         entries: state.activeTaskId === id ? [] : state.entries,
       }
     })
@@ -272,6 +298,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       return {
         entries: freshEntries,
         tasks: nextTasks,
+        selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
       }
     })
     return entry
@@ -292,6 +319,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       return {
         entries: freshEntries,
         tasks: nextTasks,
+        selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
       }
     })
     return entry
@@ -351,6 +379,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       tasks: [...state.tasks, task].sort((a, b) => b.updatedAt - a.updatedAt),
       draftTask: null,
       activeTaskId: task.id,
+      selectedTask: task,
       previousActiveTaskId: null,
     }))
     // Reload entries for the new task
@@ -367,6 +396,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (updated) {
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+        selectedTask: state.activeTaskId === taskId ? updated : state.selectedTask,
       }))
     }
     set({ currentSession: session, lastAfkTime: null })
@@ -397,6 +427,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (updated) {
       set((state) => ({
         tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+        selectedTask: state.activeTaskId === taskId ? updated : state.selectedTask,
       }))
     }
     set({ currentSession: session, lastAfkTime: null })
@@ -412,6 +443,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         : state.tasks.filter((t) => t.id !== id)
       ).sort((a, b) => b.updatedAt - a.updatedAt),
       activeTaskId: state.activeTaskId === id ? null : state.activeTaskId,
+      selectedTask: state.activeTaskId === id ? null : state.selectedTask,
       entries: state.activeTaskId === id ? [] : state.entries,
       currentSession: state.currentSession?.taskId === id ? null : state.currentSession,
     }))
@@ -436,10 +468,28 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
-  setSearchMode: (on) => set({
-    searchMode: on,
-    ...(on ? {} : { searchQuery: '', searchResults: [], searchTokens: [] }),
-  }),
+  setSearchMode: (on) => {
+    if (on) {
+      const { activeTaskId } = get()
+      set({ searchMode: true, preSearchTaskId: activeTaskId })
+    } else {
+      const { preSearchTaskId } = get()
+      set({
+        searchMode: false,
+        searchQuery: '',
+        searchResults: [],
+        searchTokens: [],
+        preSearchTaskId: null,
+      })
+      if (preSearchTaskId) {
+        // Restore the task that was selected before entering search mode
+        get().setActiveTask(preSearchTaskId)
+      } else {
+        // No task was selected before search, clear the view
+        get().setActiveTask(null)
+      }
+    }
+  },
 
   doSearch: async (query) => {
     set({ searchQuery: query })
