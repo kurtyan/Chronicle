@@ -10,6 +10,7 @@ export function initDb() {
 
   db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
+  db.pragma('wal_autocheckpoint = 100')
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS tasks (

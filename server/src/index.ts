@@ -3,7 +3,7 @@ import { cors } from 'hono/cors'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { AppService } from './services/appService'
-import { initDb } from './db'
+import { initDb, closeDb } from './db'
 import { getConfig } from './config'
 import { startBackupService } from './services/backupService'
 import { exportDatabase, importDatabase, getSettingsInfo } from './services/settingsService'
@@ -370,6 +370,15 @@ if (storedVersion !== CURRENT_TOKENIZER_VERSION) {
 }
 
 startBackupService()
+
+// Graceful shutdown: checkpoint WAL and close database
+function shutdown(signal: string) {
+  getLogger().info(`Received ${signal}, shutting down...`)
+  closeDb()
+  process.exit(0)
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
 
 serve({ fetch: app.fetch, port, hostname: host })
 getLogger().info(`Chronicle ${getVersion()} — Server running at http://${host}:${port}`)

@@ -1,32 +1,39 @@
 import fs from 'fs'
 import path from 'path'
-import { getDbFilePath } from '../db'
+import { getDb, getDbFilePath } from '../db'
+import { getLogger } from '../logging'
 
 const BACKUP_INTERVAL_MS = 60 * 60 * 1000 // 1 hour
 const MAX_BACKUPS = 24
 
 let lastBackupAt: number | null = null
+let backupInProgress = false
 
 function getBackupDir(): string {
   return path.join(path.dirname(getDbFilePath()), 'backups')
 }
 
-function backupNow(): void {
-  const dbPath = getDbFilePath()
-  if (!fs.existsSync(dbPath)) return
+async function backupNow(): Promise<void> {
+  if (backupInProgress) return
+  backupInProgress = true
 
-  const backupDir = getBackupDir()
-  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true })
+  try {
+    const backupDir = getBackupDir()
+    if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true })
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const backupPath = path.join(backupDir, `tasks-${timestamp}.db`)
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const backupPath = path.join(backupDir, `tasks-${timestamp}.db`)
 
-  fs.copyFileSync(dbPath, backupPath)
-  lastBackupAt = Date.now()
-  console.log(`Backup created: ${backupPath}`)
+    await getDb().backup(backupPath)
+    lastBackupAt = Date.now()
+    getLogger().info(`Backup created: ${backupPath}`)
 
-  // Cleanup old backups
-  cleanupBackups()
+    cleanupBackups()
+  } catch (err) {
+    getLogger().error(`Backup failed: ${err}`)
+  } finally {
+    backupInProgress = false
+  }
 }
 
 function cleanupBackups(): void {

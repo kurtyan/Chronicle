@@ -87,7 +87,7 @@ export function getDbPath(): string {
   if (process.env.CHRONICLE_DB_PATH) return process.env.CHRONICLE_DB_PATH
   const config = getConfig()
   if (config.server.database) return config.server.database
-  return path.join(process.cwd(), 'data', 'tasks.db')
+  return path.join(os.homedir(), '.chronicle', 'data', 'tasks.db')
 }
 
 export function ensureDataDir() {

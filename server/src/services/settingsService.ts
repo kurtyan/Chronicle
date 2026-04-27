@@ -23,7 +23,7 @@ export async function importDatabase(fileBuffer: Buffer): Promise<{ success: str
   // Pre-import backup
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const backupPath = path.join(backupDir, `tasks-pre-import-${timestamp}.db`)
-  fs.copyFileSync(dbPath, backupPath)
+  await getDb().backup(backupPath)
 
   // Close current connection, replace file, re-initialize
   closeDb()

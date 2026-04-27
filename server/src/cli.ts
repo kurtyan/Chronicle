@@ -175,7 +175,7 @@ function cmdStatus() {
       console.log(`  Database:  ${configDb} (not found)`)
     }
   } else {
-    const defaultDb = path.join(process.cwd(), 'data', 'tasks.db')
+    const defaultDb = path.join(os.homedir(), '.chronicle', 'data', 'tasks.db')
     if (fs.existsSync(defaultDb)) {
       const size = fs.statSync(defaultDb).size
       console.log(`  Database:  ${defaultDb} (${(size / 1024).toFixed(1)} KB)`)
