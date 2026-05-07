@@ -4,7 +4,7 @@ import StarterKit from '@tiptap/starter-kit'
 import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
-import { Bold, Italic, List, ListOrdered, Code, Link2, Image as ImageIcon, Strikethrough, Heading1, Heading2, Quote } from 'lucide-react'
+import { Bold, Italic, List, ListOrdered, Code, Link2, Image as ImageIcon, Strikethrough, Heading1, Heading2, Heading3, Heading4, Indent, Outdent, Quote } from 'lucide-react'
 import { useEffect, useRef, useMemo, useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
@@ -183,7 +183,7 @@ function RichEditorInner({
 
   const extensions = useMemo(() => [
     StarterKit.configure({
-      heading: { levels: [1, 2] },
+      heading: { levels: [1, 2, 3, 4] },
     }),
     ChronicleImage.configure({
       inline: false,
@@ -299,6 +299,18 @@ function RichEditorInner({
             editor.commands.blur()
             return true
           }
+        }
+        if (event.key === 'Tab') {
+          event.preventDefault()
+          const ed = editorRef.current
+          if (ed) {
+            if (event.shiftKey) {
+              ed.chain().focus().liftListItem('listItem').run()
+            } else {
+              ed.chain().focus().sinkListItem('listItem').run()
+            }
+          }
+          return true
         }
         return false
       },
@@ -471,6 +483,20 @@ function RichEditorInner({
           >
             <Heading2 className="w-4 h-4" />
           </ToolbarButton>
+          <ToolbarButton
+            active={editor.isActive('heading', { level: 3 })}
+            onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+            title={t('editor.heading3')}
+          >
+            <Heading3 className="w-4 h-4" />
+          </ToolbarButton>
+          <ToolbarButton
+            active={editor.isActive('heading', { level: 4 })}
+            onClick={() => editor.chain().focus().toggleHeading({ level: 4 }).run()}
+            title={t('editor.heading4')}
+          >
+            <Heading4 className="w-4 h-4" />
+          </ToolbarButton>
           <div className="w-px h-5 bg-border mx-1" />
           <ToolbarButton
             active={editor.isActive('bulletList')}
@@ -486,6 +512,19 @@ function RichEditorInner({
           >
             <ListOrdered className="w-4 h-4" />
           </ToolbarButton>
+          <ToolbarButton
+            onClick={() => editor.chain().focus().sinkListItem('listItem').run()}
+            title={t('editor.indent')}
+          >
+            <Indent className="w-4 h-4" />
+          </ToolbarButton>
+          <ToolbarButton
+            onClick={() => editor.chain().focus().liftListItem('listItem').run()}
+            title={t('editor.outdent')}
+          >
+            <Outdent className="w-4 h-4" />
+          </ToolbarButton>
+          <div className="w-px h-5 bg-border mx-1" />
           <ToolbarButton
             active={editor.isActive('blockquote')}
             onClick={() => editor.chain().focus().toggleBlockquote().run()}
@@ -604,6 +643,8 @@ function RichEditorInner({
         .ProseMirror ol { list-style-type: decimal; padding-left: 1.5rem; }
         .ProseMirror h1 { font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0; }
         .ProseMirror h2 { font-size: 1.25rem; font-weight: 600; margin: 0.5rem 0; }
+        .ProseMirror h3 { font-size: 1.1rem; font-weight: 600; margin: 0.5rem 0; }
+        .ProseMirror h4 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0; }
         .ProseMirror > div > div[style*="border: 1px dashed"] {
           border-radius: 0.375rem;
         }
