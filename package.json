@@ -8,7 +8,7 @@
     "publish:prepare": "node publish.js",
     "publish:npm": "node publish.js --publish",
     "publish:local": "npm run clean && npm run publish:prepare && cd dist/chronicle-npm && rm -f chronicle-*.tgz && npm pack && npm install -g chronicle-*.tgz",
-    "release": "node clean.js && node scripts/generate-version.js --write && node build.js && node publish.js --local-publish && cd tauri && npm install && node scripts/update-version.js && npx tauri build"
+    "release": "node clean.js && node scripts/generate-version.js --write && node build.js && node publish.js --local-publish && cd tauri && npm install && node scripts/update-version.js && npx tauri build && git checkout -- tauri/src-tauri/Cargo.toml tauri/src-tauri/tauri.conf.json tauri/src-tauri/Cargo.lock"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"
