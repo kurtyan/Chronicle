@@ -66,6 +66,15 @@ function PlanView({ displayDate, onChangeDate }: {
   const { selectedTask, setActiveTask, loadTodos } = useTaskStore()
   const [highlightId, setHighlightId] = useState<string | null>(null)
 
+  // Share panel width with BoardPage via localStorage
+  const [timelineWidth] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chronicle_tasklist_pct')
+      const pct = saved ? parseFloat(saved) : 0.3
+      return Math.round(window.innerWidth * pct)
+    } catch { return Math.round(window.innerWidth * 0.3) }
+  })
+
   const selectedItem: PlanItem | undefined = planItems[selectedItemIndex]
 
   useEffect(() => {
@@ -82,16 +91,32 @@ function PlanView({ displayDate, onChangeDate }: {
     }
   }, [selectedItem?.id, selectedItem?.taskId])
 
-  // Keyboard navigation for timeline
-  const handleTimelineKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'j' || e.key === 'ArrowDown') {
-      e.preventDefault()
-      if (selectedItemIndex < planItems.length - 1) selectPlanItem(selectedItemIndex + 1)
-    } else if (e.key === 'k' || e.key === 'ArrowUp') {
-      e.preventDefault()
-      if (selectedItemIndex > 0) selectPlanItem(selectedItemIndex - 1)
+  // Keyboard navigation for timeline — global listener, not dependent on focus
+  const planItemsRef = useRef(planItems)
+  const selectedIndexRef = useRef(selectedItemIndex)
+  planItemsRef.current = planItems
+  selectedIndexRef.current = selectedItemIndex
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement
+      const inEditor = activeEl?.closest('[data-rich-editor="true"]') || activeEl?.closest('[contenteditable="true"]') || activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA'
+      if (inEditor) return // don't steal from editor
+
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        e.preventDefault()
+        const items = planItemsRef.current
+        const idx = selectedIndexRef.current
+        if (idx < items.length - 1) selectPlanItem(idx + 1)
+      } else if (e.key === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const idx = selectedIndexRef.current
+        if (idx > 0) selectPlanItem(idx - 1)
+      }
     }
-  }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   const statusIcon = (status: string) => {
     switch (status) {
@@ -103,9 +128,9 @@ function PlanView({ displayDate, onChangeDate }: {
   }
 
   return (
-    <div className="flex h-full" onKeyDown={handleTimelineKeyDown} tabIndex={-1}>
+    <div className="flex h-full">
       {/* Left: Timeline */}
-      <div className="w-[30%] border-r flex flex-col">
+      <div style={{ width: timelineWidth, minWidth: 180, maxWidth: 500 }} className="border-r bg-card flex flex-col flex-shrink-0">
         <div className="p-3 border-b flex items-center justify-between">
           <button className="p-1 hover:bg-muted rounded" onClick={() => onChangeDate(-1)}>
             <ChevronLeft className="w-4 h-4" />

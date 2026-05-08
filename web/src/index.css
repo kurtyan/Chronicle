@@ -71,6 +71,21 @@
   animation: marquee 16s linear infinite;
 }
 
+@keyframes highlight-flash {
+  0%, 4% {
+    background-color: hsl(var(--primary) / 0.12);
+    box-shadow: 0 0 0 1px hsl(var(--primary));
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 0px transparent;
+  }
+}
+
+.animate-highlight-flash {
+  animation: highlight-flash 2.5s ease-out forwards;
+}
+
 @layer utilities {
   .search-highlight {
     background-color: hsl(45 100% 70% / 0.4);

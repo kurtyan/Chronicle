@@ -304,7 +304,7 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
   return (
     <>
       <div
-        className={`py-2 cursor-pointer hover:bg-muted/40 rounded transition group ${highlightPlan ? 'bg-primary/10 ring-1 ring-primary' : ''}`}
+        className={`py-2 cursor-pointer hover:bg-muted/40 rounded group ${highlightPlan ? 'bg-primary/10 ring-1 ring-primary animate-highlight-flash' : ''}`}
         onMouseDown={handleMouseDown}
         onClick={handleContainerClick}
       >

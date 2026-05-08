@@ -358,7 +358,7 @@ function ScheduleStep({
             <div key={index}>
               {/* Break indicator */}
               {breakBefore > 0 && (
-                <div className="flex items-center gap-2 py-1 px-4">
+                <div className="flex items-center gap-2 px-4" style={{ paddingTop: Math.max(2, breakBefore * 2) - 2 + 'px', paddingBottom: Math.max(2, breakBefore * 2) - 2 + 'px' }}>
                   <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
                     {breakBefore} min break

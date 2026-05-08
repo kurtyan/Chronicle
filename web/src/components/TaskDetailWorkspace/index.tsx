@@ -153,6 +153,22 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
     clearLogContentDraft(activeTaskId)
   }
 
+  // Save draft silently — submit entry but keep draft content in editor
+  const saveSilently = useCallback(async () => {
+    if (!activeTaskId || isDraftActive) return
+    const content = useTaskStore.getState().logContentDraft[activeTaskId] || ''
+    if (isHtmlEmpty(content)) return
+    await submitEntry(activeTaskId, content.trim(), 'log')
+    // Restore draft so it stays in the editor
+    setLogContentDraft(activeTaskId, content)
+  }, [activeTaskId, isDraftActive, submitEntry, setLogContentDraft])
+
+  // Auto-save draft every 30s
+  useEffect(() => {
+    const timer = setInterval(() => { saveSilently() }, 30000)
+    return () => clearInterval(timer)
+  }, [saveSilently])
+
   // Register task-detail keyboard shortcuts (work on both Board and Today pages)
   useEffect(() => {
     const unregisters: (() => void)[] = []
@@ -431,13 +447,13 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
                   variant="full"
                   taskId={activeTaskId ?? undefined}
                   onKeyDown={(e) => {
-                    if (e.ctrlKey && e.key === 'Enter') {
+                    // Cmd+S: Save draft without exiting edit mode
+                    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
                       e.preventDefault(); e.stopPropagation()
-                      const storeLog = activeTaskId ? (useTaskStore.getState().logContentDraft[activeTaskId] || '') : ''
-                      if (activeTaskId && !isHtmlEmpty(storeLog)) {
-                        submitEntry(activeTaskId, storeLog.trim(), 'log')
-                        clearLogContentDraft(activeTaskId)
-                      }
+                      saveSilently()
+                      return
+                    }
+                    if (e.ctrlKey && e.key === 'Enter') {
                     }
                   }}
                 />
