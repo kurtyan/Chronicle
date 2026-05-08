@@ -426,6 +426,10 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
                     if (editing) {
                       setEditingEntryId(entry.id)
                       if (activeTaskId && activeTaskId !== DRAFT_ID) autoTakeOver(activeTaskId)
+                      // Auto-start plan entry when editing starts
+                      if (entry.type === 'plan' && entry.planDetailId && entry.planStatus === 'PLANNED') {
+                        handlePlanAction(entry.planDetailId, 'DOING')
+                      }
                     } else {
                       setEditingEntryId(null)
                     }

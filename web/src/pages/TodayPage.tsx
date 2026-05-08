@@ -4,7 +4,7 @@ import { usePlanStore, getTodayDate, loadPlanItems, selectPlanItem, startPlanIte
 import { useTaskStore } from '@/stores/taskStore'
 import type { PlanItem } from '@/types'
 import { TaskDetailWorkspace, IdleTimeIndicator, TrackingStatusIndicator } from '@/components/TaskDetailWorkspace'
-import { ChevronLeft, ChevronRight, CalendarPlus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarPlus, Circle, Loader2, CheckCircle2, MinusCircle } from 'lucide-react'
 
 function formatDate(dateStr: string): string {
   const parts = dateStr.split('-').map(Number)
@@ -63,7 +63,7 @@ function PlanView({ displayDate, onChangeDate }: {
   onChangeDate: (delta: number) => void
 }) {
   const { planItems, selectedItemIndex } = usePlanStore()
-  const { selectedTask, setActiveTask, loadTodos } = useTaskStore()
+  const { selectedTask, entries, setActiveTask, loadTodos } = useTaskStore()
   const [highlightId, setHighlightId] = useState<string | null>(null)
 
   // Share panel width with BoardPage via localStorage
@@ -90,6 +90,25 @@ function PlanView({ displayDate, onChangeDate }: {
       return () => clearTimeout(timer)
     }
   }, [selectedItem?.id, selectedItem?.taskId])
+
+  // Sync planStore planItems with entry changes (status/content)
+  useEffect(() => {
+    const entryMap = new Map<string, { status?: string; content?: string }>()
+    for (const e of entries) {
+      if (e.type === 'plan') entryMap.set(e.id, { status: e.planStatus, content: e.content })
+    }
+    if (entryMap.size === 0) return
+    let changed = false
+    const updated = planItems.map(item => {
+      const entry = entryMap.get(item.id)
+      if (!entry) return item
+      const newStatus = entry.status as typeof item.planStatus | undefined
+      if (newStatus && newStatus !== item.planStatus) changed = true
+      if (entry.content && entry.content !== item.content) changed = true
+      return { ...item, planStatus: newStatus ?? item.planStatus, content: entry.content ?? item.content }
+    })
+    if (changed) usePlanStore.setState({ planItems: updated })
+  }, [entries])
 
   // Keyboard navigation for timeline — global listener, not dependent on focus
   const planItemsRef = useRef(planItems)
@@ -120,10 +139,10 @@ function PlanView({ displayDate, onChangeDate }: {
 
   const statusIcon = (status: string) => {
     switch (status) {
-      case 'DONE': return <span className="text-green-500">✅</span>
-      case 'DOING': return <span className="text-blue-500 animate-pulse">⏳</span>
-      case 'SKIPPED': return <span className="text-gray-400">⏭</span>
-      default: return <span className="text-muted-foreground">○</span>
+      case 'DONE': return <CheckCircle2 className="w-4 h-4 text-green-500" />
+      case 'DOING': return <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+      case 'SKIPPED': return <MinusCircle className="w-4 h-4 text-muted-foreground/40" />
+      default: return <Circle className="w-4 h-4 text-muted-foreground/50" />
     }
   }
 

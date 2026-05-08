@@ -330,16 +330,21 @@ function Layout() {
       },
     }))
 
-    // Cmd+R: Refresh tasks (prevent page reload on all pages)
+    // Cmd+R: Refresh tasks + plan items (prevent page reload on all pages)
     unregisters.push(registerShortcut({
       id: 'refresh',
       combo: 'mod+r',
       label: 'Refresh tasks',
       scope: 'app',
-      handler: () => {
+      handler: async () => {
         const s = useTaskStore.getState()
         s.loadTodos()
         s.loadCurrentSession()
+        // Refresh plan items if available
+        try {
+          const { loadPlanItems, getTodayDate } = await import('@/stores/planStore')
+          loadPlanItems(getTodayDate())
+        } catch { /* planStore may not be loaded */ }
       },
     }))
 

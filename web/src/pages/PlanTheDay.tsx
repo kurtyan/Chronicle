@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTaskStore } from '@/stores/taskStore'
 import { getTodayDate, savePlan } from '@/stores/planStore'
-import type { BatchCreatePlanItem, Task } from '@/types'
-import { ArrowRight, ArrowLeft, GripVertical, Plus, Trash2, Save } from 'lucide-react'
+import type { BatchCreatePlanItem } from '@/types'
+import { ArrowRight, ArrowLeft, GripVertical, Trash2, Save } from 'lucide-react'
 
 function roundUpTo5Minutes(date: Date): Date {
   const ms = 5 * 60 * 1000
@@ -28,203 +28,275 @@ function EditPlanStep({
   onNext: (items: BatchCreatePlanItem[]) => void
 }) {
   const { tasks, loadTodos } = useTaskStore()
-  const [planBlocks, setPlanBlocks] = useState<Array<{
-    taskId: string
-    subTasks: Array<{ content: string; estimatedMinutes: number }>
-  }>>([])
-
-  useEffect(() => {
-    loadTodos()
-  }, [loadTodos])
-
   const availableTasks = tasks.filter(t => t.status !== 'DONE' && t.status !== 'DROPPED')
 
-  const addTaskBlock = useCallback((task: Task) => {
-    setPlanBlocks(prev => {
-      if (prev.some(b => b.taskId === task.id)) return prev
-      return [...prev, {
-        taskId: task.id,
-        subTasks: [{ content: '', estimatedMinutes: 30 }],
-      }]
-    })
-  }, [])
+  interface PlanRow {
+    id: string
+    kind: 'task' | 'subtask'
+    taskId: string
+    taskTitle?: string
+    title?: string
+    minutes?: number
+  }
+  const [rows, setRows] = useState<PlanRow[]>([])
 
-  const addSubTask = useCallback((blockIndex: number) => {
-    setPlanBlocks(prev => prev.map((b, i) =>
-      i === blockIndex
-        ? { ...b, subTasks: [...b.subTasks, { content: '', estimatedMinutes: 30 }] }
-        : b
-    ))
-  }, [])
+  const [editValue, setEditValue] = useState('')
+  const [editMode, setEditMode] = useState<'pick' | 'title' | 'duration'>('pick')
+  const [editTaskId, setEditTaskId] = useState<string | null>(null)
+  const [editMinutes, setEditMinutes] = useState(30)
+  const [showNextHint, setShowNextHint] = useState(false)
+  const [showPicker, setShowPicker] = useState(false)
+  const [pickerQuery, setPickerQuery] = useState('')
+  const [pickerIndex, setPickerIndex] = useState(0)
+  const editRef = useRef<HTMLInputElement>(null)
+  const minutesRef = useRef<HTMLInputElement>(null)
 
-  const updateSubTask = useCallback((blockIndex: number, subIndex: number, field: 'content' | 'estimatedMinutes', value: string | number) => {
-    setPlanBlocks(prev => prev.map((b, i) =>
-      i === blockIndex
-        ? {
-          ...b,
-          subTasks: b.subTasks.map((s, j) =>
-            j === subIndex ? { ...s, [field]: value } : s
-          ),
-        }
-        : b
-    ))
-  }, [])
+  useEffect(() => { loadTodos() }, [loadTodos])
 
-  const removeSubTask = useCallback((blockIndex: number, subIndex: number) => {
-    setPlanBlocks(prev => prev.map((b, i) =>
-      i === blockIndex
-        ? { ...b, subTasks: b.subTasks.filter((_, j) => j !== subIndex) }
-        : b
-    ).filter(b => b.subTasks.length > 0))
-  }, [])
+  useEffect(() => {
+    if (editMode === 'duration' && minutesRef.current) minutesRef.current.focus()
+    else editRef.current?.focus()
+  }, [editMode, rows.length])
 
-  const removeBlock = useCallback((blockIndex: number) => {
-    setPlanBlocks(prev => prev.filter((_, i) => i !== blockIndex))
-  }, [])
+  // Show all tasks on @, filter as user types
+  const filteredTasks = showPicker
+    ? (pickerQuery ? availableTasks.filter(t => t.title.toLowerCase().includes(pickerQuery) || t.id.toLowerCase().includes(pickerQuery)) : availableTasks)
+    : []
 
-  const handleNext = () => {
-    // Convert to flat list of BatchCreatePlanItem
-    const items: BatchCreatePlanItem[] = []
-    let order = 0
-    for (const block of planBlocks) {
-      for (const st of block.subTasks) {
-        if (st.content.trim()) {
-          items.push({
-            taskId: block.taskId,
-            content: st.content.trim(),
-            estimatedMinutes: st.estimatedMinutes,
-            estimatedStart: '', // filled in step 2
-            estimatedEnd: '',   // filled in step 2
-            sortOrder: order++,
-          })
-        }
-      }
+  // Track @ in edit value
+  useEffect(() => {
+    if (editValue.startsWith('@')) {
+      setShowPicker(true)
+      setPickerQuery(editValue.slice(1).toLowerCase())
+      setPickerIndex(0)
+    } else if (showPicker) {
+      setShowPicker(false)
     }
-    if (items.length === 0) return
-    onNext(items)
+  }, [editValue])
+
+  const selectTask = (task: typeof availableTasks[0]) => {
+    if (editTaskId) {
+      // Commit any in-progress subtask before switching to a new task context
+      if (editValue.trim()) {
+        setRows(prev => [...prev, { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes }])
+      }
+      // Add a new task row
+      const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'task', taskId: task.id, taskTitle: task.title }
+      setRows(prev => [...prev, newRow])
+    } else {
+      // First task — commit as row
+      const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'task', taskId: task.id, taskTitle: task.title }
+      setRows(prev => [...prev, newRow])
+    }
+    setEditTaskId(task.id)
+    setEditValue('')
+    setEditMode('title')
+    setShowPicker(false)
   }
 
-  // Manual sort: move block up/down
-  const moveBlock = (from: number, to: number) => {
-    if (to < 0 || to >= planBlocks.length) return
-    setPlanBlocks(prev => {
-      const next = [...prev]
-      ;[next[from], next[to]] = [next[to], next[from]]
-      return next
-    })
+  // Commit task from left panel click or drag
+  const setTaskContext = (task: typeof availableTasks[0]) => {
+    if (editTaskId) {
+      // Commit any in-progress subtask before switching
+      if (editValue.trim()) {
+        setRows(prev => [...prev, { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes }])
+      }
+      // Add a new task row
+      const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'task', taskId: task.id, taskTitle: task.title }
+      setRows(prev => [...prev, newRow])
+    } else {
+      const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'task', taskId: task.id, taskTitle: task.title }
+      setRows(prev => [...prev, newRow])
+    }
+    setEditTaskId(task.id)
+    setEditValue('')
+    setEditMode('title')
+  }
+
+  const commitTitle = () => {
+    if (!editValue.trim() || !editTaskId) return
+    setEditMode('duration')
+    setEditMinutes(30)
+  }
+
+  const commitDuration = () => {
+    if (!editValue.trim() || !editTaskId) return
+    const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes }
+    setRows(prev => [...prev, newRow])
+    setEditValue('')
+    setEditMode('title')
+  }
+
+  const handleEditKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showPicker) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setPickerIndex(i => Math.min(i + 1, filteredTasks.length - 1)) }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setPickerIndex(i => Math.max(i - 1, 0)) }
+      else if (e.key === 'Enter') { e.preventDefault(); if (filteredTasks[pickerIndex]) selectTask(filteredTasks[pickerIndex]) }
+      else if (e.key === 'Escape') { setShowPicker(false); setEditValue('') }
+      return
+    }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      e.preventDefault()
+      if (editTaskId && editValue.trim()) commitTitle()
+    }
+  }
+
+  // @-only constraint on the first edit box (no task selected yet)
+  const handleEditChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    if (!editTaskId && val.length > 0 && !val.startsWith('@')) {
+      // Only accept @ input when no task is selected — block non-@ chars
+      return
+    }
+    setEditValue(val)
+  }
+
+  const handleMinutesKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commitDuration() }
+  }
+
+  const removeRow = (id: string) => {
+    setRows(prev => prev.filter(r => r.id !== id))
+  }
+
+  const editSubtask = (row: PlanRow) => {
+    setEditTaskId(row.taskId)
+    setEditValue(row.title || '')
+    setEditMinutes(row.minutes ?? 30)
+    setEditMode('title')
+    setShowPicker(false)
+    // Remove the old row so user can re-edit it
+    setRows(prev => prev.filter(r => r.id !== row.id))
+  }
+
+  const handleNext = () => {
+    const items: BatchCreatePlanItem[] = []
+    let order = 0
+    for (const row of rows) {
+      if (row.kind === 'subtask' && row.title?.trim()) {
+        items.push({ taskId: row.taskId, content: row.title.trim(), estimatedMinutes: row.minutes ?? 30, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
+      }
+    }
+    if (editValue.trim() && editTaskId) {
+      items.push({ taskId: editTaskId, content: editValue.trim(), estimatedMinutes: editMinutes, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
+    }
+    if (items.length === 0) {
+      setShowNextHint(true)
+      setTimeout(() => setShowNextHint(false), 3000)
+      return
+    }
+    onNext(items)
   }
 
   return (
     <div className="flex h-full">
       {/* Left: Available Tasks */}
-      <div className="w-[30%] border-r bg-muted/20 p-4 flex flex-col">
+      <div className="w-[30%] border-r bg-card p-4 flex flex-col">
         <h3 className="text-sm font-semibold mb-3 text-muted-foreground">Tasks</h3>
         <div className="flex-1 overflow-auto space-y-1">
           {availableTasks.map(task => (
-            <button
-              key={task.id}
-              className="w-full text-left p-2 rounded hover:bg-muted text-sm flex items-center gap-2 cursor-grab active:cursor-grabbing"
-              draggable
-              onDragStart={(e) => e.dataTransfer.setData('taskId', task.id)}
-              onClick={() => addTaskBlock(task)}
+            <button key={task.id}
+              className="w-full text-left p-2 rounded hover:bg-muted text-sm flex items-center gap-2"
+              draggable onDragStart={(e) => e.dataTransfer.setData('taskId', task.id)}
+              onClick={() => setTaskContext(task)}
             >
               <GripVertical className="w-3 h-3 text-muted-foreground flex-shrink-0" />
               <span className="truncate">{task.title}</span>
               <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">{task.id}</span>
             </button>
           ))}
-          {availableTasks.length === 0 && (
-            <p className="text-xs text-muted-foreground p-2">No available tasks</p>
-          )}
         </div>
       </div>
 
       {/* Right: Plan Editor */}
-      <div className="flex-1 p-4 flex flex-col">
+      <div className="flex-1 p-4 flex flex-col"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault()
+          const taskId = e.dataTransfer.getData('taskId')
+          const task = availableTasks.find(t => t.id === taskId)
+          if (task) setTaskContext(task)
+        }}
+      >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold">Edit Plan</h2>
-          <button
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md flex items-center gap-2 text-sm"
-            onClick={handleNext}
-          >
+          <button className="px-4 py-2 bg-primary text-primary-foreground rounded-md flex items-center gap-2 text-sm" onClick={handleNext}>
             Next Step <ArrowRight className="w-4 h-4" />
           </button>
         </div>
 
-        <div
-          className="flex-1 overflow-auto space-y-4"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault()
-            const taskId = e.dataTransfer.getData('taskId')
-            const task = availableTasks.find(t => t.id === taskId)
-            if (task) addTaskBlock(task)
-          }}
-        >
-          {planBlocks.map((block, bi) => {
-            const task = tasks.find(t => t.id === block.taskId)
+        <div className="flex-1 overflow-auto space-y-2">
+          {/* Committed rows */}
+          {rows.map(row => {
+            if (row.kind === 'task') {
+              return (
+                <div key={row.id} className="flex items-center gap-2 py-1 group">
+                  <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground font-mono">{row.taskId}</span>
+                  <span className="text-sm font-medium">{row.taskTitle}</span>
+                  <button className="ml-auto opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/20 rounded" onClick={() => removeRow(row.id)}>
+                    <Trash2 className="w-3 h-3 text-destructive" />
+                  </button>
+                </div>
+              )
+            }
             return (
-              <div key={`${block.taskId}-${bi}`} className="border rounded-lg p-3 bg-card">
-                <div className="flex items-center gap-2 mb-2">
-                  <GripVertical className="w-4 h-4 text-muted-foreground cursor-grab" />
-                  <span className="text-sm font-medium">Task: {task?.title ?? block.taskId}</span>
-                  <span className="text-xs text-muted-foreground">{block.taskId}</span>
-                  <div className="ml-auto flex gap-1">
-                    <button className="p-1 hover:bg-muted rounded" onClick={() => moveBlock(bi, bi - 1)} title="Move up">
-                      ↑
-                    </button>
-                    <button className="p-1 hover:bg-muted rounded" onClick={() => moveBlock(bi, bi + 1)} title="Move down">
-                      ↓
-                    </button>
-                    <button className="p-1 hover:bg-destructive/20 rounded text-destructive" onClick={() => removeBlock(bi)}>
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  {block.subTasks.map((st, si) => (
-                    <div key={si} className="flex gap-2 items-center">
-                      <input
-                        className="flex-1 px-2 py-1.5 border rounded text-sm bg-background"
-                        placeholder={`Sub-task ${si + 1}...`}
-                        value={st.content}
-                        onChange={(e) => updateSubTask(bi, si, 'content', e.target.value)}
-                      />
-                      <input
-                        className="w-20 px-2 py-1.5 border rounded text-sm bg-background text-center"
-                        type="number"
-                        min={1}
-                        placeholder="min"
-                        value={st.estimatedMinutes}
-                        onChange={(e) => updateSubTask(bi, si, 'estimatedMinutes', parseInt(e.target.value) || 0)}
-                      />
-                      <span className="text-xs text-muted-foreground w-8">min</span>
-                      <button
-                        className="p-1 hover:bg-destructive/20 rounded text-destructive"
-                        onClick={() => removeSubTask(bi, si)}
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
-                <button
-                  className="mt-2 text-xs text-primary hover:underline flex items-center gap-1"
-                  onClick={() => addSubTask(bi)}
-                >
-                  <Plus className="w-3 h-3" /> Add sub-task
+              <div key={row.id} className="flex gap-2 items-center group pl-6 cursor-pointer hover:bg-muted/50 rounded" onClick={() => editSubtask(row)}>
+                <span className="text-xs text-muted-foreground/50 font-mono flex-shrink-0">{row.taskId}</span>
+                <span className="flex-1 text-sm">{row.title}</span>
+                <span className="text-xs text-muted-foreground w-16 text-right">{row.minutes} min</span>
+                <button className="opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/20 rounded" onClick={(e) => { e.stopPropagation(); removeRow(row.id) }}>
+                  <Trash2 className="w-3 h-3 text-destructive" />
                 </button>
               </div>
             )
           })}
 
-          {planBlocks.length === 0 && (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-              <p>Drag tasks from the left, or click a task to add it</p>
+          {showNextHint && (
+            <div className="text-sm text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded px-3 py-2">
+              {rows.length === 0
+                ? 'No subtasks yet — pick a task with @, type a title, press Enter, then enter duration.'
+                : 'Subtasks exist but none have titles. Make sure each subtask has content and press Enter to confirm.'}
             </div>
           )}
+
+          {/* Active edit row */}
+          <div className="flex gap-2 items-center">
+            {editMode === 'duration' ? (
+              <>
+                <input className="flex-1 px-2 py-1.5 border rounded text-sm bg-background" value={editValue} readOnly />
+                <input ref={minutesRef} className="w-20 px-2 py-1.5 border rounded text-sm bg-background text-center" type="number" min={1} placeholder="min"
+                  value={editMinutes} onChange={(e) => setEditMinutes(parseInt(e.target.value) || 0)} onKeyDown={handleMinutesKeyDown} />
+                <span className="text-xs text-muted-foreground w-8">min</span>
+              </>
+            ) : (
+              <div className="relative flex-1">
+                <input ref={editRef}
+                  className="w-full px-3 py-2 border rounded-lg text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                  placeholder={editTaskId ? "Sub-task title (Tab/Enter for duration, @ to switch task)" : "Type @ to pick a task"}
+                  value={editValue} onChange={handleEditChange} onKeyDown={handleEditKeyDown}
+                />
+                {/* Task picker dropdown */}
+                {showPicker && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md max-h-48 overflow-auto z-50">
+                    {filteredTasks.length === 0 ? (
+                      <p className="p-2 text-xs text-muted-foreground">No matching tasks</p>
+                    ) : (
+                      filteredTasks.map((task, i) => (
+                        <button key={task.id}
+                          className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${i === pickerIndex ? 'bg-muted' : 'hover:bg-muted'}`}
+                          onClick={() => selectTask(task)}
+                          onMouseEnter={() => setPickerIndex(i)}
+                        >
+                          <span className="truncate">{task.title}</span>
+                          <span className="text-xs text-muted-foreground flex-shrink-0">{task.id}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -325,6 +397,68 @@ function ScheduleStep({
     }
   }, [dragging])
 
+  // Resize — drag bottom edge of sub task to change estimated minutes
+  const resizeState = useRef<{ index: number; startY: number; originalMin: number; originalItems: BatchCreatePlanItem[] } | null>(null)
+  const [resizing, setResizing] = useState(false)
+
+  const handleResizeMouseDown = (index: number, e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation()
+    const item = scheduleItems[index]
+    resizeState.current = {
+      index,
+      startY: e.clientY,
+      originalMin: item.estimatedMinutes,
+      originalItems: [...scheduleItems],
+    }
+    setResizing(true)
+  }
+
+  useEffect(() => {
+    if (!resizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rs = resizeState.current
+      if (!rs) return
+
+      const deltaPx = e.clientY - rs.startY
+      const deltaMin = Math.round(deltaPx / 12) * 5
+      const newMin = Math.max(5, rs.originalMin + deltaMin) // minimum 5 minutes
+      if (newMin === rs.originalMin) {
+        setScheduleItems([...rs.originalItems])
+        return
+      }
+
+      const minDiff = newMin - rs.originalMin
+      setScheduleItems(rs.originalItems.map((item, i) => {
+        if (i < rs.index) return item
+        const startMin = timeToMinutes(item.estimatedStart) + (i === rs.index ? 0 : minDiff)
+        const endMin = timeToMinutes(item.estimatedEnd) + minDiff + (i > rs.index ? 0 : 0)
+        // For the resized item: keep start, change end (duration = newMin)
+        // For subsequent items: shift both start and end by minDiff (maintain their durations and breaks)
+        if (i === rs.index) {
+          return { ...item, estimatedMinutes: newMin, estimatedEnd: minutesToTime(startMin + newMin) }
+        }
+        return {
+          ...item,
+          estimatedStart: minutesToTime(startMin),
+          estimatedEnd: minutesToTime(endMin),
+        }
+      }))
+    }
+
+    const handleMouseUp = () => {
+      setResizing(false)
+      resizeState.current = null
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [resizing])
+
   const handleSave = () => {
     onSave(scheduleItems)
   }
@@ -335,7 +469,7 @@ function ScheduleStep({
         <button className="flex items-center gap-2 text-sm hover:text-primary" onClick={onBack}>
           <ArrowLeft className="w-4 h-4" /> Back
         </button>
-        <h2 className="text-lg font-bold">Schedule Plan</h2>
+        <h2 className="text-lg font-bold">Schedule Plan ({scheduleItems.length} items)</h2>
         <button
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md flex items-center gap-2 text-sm"
           onClick={handleSave}
@@ -349,6 +483,7 @@ function ScheduleStep({
       </p>
 
       <div className="flex-1 overflow-auto space-y-0">
+        {scheduleItems.length === 0 && <div className="p-4 text-muted-foreground">No schedule items</div>}
         {scheduleItems.map((item, index) => {
           const breakBefore = index > 0
             ? timeToMinutes(item.estimatedStart) - timeToMinutes(scheduleItems[index - 1].estimatedEnd)
@@ -356,9 +491,9 @@ function ScheduleStep({
 
           return (
             <div key={index}>
-              {/* Break indicator */}
+              {/* Break indicator — proportional height */}
               {breakBefore > 0 && (
-                <div className="flex items-center gap-2 px-4" style={{ paddingTop: Math.max(2, breakBefore * 2) - 2 + 'px', paddingBottom: Math.max(2, breakBefore * 2) - 2 + 'px' }}>
+                <div className="flex items-center gap-2 px-4" style={{ height: Math.max(16, breakBefore * 3) + 'px' }}>
                   <div className="flex-1 border-t border-dashed border-muted-foreground/30" />
                   <span className="text-xs text-muted-foreground whitespace-nowrap">
                     {breakBefore} min break
@@ -367,27 +502,33 @@ function ScheduleStep({
                 </div>
               )}
 
-              {/* Sub-task row */}
+              {/* Sub-task row — proportional height */}
               <div
-                className={`border rounded-lg p-3 mx-2 bg-card ${dragging ? 'cursor-grabbing' : ''}`}
+                className="border rounded-lg mx-2 bg-card flex flex-col overflow-hidden"
+                style={{ height: Math.max(40, item.estimatedMinutes * 3) + 'px' }}
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-1 px-3 min-h-0">
                   <div className="flex-shrink-0 w-16 text-center">
                     <div className="text-sm font-mono text-muted-foreground">{item.estimatedStart}</div>
                     <div className="text-[10px] text-muted-foreground">to</div>
                     <div className="text-sm font-mono text-muted-foreground">{item.estimatedEnd}</div>
                   </div>
-                  <div className="flex-1">
-                    <div className="text-sm">● {item.content}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate">{item.content}</div>
                     <div className="text-xs text-muted-foreground">
                       {item.taskId} · {item.estimatedMinutes} min
                     </div>
                   </div>
                   <GripVertical
-                    className={`w-4 h-4 text-muted-foreground ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+                    className={`w-4 h-4 text-muted-foreground flex-shrink-0 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
                     onMouseDown={(e) => handleMouseDown(index, e)}
                   />
                 </div>
+                {/* Resize handle — drag bottom edge to adjust duration */}
+                <div
+                  className="h-[6px] flex-shrink-0 bg-muted-foreground/10 hover:bg-primary/30 cursor-ns-resize transition-colors rounded-b-lg"
+                  onMouseDown={(e) => handleResizeMouseDown(index, e)}
+                />
               </div>
             </div>
           )
@@ -438,12 +579,14 @@ export function PlanTheDay() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden">
-        {step === 1 ? (
+      {/* Use absolute stacking to keep both steps mounted (preserves state on back) */}
+      <div className="flex-1 relative overflow-hidden">
+        <div className={`absolute inset-0 ${step === 1 ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}>
           <EditPlanStep onNext={handleStepOneNext} />
-        ) : (
+        </div>
+        <div className={`absolute inset-0 ${step === 2 ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}>
           <ScheduleStep items={items} onBack={handleStepTwoBack} onSave={handleSave} />
-        )}
+        </div>
       </div>
     </div>
   )
