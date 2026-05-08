@@ -262,6 +262,53 @@ app.post('/api/search/rebuild', async (c) => {
   return c.json({ ok: true })
 })
 
+// --- Plan Items API ---
+
+app.get('/api/plan-items/has-plan', async (c) => {
+  const date = c.req.query('date')
+  if (!date) return c.json({ error: 'date query param required' }, 400)
+  const has = await service.hasPlanForDate(date)
+  return c.json({ hasPlan: has })
+})
+
+app.post('/api/plan-items/batch', async (c) => {
+  const body = await c.req.json()
+  const { planDate, items } = body
+  if (!planDate || !Array.isArray(items)) {
+    return c.json({ error: 'planDate and items array required' }, 400)
+  }
+  const planItems = await service.batchCreatePlanItems(planDate, items)
+  broadcastEvent('plan_created', { planDate }, c.get('clientId'))
+  return c.json(planItems, 201)
+})
+
+app.get('/api/plan-items', async (c) => {
+  const date = c.req.query('date')
+  if (!date) return c.json({ error: 'date query param required' }, 400)
+  const items = await service.getPlanItems(date)
+  return c.json(items)
+})
+
+app.put('/api/plan-items/:detailId', async (c) => {
+  const body = await c.req.json()
+  const detail = await service.updatePlanItem(c.req.param('detailId'), body)
+  if (!detail) return c.json({ error: 'Not found' }, 404)
+  return c.json(detail)
+})
+
+app.delete('/api/plan-items/:detailId', async (c) => {
+  const ok = await service.deletePlanItem(c.req.param('detailId'))
+  if (!ok) return c.json({ error: 'Not found' }, 404)
+  return c.body(null, 204)
+})
+
+app.delete('/api/plan-items', async (c) => {
+  const date = c.req.query('date')
+  if (!date) return c.json({ error: 'date query param required' }, 400)
+  const count = await service.clearPlanForDate(date)
+  return c.json({ cleared: count })
+})
+
 // --- Settings API ---
 app.get('/api/settings/export', async (c) => {
   const { data, path: dbPath } = exportDatabase()
@@ -292,6 +339,20 @@ app.post('/api/settings/import', async (c) => {
 
 app.get('/api/settings/info', async (c) => {
   return c.json(getSettingsInfo())
+})
+
+// Start of day offset (global shift in hours, e.g. 5 = day starts at 5am)
+import { getMetaValue, setMetaValue } from './db'
+app.get('/api/settings/start-of-day-offset', async (c) => {
+  const v = getMetaValue('start_of_day_offset')
+  return c.json({ offset: v ? parseInt(v, 10) : 5 })
+})
+
+app.put('/api/settings/start-of-day-offset', async (c) => {
+  const { offset } = await c.req.json()
+  const val = Math.max(0, Math.min(23, Number(offset) || 0))
+  setMetaValue('start_of_day_offset', String(val))
+  return c.json({ offset: val })
 })
 
 app.get('/api/version', async (c) => {

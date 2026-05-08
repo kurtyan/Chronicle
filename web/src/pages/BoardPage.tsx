@@ -7,7 +7,8 @@ import { X, AlertTriangle, Copy, Search, Pin, PauseCircle } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
-import { getTaskExtraInfoValue, getNextTaskId } from '@/services/api'
+import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
+import { getTaskExtraInfoValue, getNextTaskId, updatePlanItem, takeOverTask } from '@/services/api'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
@@ -434,21 +435,6 @@ export function BoardPage() {
       },
     }))
 
-    // Cmd+Q: AFK session (no isEditing check in original)
-    // Original ALWAYS intercepted Cmd+Q (preventDefault always called)
-    // so it never reached macOS Quit behavior
-    unregisters.push(registerShortcut({
-      id: 'afk-session',
-      combo: 'mod+q',
-      label: 'AFK session',
-      scope: 'page',
-      handler: () => {
-        if (stateRef.current.currentSession) {
-          doAfk()
-        }
-      },
-    }))
-
     // Cmd+T: Toggle Today filter (no isEditing check in original)
     unregisters.push(registerShortcut({
       id: 'toggle-today',
@@ -538,47 +524,6 @@ export function BoardPage() {
       scope: 'page',
       context: () => useTaskStore.getState().activeTaskId === DRAFT_ID,
       handler: () => setDraftPriority('LOW'),
-    }))
-
-    // Cmd+R: Refresh (no isEditing check in original)
-    unregisters.push(registerShortcut({
-      id: 'refresh',
-      combo: 'mod+r',
-      label: 'Refresh tasks',
-      scope: 'page',
-      handler: () => {
-        loadTodos()
-        loadCurrentSession()
-        const currentTaskId = stateRef.current.activeTaskId
-        if (currentTaskId && currentTaskId !== DRAFT_ID) {
-          setActiveTask(currentTaskId)
-        }
-      },
-    }))
-
-    // Cmd+W: Blur editor or cancel filter
-    // Original: only intercepted when action would actually be taken
-    unregisters.push(registerShortcut({
-      id: 'blur-editor',
-      combo: 'mod+w',
-      label: 'Blur editor',
-      scope: 'page',
-      context: () => {
-        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
-        const s = stateRef.current
-        return isInEditor || s.statusFilter === 'DONE' || s.statusFilter === 'DROPPED'
-      },
-      handler: () => {
-        const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
-        const s = stateRef.current
-        if (isInEditor) {
-          const editorEl = document.activeElement?.closest('[data-rich-editor="true"] .ProseMirror') as HTMLElement | null
-          editorEl?.blur()
-        } else if (s.statusFilter === 'DONE' || s.statusFilter === 'DROPPED') {
-          setStatusFilter(null)
-          collapseWithDelay()
-        }
-      },
     }))
 
     // Escape: Handle ESC
@@ -814,6 +759,23 @@ export function BoardPage() {
 
   const handleAfk = async () => {
     await doAfk()
+  }
+
+  const handlePlanAction = async (detailId: string, status: 'DOING' | 'DONE' | 'SKIPPED') => {
+    try {
+      if (status === 'DOING' && selectedTask) {
+        await takeOverTask(selectedTask.id)
+      }
+      await updatePlanItem(detailId, {
+        status,
+        actualStartedAt: status === 'DOING' ? Date.now() : undefined,
+        actualCompletedAt: status === 'DONE' ? Date.now() : undefined,
+      })
+      // Refresh entries to get updated plan status
+      if (selectedTask) {
+        await setActiveTask(selectedTask.id)
+      }
+    } catch { /* ignore */ }
   }
 
   const handleTitleEdit = () => {
@@ -1380,315 +1342,7 @@ export function BoardPage() {
                 </div>
               </>
             ) : selectedTask ? (
-              /* Scenario C: Existing task active */
-              <>
-                {/* Fixed top section */}
-                <div className="flex-shrink-0">
-                  {/* Task Info Bar */}
-                  <div className="h-10 px-[30px] flex items-center justify-between" data-testid="workspace-info-bar">
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground">
-                        {t(`type.${selectedTask.type.toLowerCase()}`)}
-                      </span>
-                      <span className={`text-xs px-2 py-0.5 rounded ${
-                        selectedTask.status === 'DONE' ? 'bg-green-500/10 text-green-600' :
-                        selectedTask.status === 'DOING' ? 'bg-blue-500/10 text-blue-600' :
-                        selectedTask.status === 'DROPPED' ? 'bg-red-500/10 text-red-600' :
-                        selectedTask.status === 'ON_HOLD' ? 'bg-orange-500/10 text-orange-600' :
-                        'bg-muted text-muted-foreground'
-                      }`}>
-                        {t(`status.${selectedTask.status.toLowerCase()}`)}
-                      </span>
-                      {selectedTask.status === 'PENDING' && (
-                        <>
-                          <button
-                            className="text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition"
-                            onClick={handleStartTask}
-                          >
-                            {t('workspace.start')}
-                          </button>
-                          <button
-                            className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 transition"
-                            onClick={() => handleDropTask(activeTaskId!)}
-                          >
-                            {t('workspace.drop')}
-                          </button>
-                        </>
-                      )}
-                      {selectedTask.status === 'DOING' && (
-                        <>
-                          <button
-                            className="text-xs px-3 py-1 rounded bg-green-500 text-white hover:bg-green-600 transition"
-                            onClick={handleCompleteTask}
-                          >
-                            {t('workspace.complete')}
-                          </button>
-                          <button
-                            className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 transition"
-                            onClick={() => handleDropTask(activeTaskId!)}
-                          >
-                            {t('workspace.drop')}
-                          </button>
-                        </>
-                      )}
-                      {selectedTask.status === 'DONE' && (
-                        <button
-                          className="text-xs px-3 py-1 rounded border border-muted text-muted-foreground hover:bg-muted transition"
-                          onClick={handleContinueTask}
-                        >
-                          {t('workspace.redo')}
-                        </button>
-                      )}
-                      {selectedTask.status === 'DROPPED' && null /* No buttons */}
-                      {selectedTask.status === 'ON_HOLD' && (
-                        <>
-                          <button
-                            className="text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition"
-                            onClick={handleContinueTask}
-                          >
-                            {t('workspace.continue')}
-                          </button>
-                          <button
-                            className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 transition"
-                            onClick={() => handleDropTask(activeTaskId!)}
-                          >
-                            {t('workspace.drop')}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {/* Session status indicator */}
-                      {currentSession ? (
-                        <TrackingStatusIndicator
-                          currentSession={currentSession}
-                          tasks={tasks}
-                          onNavigate={() => {
-                            if (currentSession.taskId) {
-                              setFilterTypes([])
-                              setStatusFilter(null)
-                              setActiveTask(currentSession.taskId)
-                            }
-                          }}
-                        />
-                      ) : (
-                        <IdleTimeIndicator />
-                      )}
-                      {/* Take Over button when tracking a different task than the one being viewed */}
-                      {currentSession && activeTaskId && activeTaskId !== DRAFT_ID && currentSession.taskId !== activeTaskId && (
-                        <button
-                          className="flex items-center gap-1 text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition"
-                          onClick={handleTakeOver}
-                        >
-                          {t('workspace.takeOver')}
-                        </button>
-                      )}
-                      {/* AFK button (manual fallback) */}
-                      {currentSession && (
-                        <button
-                          className="flex items-center gap-1 text-xs px-3 py-1 rounded bg-amber-500 text-white hover:bg-amber-600 transition"
-                          onClick={handleAfk}
-                        >
-                          {t('workspace.afk')}
-                        </button>
-                      )}
-                      {/* Take Over button when no session at all */}
-                      {!currentSession && (
-                        <button
-                          className="flex items-center gap-1 text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition"
-                          onClick={handleTakeOver}
-                        >
-                          {t('workspace.takeOver')}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Title with task ID */}
-                  <div className="px-[30px] py-2 flex items-start gap-3">
-                    {editingTitle ? (
-                      <input
-                        className="text-xl font-bold flex-1 bg-transparent border-b border-primary focus:outline-none"
-                        value={titleInput}
-                        onChange={(e) => {
-                          setTitleInput(e.target.value)
-                          if (activeTaskId) updateTask(activeTaskId, { title: e.target.value.trim() })
-                        }}
-                        onBlur={handleTitleSave}
-                        onKeyDown={handleTitleKeyDown}
-                        autoFocus
-                      />
-                    ) : (
-                      <h1
-                        className="text-xl font-bold cursor-pointer hover:text-muted-foreground transition flex-1"
-                        onClick={handleTitleEdit}
-                      >
-                        {searchMode && searchTokens.length > 0
-                          ? highlightText(selectedTask.title, searchTokens)
-                          : selectedTask.title}
-                      </h1>
-                    )}
-                    <div className="flex items-center gap-1 shrink-0 mt-1">
-                      <span className="text-xs text-muted-foreground/60 font-mono" title={selectedTask.id}>
-                        {selectedTask.id}
-                      </span>
-                      <button
-                        className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded"
-                        onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(selectedTask.id) }}
-                        title="Copy ID"
-                      >
-                        <Copy className="w-3 h-3" />
-                      </button>
-                      <button
-                        className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded text-xs font-medium"
-                        onClick={(e) => { e.stopPropagation(); handleClaudeSession() }}
-                        title={t('workspace.claude')}
-                      >
-                        {t('workspace.claude')}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Drop dialog */}
-                <Dialog open={showDropDialog} onOpenChange={(open) => { if (!open) { setShowDropDialog(false); setDropReason(''); setDropTargetId(null) } }}>
-                  <DialogContent className="sm:max-w-lg">
-                    <DialogHeader>
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center justify-center w-10 h-10 rounded-full bg-red-100 flex-shrink-0">
-                          <AlertTriangle className="w-5 h-5 text-red-600" />
-                        </div>
-                        <div>
-                          <DialogTitle className="text-lg">{t('workspace.dropConfirm')}</DialogTitle>
-                          <p className="text-sm text-muted-foreground mt-0.5">
-                            此操作将废弃任务「<span className="font-medium text-foreground">{dropTargetId ? tasks.find(t => t.id === dropTargetId)?.title : ''}</span>」，并终止当前工作记录
-                          </p>
-                        </div>
-                      </div>
-                    </DialogHeader>
-                    <DialogDescription className="text-sm text-muted-foreground">请说明废弃原因，以便后续追溯</DialogDescription>
-                    <textarea
-                      className="w-full text-sm px-3 py-2.5 border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary resize-none min-h-[80px]"
-                      value={dropReason}
-                      onChange={(e) => setDropReason(e.target.value)}
-                      placeholder="请输入废弃原因..."
-                      rows={3}
-                      autoFocus
-                    />
-                    <DialogFooter>
-                      <button
-                        className="px-5 py-2 text-sm rounded-lg border border-border hover:bg-muted transition"
-                        onClick={() => { setShowDropDialog(false); setDropReason(''); setDropTargetId(null) }}
-                      >
-                        {t('task.cancel')}
-                      </button>
-                      <button
-                        className="px-5 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={!dropReason.trim()}
-                        onClick={handleDropConfirm}
-                      >
-                        {t('workspace.drop')}
-                      </button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-
-                {/* Cancel confirm dialog */}
-                <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
-                  <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                      <div className="flex items-center gap-2 text-amber-600">
-                        <AlertTriangle className="w-5 h-5" />
-                        <DialogTitle>{t('board.cancelWithContentConfirm')}</DialogTitle>
-                      </div>
-                    </DialogHeader>
-                    <DialogDescription className="sr-only">Unsaved content confirmation</DialogDescription>
-                    <DialogFooter>
-                      <button
-                        className="px-4 py-2 text-sm rounded border hover:bg-muted transition"
-                        onClick={() => setShowCancelConfirm(false)}
-                      >
-                        {t('task.save')}
-                      </button>
-                      <button
-                        className="px-4 py-2 text-sm rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition"
-                        onClick={doCancelDraft}
-                      >
-                        {t('entry.cancel')}
-                      </button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-
-                {/* Scrollable content */}
-                <div ref={workspaceScrollRef} className="flex-1 overflow-y-auto px-[30px] pb-[10px]">
-                  <div className="space-y-4 pt-2">
-                    {/* Entries list */}
-                    {entryLoading ? (
-                      <div className="text-sm text-muted-foreground">{t('workspace.loading')}</div>
-                    ) : entries.length > 0 ? (
-                      <div className="space-y-4">
-                        {entries.map((entry: TaskEntry) => (
-                          <TaskEntryBlock
-                            key={entry.id}
-                            entry={entry}
-                            onSave={(id, newContent) => updateEntry(selectedTask.id, id, newContent)}
-                            editing={editingEntryId === entry.id}
-                            highlightTokens={searchMode ? searchTokens : undefined}
-                            taskId={selectedTask.id}
-                            onEditingChange={(editing) => {
-                              if (editing) {
-                                setEditingEntryId(entry.id)
-                                // Auto take over when starting to edit an entry
-                                if (activeTaskId && activeTaskId !== DRAFT_ID) {
-                                  autoTakeOver(activeTaskId)
-                                }
-                              } else {
-                                setEditingEntryId(null)
-                              }
-                            }}
-                          />
-                        ))}
-                      </div>
-                    ) : null}
-
-                    {/* Quick log entry — hidden when editing an entry */}
-                    {selectedTask.status !== 'DONE' && selectedTask.status !== 'DROPPED' && !editingEntryId && (
-                      <>
-                        <div ref={logEditorRef}>
-                          <RichEditor
-                            key={`log-${activeTaskId ?? 'none'}`}
-                            content={logContent}
-                            onChange={handleLogContentChange}
-                            placeholder={t('task.logPlaceholder')}
-                            variant="full"
-                            taskId={activeTaskId ?? undefined}
-                            onKeyDown={(e) => {
-                              if (e.ctrlKey && e.key === 'Enter') {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                const s = stateRef.current
-                                const storeLog = s.activeTaskId ? (useTaskStore.getState().logContentDraft[s.activeTaskId] || '') : ''
-                                if (s.activeTaskId && !isHtmlEmpty(storeLog)) {
-                                  submitEntry(s.activeTaskId, storeLog.trim(), 'log')
-                                  clearLogContentDraft(s.activeTaskId)
-                                }
-                              }
-                            }}
-                          />
-                        </div>
-                        <button
-                          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 text-sm"
-                          onClick={handleSubmitLog}
-                          disabled={isHtmlEmpty(logContent)}
-                        >
-                          {t('workspace.submitLog')}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </>
+              <TaskDetailWorkspace />
             ) : null}
           </>
         )}

@@ -41,8 +41,13 @@ export interface TaskEntry {
   id: string
   taskId: string
   content: string
-  type: 'body' | 'log'
+  type: 'body' | 'log' | 'plan'
   createdAt: number
+  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planDetailId?: string
+  planEstimatedMinutes?: number
+  planEstimatedStart?: string
+  planEstimatedEnd?: string
 }
 
 export interface WorkSession {
@@ -91,4 +96,43 @@ export interface AfkEvent {
   reason: string
   userNote: string | null
   submittedAt: number | null
+}
+
+export interface PlanItemDetail {
+  id: string
+  entryId: string
+  planDate: string
+  estimatedMinutes: number
+  estimatedStart: string | null
+  estimatedEnd: string | null
+  actualStartedAt: number | null
+  actualCompletedAt: number | null
+  status: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  sortOrder: number
+}
+
+export interface PlanItem extends TaskEntry {
+  detailId: string
+  estimatedMinutes: number
+  estimatedStart: string | null
+  estimatedEnd: string | null
+  actualStartedAt: number | null
+  actualCompletedAt: number | null
+  planStatus: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planDate: string
+  sortOrder: number
+}
+
+export interface BatchCreatePlanItem {
+  taskId: string
+  content: string
+  estimatedMinutes: number
+  estimatedStart: string
+  estimatedEnd: string
+  sortOrder: number
+}
+
+export interface BatchCreatePlanItemsRequest {
+  planDate: string
+  items: BatchCreatePlanItem[]
 }

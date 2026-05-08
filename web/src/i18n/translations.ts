@@ -8,6 +8,7 @@ export interface TranslationEntry {
 export const translations: Record<string, TranslationEntry> = {
   // Sidebar
   'sidebar.board': { 'zh-CN': '看板', en: 'Board' },
+  'sidebar.today': { 'zh-CN': '今日', en: 'Today' },
   'sidebar.report': { 'zh-CN': '报告', en: 'Report' },
 
   // Board page
@@ -211,6 +212,8 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.versionInfo': { 'zh-CN': '版本信息', en: 'Version Info' },
   'settings.uiVersion': { 'zh-CN': '前端版本', en: 'UI Version' },
   'settings.serverVersion': { 'zh-CN': 'Server 版本', en: 'Server Version' },
+  'settings.startOfDayOffset': { 'zh-CN': '每日起始偏移', en: 'Start of Day Offset' },
+  'settings.startOfDayOffsetHint': { 'zh-CN': '偏移小时数。例如 +5 表示凌晨 5 点前算作前一天，适合熬夜场景。Report 和 Today 页面会使用此配置。', en: 'Hours to shift the day boundary. E.g. +5 means times before 5am count as the previous day. Used by Report and Today pages.' },
 
   // Pin
   'task.pin': { 'zh-CN': '置顶', en: 'Pin' },

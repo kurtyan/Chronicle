@@ -1,4 +1,5 @@
 import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent } from '@/types'
+import type { PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -55,4 +56,13 @@ export interface ApiInterface {
     total: number
     hasMore: boolean
   }>
+  // Plan Items
+  hasPlanForDate(date: string): Promise<boolean>
+  batchCreatePlanItems(req: BatchCreatePlanItemsRequest): Promise<PlanItem[]>
+  fetchPlanItems(date: string): Promise<PlanItem[]>
+  updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null }): Promise<PlanItemDetail>
+  deletePlanItem(detailId: string): Promise<void>
+  clearPlanForDate(date: string): Promise<number>
+  fetchStartOfDayOffset(): Promise<number>
+  setStartOfDayOffset(offset: number): Promise<number>
 }

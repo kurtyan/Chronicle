@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
-import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats, fetchReportTasks, getAfkEvents } from '@/services/api'
+import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats, fetchReportTasks, getAfkEvents, fetchStartOfDayOffset, setStartOfDayOffset } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
 import type { Task, WorkSession, AfkEvent } from '@/types'
@@ -134,11 +134,11 @@ export function ReportPage() {
   const [selectedTask, setSelectedTask] = useState<ReportTask | null>(null)
   const [taskEntries, setTaskEntries] = useState<{ id: string; content: string; type: string; createdAt: number }[]>([])
 
-  // Work day offset
-  const [workDayOffset, setWorkDayOffset] = useState(() => {
-    const saved = localStorage.getItem('chronicle_workday_offset')
-    return saved ? parseInt(saved, 10) : 5
-  })
+  // Work day offset — read global setting, fallback to localStorage, default 5
+  const [workDayOffset, setWorkDayOffset] = useState(5)
+  useEffect(() => {
+    fetchStartOfDayOffset().then(offset => setWorkDayOffset(offset))
+  }, [])
 
   const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(val, max))
 
@@ -552,7 +552,7 @@ export function ReportPage() {
                   onClick={() => {
                     const v = Math.min(workDayOffset + 1, 12)
                     setWorkDayOffset(v)
-                    localStorage.setItem('chronicle_workday_offset', String(v))
+                    setStartOfDayOffset(v)
                   }}
                   title={t('report.workDayOffset')}
                 >
@@ -563,7 +563,7 @@ export function ReportPage() {
                   onClick={() => {
                     const v = Math.max(workDayOffset - 1, -12)
                     setWorkDayOffset(v)
-                    localStorage.setItem('chronicle_workday_offset', String(v))
+                    setStartOfDayOffset(v)
                   }}
                   title={t('report.workDayOffset')}
                 >

@@ -15,7 +15,7 @@
         "enable": true,
         "scope": {
           "allow": [
-            "/Users/yanke/**",
+            "$HOME/**",
             "/tmp/**"
           ],
           "requireLiteralLeadingDot": false

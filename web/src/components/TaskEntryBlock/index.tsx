@@ -5,7 +5,7 @@ import { RichEditor } from '@/components/RichEditor'
 import { useI18n } from '@/i18n/context'
 import { format } from 'date-fns'
 import { highlightHtml } from '@/lib/highlight'
-import { ZoomIn, ZoomOut, X } from 'lucide-react'
+import { ZoomIn, ZoomOut, X, Play, Check, SkipForward } from 'lucide-react'
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -45,7 +45,14 @@ interface TaskEntryBlockProps {
   editing?: boolean
   onEditingChange?: (editing: boolean) => void
   highlightTokens?: string[]
+  highlightPlan?: boolean
   taskId?: string
+  // Plan-specific props (only relevant when entry.type === 'plan')
+  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planDetailId?: string
+  onPlanStart?: (detailId: string) => void
+  onPlanComplete?: (detailId: string) => void
+  onPlanSkip?: (detailId: string) => void
 }
 
 interface ImageViewerProps {
@@ -135,7 +142,7 @@ function ImageViewer({ src, onClose }: ImageViewerProps) {
   )
 }
 
-export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEditingChange, highlightTokens, taskId }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEditingChange, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(entry.content)
@@ -297,14 +304,48 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
   return (
     <>
       <div
-        className="py-2 cursor-pointer hover:bg-muted/40 rounded transition group"
+        className={`py-2 cursor-pointer hover:bg-muted/40 rounded transition group ${highlightPlan ? 'bg-primary/10 ring-1 ring-primary' : ''}`}
         onMouseDown={handleMouseDown}
         onClick={handleContainerClick}
       >
         <div className="flex items-center gap-2 mb-2">
+          {entry.type === 'plan' && (
+            <span className={`text-xs px-1.5 py-0.5 rounded ${
+              planStatus === 'DONE' ? 'bg-green-500/10 text-green-500' :
+              planStatus === 'DOING' ? 'bg-blue-500/10 text-blue-500' :
+              planStatus === 'SKIPPED' ? 'bg-gray-500/10 text-gray-500' :
+              'bg-purple-500/10 text-purple-500'
+            }`}>
+              ▶ {planStatus ?? 'PLANNED'}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground">
             {format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm', { locale: dateLocale })}
           </span>
+          {entry.type === 'plan' && planDetailId && planStatus !== 'DONE' && planStatus !== 'SKIPPED' && (
+            <div className="flex gap-1 ml-auto">
+              {planStatus !== 'DOING' && (
+                <button
+                  className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
+                  onClick={(e) => { e.stopPropagation(); onPlanStart?.(planDetailId) }}
+                >
+                  <Play className="w-3 h-3 inline mr-0.5" />Start
+                </button>
+              )}
+              <button
+                className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600"
+                onClick={(e) => { e.stopPropagation(); onPlanComplete?.(planDetailId) }}
+              >
+                <Check className="w-3 h-3 inline mr-0.5" />Complete
+              </button>
+              <button
+                className="px-2 py-0.5 text-xs bg-gray-400 text-white rounded hover:bg-gray-500"
+                onClick={(e) => { e.stopPropagation(); onPlanSkip?.(planDetailId) }}
+              >
+                <SkipForward className="w-3 h-3 inline mr-0.5" />Skip
+              </button>
+            </div>
+          )}
         </div>
         <div
           className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"

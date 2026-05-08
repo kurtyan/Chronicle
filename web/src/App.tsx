@@ -2,7 +2,9 @@ import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-ro
 import { BoardPage } from './pages/BoardPage'
 import { ReportPage } from './pages/ReportPage'
 import { SettingsPage } from './pages/SettingsPage'
-import { ListTodo, BarChart3, Settings } from 'lucide-react'
+import { TodayPage } from './pages/TodayPage'
+import { PlanTheDay } from './pages/PlanTheDay'
+import { ListTodo, BarChart3, Settings, Calendar } from 'lucide-react'
 import { useI18n } from './i18n/context'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
@@ -157,6 +159,7 @@ function Sidebar() {
 
   const navItems = [
     { path: '/', icon: <ListTodo className="w-5 h-5" />, label: t('sidebar.board') },
+    { path: '/today', icon: <Calendar className="w-5 h-5" />, label: t('sidebar.today') },
     { path: '/report', icon: <BarChart3 className="w-5 h-5" />, label: t('sidebar.report') },
     { path: '/settings', icon: <Settings className="w-5 h-5" />, label: t('sidebar.settings') },
   ]
@@ -303,6 +306,43 @@ function Layout() {
     // Register app-level shortcuts
     const unregisters: (() => void)[] = []
 
+    // Cmd+Q: AFK (prevent app quit on all pages)
+    unregisters.push(registerShortcut({
+      id: 'afk-session',
+      combo: 'mod+q',
+      label: 'AFK session',
+      scope: 'app',
+      handler: () => {
+        const { doAfk, currentSession } = useTaskStore.getState()
+        if (currentSession) doAfk()
+      },
+    }))
+
+    // Cmd+W: Prevent window close (always intercepts, blurs editor if focused)
+    unregisters.push(registerShortcut({
+      id: 'prevent-close',
+      combo: 'mod+w',
+      label: 'Prevent window close',
+      scope: 'page',
+      handler: () => {
+        const editorEl = document.activeElement?.closest('[data-rich-editor="true"] .ProseMirror') as HTMLElement | null
+        if (editorEl) editorEl?.blur()
+      },
+    }))
+
+    // Cmd+R: Refresh tasks (prevent page reload on all pages)
+    unregisters.push(registerShortcut({
+      id: 'refresh',
+      combo: 'mod+r',
+      label: 'Refresh tasks',
+      scope: 'app',
+      handler: () => {
+        const s = useTaskStore.getState()
+        s.loadTodos()
+        s.loadCurrentSession()
+      },
+    }))
+
     // Cmd+Shift+F: Toggle search mode (works even in inputs, matching original)
     unregisters.push(registerShortcut({
       id: 'toggle-search',
@@ -312,7 +352,7 @@ function Layout() {
       handler: () => setSearchModeRef.current(true),
     }))
 
-    // Cmd+1/2/3: Sidebar navigation
+    // Cmd+1/2/3/4: Sidebar navigation
     unregisters.push(registerShortcut({
       id: 'nav-board',
       combo: 'mod+1',
@@ -321,15 +361,22 @@ function Layout() {
       handler: () => navigateRef.current('/'),
     }))
     unregisters.push(registerShortcut({
-      id: 'nav-report',
+      id: 'nav-today',
       combo: 'mod+2',
+      label: 'Go to Today',
+      scope: 'app',
+      handler: () => navigateRef.current('/today'),
+    }))
+    unregisters.push(registerShortcut({
+      id: 'nav-report',
+      combo: 'mod+3',
       label: 'Go to Report',
       scope: 'app',
       handler: () => navigateRef.current('/report'),
     }))
     unregisters.push(registerShortcut({
       id: 'nav-settings',
-      combo: 'mod+3',
+      combo: 'mod+4',
       label: 'Go to Settings',
       scope: 'app',
       handler: () => navigateRef.current('/settings'),
@@ -396,6 +443,8 @@ function Layout() {
       <main className="flex-1 overflow-hidden">
         <Routes>
           <Route path="/" element={<BoardPage />} />
+          <Route path="/today" element={<TodayPage />} />
+          <Route path="/today/plan" element={<PlanTheDay />} />
           <Route path="/report" element={<ReportPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogD
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { isTauriEnv, ensureApiReady, clientId } from '@/services/httpApi'
+import { fetchStartOfDayOffset, setStartOfDayOffset } from '@/services/api'
 
 interface SettingsInfo {
   dbPath: string
@@ -43,6 +44,7 @@ export function SettingsPage() {
   const [info, setInfo] = useState<SettingsInfo | null>(null)
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [dayOffset, setDayOffset] = useState(5)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
@@ -100,6 +102,10 @@ export function SettingsPage() {
       .then(r => r.json())
       .then(data => setServerVersion(data.version))
       .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetchStartOfDayOffset().then(setDayOffset).catch(() => {})
   }, [])
 
   const handleSaveLanguage = async (lang: string) => {
@@ -227,6 +233,29 @@ export function SettingsPage() {
   return (
     <div className="p-6 max-w-2xl mx-auto h-screen overflow-y-auto">
       <h1 className="text-2xl font-semibold mb-6">{t('settings.title')}</h1>
+
+      {/* Start of Day Offset */}
+      <div className="bg-card rounded-lg border p-4 mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Clock className="w-5 h-5 text-muted-foreground" />
+          <h2 className="text-lg font-medium">{t('settings.startOfDayOffset')}</h2>
+        </div>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={0}
+            max={23}
+            value={dayOffset}
+            onChange={(e) => setDayOffset(parseInt(e.target.value))}
+            onMouseUp={() => setStartOfDayOffset(dayOffset)}
+            className="flex-1"
+          />
+          <span className="text-sm font-mono w-16 text-right">+{dayOffset}h</span>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          {t('settings.startOfDayOffsetHint')}
+        </p>
+      </div>
 
       {/* Database Info */}
       <div className="bg-card rounded-lg border p-4 mb-6">

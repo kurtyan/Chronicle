@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -245,5 +245,45 @@ export const httpApi: ApiInterface = {
       },
     })
     return data
+  },
+
+  // Plan Items
+  async hasPlanForDate(date: string): Promise<boolean> {
+    const { data } = await (await withClientId()).get<{ hasPlan: boolean }>('/api/plan-items/has-plan', { params: { date } })
+    return data.hasPlan
+  },
+
+  async batchCreatePlanItems(req: BatchCreatePlanItemsRequest): Promise<PlanItem[]> {
+    const { data } = await (await withClientId()).post<PlanItem[]>('/api/plan-items/batch', req)
+    return data
+  },
+
+  async fetchPlanItems(date: string): Promise<PlanItem[]> {
+    const { data } = await (await withClientId()).get<PlanItem[]>('/api/plan-items', { params: { date } })
+    return data
+  },
+
+  async updatePlanItem(detailId: string, body: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null }): Promise<PlanItemDetail> {
+    const { data } = await (await withClientId()).put<PlanItemDetail>(`/api/plan-items/${detailId}`, body)
+    return data
+  },
+
+  async deletePlanItem(detailId: string): Promise<void> {
+    await (await withClientId()).delete(`/api/plan-items/${detailId}`)
+  },
+
+  async clearPlanForDate(date: string): Promise<number> {
+    const { data } = await (await withClientId()).delete<{ cleared: number }>('/api/plan-items', { params: { date } })
+    return data.cleared
+  },
+
+  async fetchStartOfDayOffset(): Promise<number> {
+    const { data } = await (await withClientId()).get<{ offset: number }>('/api/settings/start-of-day-offset')
+    return data.offset
+  },
+
+  async setStartOfDayOffset(offset: number): Promise<number> {
+    const { data } = await (await withClientId()).put<{ offset: number }>('/api/settings/start-of-day-offset', { offset })
+    return data.offset
   },
 }

@@ -29,8 +29,13 @@ export interface TaskEntry {
   id: string
   taskId: string
   content: string
-  type: 'body' | 'log'
+  type: 'body' | 'log' | 'plan'
   createdAt: number
+  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planDetailId?: string
+  planEstimatedMinutes?: number
+  planEstimatedStart?: string
+  planEstimatedEnd?: string
 }
 
 function rowToTask(row: any): Task {
@@ -54,8 +59,13 @@ function rowToTaskEntry(row: any): TaskEntry {
     id: row.id,
     taskId: row.task_id,
     content: row.content,
-    type: row.type as 'body' | 'log',
+    type: row.type as 'body' | 'log' | 'plan',
     createdAt: row.created_at,
+    planStatus: row.plan_status ?? undefined,
+    planDetailId: row.plan_detail_id ?? undefined,
+    planEstimatedMinutes: row.plan_estimated_minutes ?? undefined,
+    planEstimatedStart: row.plan_estimated_start ?? undefined,
+    planEstimatedEnd: row.plan_estimated_end ?? undefined,
   }
 }
 
@@ -204,12 +214,21 @@ export function deleteTask(id: string): boolean {
 
 export function getTaskEntries(taskId: string): TaskEntry[] {
   return queryAll(
-    'SELECT * FROM task_entries WHERE task_id = ? ORDER BY created_at ASC',
+    `SELECT te.*,
+      pid.status as plan_status,
+      pid.id as plan_detail_id,
+      pid.estimated_minutes as plan_estimated_minutes,
+      pid.estimated_start as plan_estimated_start,
+      pid.estimated_end as plan_estimated_end
+     FROM task_entries te
+     LEFT JOIN plan_item_details pid ON pid.entry_id = te.id
+     WHERE te.task_id = ?
+     ORDER BY te.created_at ASC`,
     [taskId]
   ).map(rowToTaskEntry)
 }
 
-export function createTaskEntry(taskId: string, content: string, type: 'body' | 'log' = 'log'): TaskEntry {
+export function createTaskEntry(taskId: string, content: string, type: 'body' | 'log' | 'plan' = 'log'): TaskEntry {
   const task = getTaskById(taskId)
   if (!task) throw new Error('Task not found')
 
@@ -233,7 +252,7 @@ export function updateTaskEntry(entryId: string, content: string): TaskEntry | n
 
   run('UPDATE task_entries SET content = ? WHERE id = ?', [content, entryId])
   run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), existing.task_id])
-  indexEntry(existing.task_id, entryId, content, existing.type as 'body' | 'log')
+  indexEntry(existing.task_id, entryId, content, existing.type as 'body' | 'log' | 'plan')
   return rowToTaskEntry(queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])!)
 }
 

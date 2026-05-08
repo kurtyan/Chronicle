@@ -78,6 +78,22 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS plan_item_details (
+      id TEXT PRIMARY KEY,
+      entry_id TEXT NOT NULL UNIQUE,
+      plan_date TEXT NOT NULL,
+      estimated_minutes INTEGER NOT NULL,
+      estimated_start TEXT,
+      estimated_end TEXT,
+      actual_started_at INTEGER,
+      actual_completed_at INTEGER,
+      status TEXT NOT NULL DEFAULT 'PLANNED',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (entry_id) REFERENCES task_entries(id)
+    )
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS _meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

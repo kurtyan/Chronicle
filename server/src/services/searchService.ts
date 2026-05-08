@@ -11,9 +11,9 @@ export function indexTask(taskId: string, title: string): void {
   )
 }
 
-export function indexEntry(taskId: string, _entryId: string, content: string, type: 'body' | 'log'): void {
+export function indexEntry(taskId: string, _entryId: string, content: string, type: 'body' | 'log' | 'plan'): void {
   const db = getDb()
-  const source = type === 'body' ? 'entry_body' : 'entry_log'
+  const source = type === 'body' ? 'entry_body' : type === 'log' ? 'entry_log' : 'entry_plan'
   db.prepare('DELETE FROM tasks_fts WHERE task_id = ? AND source = ?').run(taskId, source)
   db.prepare('INSERT INTO tasks_fts(task_id, source, content) VALUES (?, ?, ?)').run(
     taskId, source, tokenize(content)
@@ -24,8 +24,8 @@ export function removeTaskFromIndex(taskId: string): void {
   getDb().prepare('DELETE FROM tasks_fts WHERE task_id = ?').run(taskId)
 }
 
-export function removeEntryFromIndex(taskId: string, type: 'body' | 'log'): void {
-  const source = type === 'body' ? 'entry_body' : 'entry_log'
+export function removeEntryFromIndex(taskId: string, type: 'body' | 'log' | 'plan'): void {
+  const source = type === 'body' ? 'entry_body' : type === 'log' ? 'entry_log' : 'entry_plan'
   getDb().prepare('DELETE FROM tasks_fts WHERE task_id = ? AND source = ?').run(taskId, source)
 }
 

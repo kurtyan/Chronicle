@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+const serverPort = process.env.CHRONICLE_SERVER_PORT ?? '8083'
+const apiTarget = `http://localhost:${serverPort}`
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -13,7 +16,7 @@ export default defineConfig({
     port: 5175,
     proxy: {
       '/api/events': {
-        target: 'http://localhost:8083',
+        target: apiTarget,
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq, req) => {
@@ -23,7 +26,7 @@ export default defineConfig({
         },
       },
       '/api': {
-        target: 'http://localhost:8083',
+        target: apiTarget,
         changeOrigin: true,
       },
     },

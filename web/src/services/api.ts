@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -127,4 +127,32 @@ export async function getAfkEvents(start?: number, end?: number): Promise<AfkEve
 
 export async function fetchReportTasks(params: { start: number; end: number; filter: string; page?: number; pageSize?: number }) {
   return (await getApi()).fetchReportTasks(params)
+}
+
+// Plan Items
+export async function hasPlanForDate(date: string): Promise<boolean> {
+  return (await getApi()).hasPlanForDate(date)
+}
+export async function batchCreatePlanItems(req: BatchCreatePlanItemsRequest): Promise<PlanItem[]> {
+  return (await getApi()).batchCreatePlanItems(req)
+}
+export async function fetchPlanItems(date: string): Promise<PlanItem[]> {
+  return (await getApi()).fetchPlanItems(date)
+}
+export async function updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null }): Promise<PlanItemDetail> {
+  return (await getApi()).updatePlanItem(detailId, data)
+}
+export async function deletePlanItem(detailId: string): Promise<void> {
+  return (await getApi()).deletePlanItem(detailId)
+}
+export async function clearPlanForDate(date: string): Promise<number> {
+  return (await getApi()).clearPlanForDate(date)
+}
+
+// Start of day offset
+export async function fetchStartOfDayOffset(): Promise<number> {
+  return (await getApi()).fetchStartOfDayOffset()
+}
+export async function setStartOfDayOffset(offset: number): Promise<number> {
+  return (await getApi()).setStartOfDayOffset(offset)
 }
