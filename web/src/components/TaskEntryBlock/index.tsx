@@ -168,7 +168,6 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
 
   const handleSave = () => {
     if (isHtmlEmpty(draftContent)) {
-      // Don't save empty content, stay in editing mode
       return
     }
     onSave(entry.id, draftContent.trim())
@@ -177,6 +176,11 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
     } else {
       setInternalEditing(false)
     }
+  }
+
+  const handleSilentSave = () => {
+    if (isHtmlEmpty(draftContent)) return
+    onSave(entry.id, draftContent.trim())
   }
 
   const handleCancel = () => {
@@ -192,6 +196,16 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
     return (
       <div className="py-2">
         <div className="flex items-center gap-2 mb-2">
+          {entry.type === 'plan' && (
+            <span className={`text-xs px-1.5 py-0.5 rounded ${
+              planStatus === 'DONE' ? 'bg-green-500/10 text-green-500' :
+              planStatus === 'DOING' ? 'bg-blue-500/10 text-blue-500' :
+              planStatus === 'SKIPPED' ? 'bg-gray-500/10 text-gray-500' :
+              'bg-purple-500/10 text-purple-500'
+            }`}>
+              ▶ {planStatus ?? 'PLANNED'}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground">
             {format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm', { locale: dateLocale })}
           </span>
@@ -205,7 +219,11 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
           autoFocus
           taskId={taskId}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') {
+            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+              e.preventDefault()
+              e.stopPropagation()
+              handleSilentSave()
+            } else if (e.key === 'Escape') {
               e.preventDefault()
               e.stopPropagation()
               handleCancel()

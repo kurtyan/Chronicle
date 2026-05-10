@@ -259,8 +259,8 @@ function EditPlanStep({
             </div>
           )}
 
-          {/* Active edit row */}
-          <div className="flex gap-2 items-center">
+          {/* Active edit row — indent sub task editor to match committed rows */}
+          <div className={`flex gap-2 items-center ${editTaskId ? 'pl-6' : ''}`}>
             {editMode === 'duration' ? (
               <>
                 <input className="flex-1 px-2 py-1.5 border rounded text-sm bg-background" value={editValue} readOnly />
@@ -543,9 +543,12 @@ export function PlanTheDay() {
   const [step, setStep] = useState<1 | 2>(1)
   const [items, setItems] = useState<BatchCreatePlanItem[]>([])
 
+  const [scheduleKey, setScheduleKey] = useState(0)
+
   const handleStepOneNext = (newItems: BatchCreatePlanItem[]) => {
     setItems(newItems)
     setStep(2)
+    setScheduleKey(k => k + 1)
   }
 
   const handleStepTwoBack = () => {
@@ -585,7 +588,7 @@ export function PlanTheDay() {
           <EditPlanStep onNext={handleStepOneNext} />
         </div>
         <div className={`absolute inset-0 ${step === 2 ? 'z-10' : 'z-0 pointer-events-none opacity-0'}`}>
-          <ScheduleStep items={items} onBack={handleStepTwoBack} onSave={handleSave} />
+          <ScheduleStep key={scheduleKey} items={items} onBack={handleStepTwoBack} onSave={handleSave} />
         </div>
       </div>
     </div>

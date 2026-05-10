@@ -372,7 +372,11 @@ function RichEditorInner({
     const handler = (e: KeyboardEvent) => {
       if (!containerRef.current?.contains(document.activeElement)) return
 
-      if (e.key === 'Escape') {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault()
+        e.stopPropagation()
+        onKeyDown(e)
+      } else if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
         editor.commands.blur()
