@@ -26,7 +26,7 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
   const {
     selectedTask, entries, entryLoading, activeTaskId, tasks,
     currentSession, searchMode, searchTokens,
-    updateTask, markDone, submitEntry, updateEntry,
+    updateTask, markDone, submitEntry, updateEntry, deleteEntry,
     takeOver, doAfk, autoTakeOver, doDrop,
     setActiveTask, setLogContentDraft, clearLogContentDraft,
   } = useTaskStore()
@@ -409,6 +409,7 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
                   key={entry.id}
                   entry={entry}
                   onSave={(id, newContent) => updateEntry(selectedTask.id, id, newContent)}
+                  onDelete={(id) => deleteEntry(selectedTask.id, id)}
                   editing={editingEntryId === entry.id}
                   highlightTokens={searchMode ? searchTokens : undefined}
                   highlightPlan={entry.id === highlightEntryId}

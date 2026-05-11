@@ -5,7 +5,7 @@ import { RichEditor } from '@/components/RichEditor'
 import { useI18n } from '@/i18n/context'
 import { format } from 'date-fns'
 import { highlightHtml } from '@/lib/highlight'
-import { ZoomIn, ZoomOut, X, Play, Check, SkipForward } from 'lucide-react'
+import { ZoomIn, ZoomOut, X, Play, Check, SkipForward, Trash2 } from 'lucide-react'
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -42,6 +42,7 @@ function convertImageSrcs(html: string): string {
 interface TaskEntryBlockProps {
   entry: TaskEntry
   onSave: (id: string, newContent: string) => void
+  onDelete?: (id: string) => void
   editing?: boolean
   onEditingChange?: (editing: boolean) => void
   highlightTokens?: string[]
@@ -142,11 +143,12 @@ function ImageViewer({ src, onClose }: ImageViewerProps) {
   )
 }
 
-export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEditingChange, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(entry.content)
   const [imageViewerSrc, setImageViewerSrc] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
 
   const editing = externalEditing ?? internalEditing
@@ -189,6 +191,18 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
       onEditingChange(false)
     } else {
       setInternalEditing(false)
+    }
+  }
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirmDelete) {
+      setConfirmDelete(true)
+      // Auto-reset confirmation after 3s
+      setTimeout(() => setConfirmDelete(false), 3000)
+    } else {
+      setConfirmDelete(false)
+      onDelete?.(entry.id)
     }
   }
 
@@ -340,6 +354,15 @@ export function TaskEntryBlock({ entry, onSave, editing: externalEditing, onEdit
           <span className="text-xs text-muted-foreground">
             {format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm', { locale: dateLocale })}
           </span>
+          <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+            <button
+              className={`p-1 rounded transition ${confirmDelete ? 'bg-red-500 text-white' : 'text-muted-foreground hover:text-red-500 hover:bg-red-500/10'}`}
+              onClick={handleDeleteClick}
+              title={confirmDelete ? t('entry.confirmDelete') : t('entry.delete')}
+            >
+              {confirmDelete ? <X className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
+            </button>
+          </div>
           {entry.type === 'plan' && planDetailId && planStatus !== 'DONE' && planStatus !== 'SKIPPED' && (
             <div className="flex gap-1 ml-auto">
               {planStatus !== 'DOING' && (

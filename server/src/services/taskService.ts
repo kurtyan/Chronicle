@@ -256,6 +256,16 @@ export function updateTaskEntry(entryId: string, content: string): TaskEntry | n
   return rowToTaskEntry(queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])!)
 }
 
+export function deleteTaskEntry(entryId: string): boolean {
+  const existing = queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])
+  if (!existing) return false
+
+  run('DELETE FROM task_entries WHERE id = ?', [entryId])
+  run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), existing.task_id])
+  removeEntryFromIndex(entryId, existing.task_id as string)
+  return true
+}
+
 // --- Work Sessions ---
 
 export interface WorkSession {

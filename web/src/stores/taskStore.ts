@@ -46,6 +46,7 @@ interface TaskState {
   setOnHold: (id: string) => Promise<Task | null>
   submitEntry: (taskId: string, content: string, type?: 'body' | 'log') => Promise<TaskEntry>
   updateEntry: (taskId: string, entryId: string, content: string) => Promise<TaskEntry | null>
+  deleteEntry: (taskId: string, entryId: string) => Promise<void>
   setFilterTypes: (types: TaskType[]) => void
   toggleFilterType: (type: TaskType) => void
   setStatusFilter: (filter: 'DONE' | 'DROPPED' | 'ON_HOLD' | null) => void
@@ -323,6 +324,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       }
     })
     return entry
+  },
+
+  deleteEntry: async (taskId, entryId) => {
+    await api.deleteTaskEntry(taskId, entryId)
+    // Re-fetch the task and refresh entries
+    const [updatedTask, freshEntries] = await Promise.all([
+      api.getTaskById(taskId),
+      api.fetchTaskEntries(taskId),
+    ])
+    set((state) => {
+      const nextTasks = updatedTask
+        ? state.tasks.map((t) => (t.id === taskId ? updatedTask : t)).sort((a, b) => b.updatedAt - a.updatedAt)
+        : state.tasks
+      return {
+        entries: freshEntries,
+        tasks: nextTasks,
+        selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
+      }
+    })
   },
 
   setFilterTypes: (types) => set({ filterTypes: types }),

@@ -46,6 +46,9 @@ export async function submitTaskEntry(taskId: string, content: string, type?: 'b
 export async function updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
   return (await getApi()).updateTaskEntry(taskId, entryId, content)
 }
+export async function deleteTaskEntry(taskId: string, entryId: string): Promise<void> {
+  return (await getApi()).deleteTaskEntry(taskId, entryId)
+}
 export async function takeOverTask(taskId: string): Promise<WorkSession> {
   return (await getApi()).takeOverTask(taskId)
 }

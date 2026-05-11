@@ -296,6 +296,11 @@ export class EmbeddedApiProvider implements ApiInterface {
     return updated ? entryRowToTaskEntry(updated) : null
   }
 
+  async deleteTaskEntry(_taskId: string, entryId: string): Promise<void> {
+    await this.ensureDb()
+    await this.runAndPersist('DELETE FROM task_entries WHERE id = ?', [entryId])
+  }
+
   // --- Work Sessions ---
 
   async takeOverTask(taskId: string): Promise<WorkSession> {

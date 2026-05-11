@@ -37,6 +37,8 @@ export const translations: Record<string, TranslationEntry> = {
   'entry.logLabel': { 'zh-CN': '工作记录', en: 'Work Log' },
   'entry.save': { 'zh-CN': '保存', en: 'Save' },
   'entry.cancel': { 'zh-CN': '取消', en: 'Cancel' },
+  'entry.delete': { 'zh-CN': '删除', en: 'Delete' },
+  'entry.confirmDelete': { 'zh-CN': '确认删除', en: 'Confirm' },
   'entry.editPlaceholder': { 'zh-CN': '编辑内容...', en: 'Edit...' },
 
   // Task

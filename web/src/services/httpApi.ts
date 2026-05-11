@@ -116,6 +116,10 @@ export const httpApi: ApiInterface = {
     return data
   },
 
+  async deleteTaskEntry(taskId: string, entryId: string): Promise<void> {
+    await (await withClientId()).delete(`/api/tasks/${taskId}/logs/${entryId}`)
+  },
+
   async takeOverTask(taskId: string): Promise<WorkSession> {
     const { data } = await (await withClientId()).post<WorkSession>(`/api/tasks/${taskId}/takeover`)
     return data

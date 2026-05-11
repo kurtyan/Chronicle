@@ -130,6 +130,14 @@ app.put('/api/tasks/:id/logs/:entryId', async (c) => {
   return c.json(entry)
 })
 
+app.delete('/api/tasks/:id/logs/:entryId', async (c) => {
+  const ok = await service.deleteTaskEntry(c.req.param('id'), c.req.param('entryId'))
+  if (!ok) return c.json({ error: 'Not found' }, 404)
+  saveConversationId(c, c.req.param('id'))
+  broadcastEvent('entry_deleted', { taskId: c.req.param('id'), entryId: c.req.param('entryId') }, c.get('clientId'))
+  return c.json({ success: true })
+})
+
 app.put('/api/tasks/:id/done', async (c) => {
   const task = await service.markTaskDone(c.req.param('id'))
   if (!task) return c.json({ error: 'Not found' }, 404)
