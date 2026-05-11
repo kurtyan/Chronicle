@@ -1,24 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
-import type { Task, TaskType, TaskEntry, SearchResult } from '@/types'
+import type { Task, TaskType, SearchResult } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { X, AlertTriangle, Copy, Search, Pin, PauseCircle } from 'lucide-react'
+import { X, Search, Pin, PauseCircle } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
-import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
-import { getTaskExtraInfoValue, getNextTaskId, updatePlanItem, takeOverTask } from '@/services/api'
-import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { getNextTaskId } from '@/services/api'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
 import { registerShortcut } from '@/shortcuts/registry'
 
 const DRAFT_ID = '__draft__'
-
-function isTauriEnv(): boolean {
-  return typeof window !== 'undefined' && !!(window as any).__TAURI__
-}
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -33,19 +27,16 @@ function isHtmlEmpty(html: string): boolean {
 export function BoardPage() {
   const { t } = useI18n()
   const {
-    tasks, loading, error, activeTaskId, selectedTask, entries, entryLoading, filterTypes,
+    tasks, loading, error, activeTaskId, selectedTask, entries, filterTypes,
     statusFilter, isTodayFilter, draftTask, draftTaskId, currentSession, lastAfkTime, pinnedIds,
     searchMode, searchQuery, searchResults, searchTokens,
     loadTodos, setActiveTask, updateTask, markDone, setOnHold,
-    submitEntry, updateEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
+    submitEntry, setFilterTypes, toggleFilterType, setStatusFilter, setTodayFilter,
     startDraft, commitDraft, cancelDraft,
-    takeOver, doAfk, autoTakeOver, doDrop, loadCurrentSession, loadPinnedIds, togglePinned,
+    takeOver, doAfk, loadCurrentSession, loadPinnedIds, togglePinned,
     setSearchMode, doSearch,
-    setLogContentDraft, clearLogContentDraft,
+    clearLogContentDraft,
   } = useTaskStore()
-
-  // Per-task log drafts from store
-  const logContent = activeTaskId ? (useTaskStore.getState().logContentDraft[activeTaskId] || '') : ''
 
   // Load current session and pinned IDs on mount
   useEffect(() => {
@@ -171,28 +162,12 @@ export function BoardPage() {
   // (was: const [logContent, setLogContent] = useState(''))
 
   // Auto take over when log content becomes non-empty
-  const prevLogEmpty = useRef(true)
-  const handleLogContentChange = useCallback((html: string) => {
-    const isEmpty = isHtmlEmpty(html)
-    setLogContentDraft(activeTaskId ?? '', html)
-    // Auto take over when content transitions from empty to non-empty
-    if (prevLogEmpty.current && !isEmpty && activeTaskId && activeTaskId !== DRAFT_ID) {
-      autoTakeOver(activeTaskId)
-    }
-    prevLogEmpty.current = isEmpty
-  }, [activeTaskId, autoTakeOver])
 
   // Entry editing state
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null)
 
-  // Title editing
-  const [editingTitle, setEditingTitle] = useState(false)
-  const [titleInput, setTitleInput] = useState('')
-
   // Drop dialog
-  const [dropReason, setDropReason] = useState('')
   const [showDropDialog, setShowDropDialog] = useState(false)
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null)
 
   // Pin context menu
   const [pinMenu, setPinMenu] = useState<{ taskId: string; x: number; y: number } | null>(null)
@@ -226,7 +201,6 @@ export function BoardPage() {
 
   // Refs for draft editing
   const titleInputRef = useRef<HTMLInputElement>(null)
-  const logEditorRef = useRef<HTMLDivElement>(null)
   const workspaceScrollRef = useRef<HTMLDivElement>(null)
 
   // Refs to access latest state without stale closures - MUST be defined before handleEscKey
@@ -280,8 +254,6 @@ export function BoardPage() {
     const s = stateRef.current
     if (s.showDropDialog) {
       setShowDropDialog(false)
-      setDropReason('')
-      setDropTargetId(null)
     } else if (s.activeTaskId === DRAFT_ID) {
       if (s.draftTitle.trim()) {
         startDraft({ title: s.draftTitle, body: s.draftBody, type: s.draftType, priority: s.draftPriority, tags: s.draftTags.split(',').map((x: string) => x.trim()).filter(Boolean), dueDate: s.draftDueDate ? new Date(s.draftDueDate).getTime() : null })
@@ -672,67 +644,10 @@ export function BoardPage() {
     return bPinned - aPinned || b.updatedAt - a.updatedAt
   })
 
-  const handleStartTask = async () => {
-    if (!activeTaskId || isDraftActive) return
-    await updateTask(activeTaskId, { status: 'DOING' })
-  }
-
-  const handleCompleteTask = async () => {
-    if (!activeTaskId || isDraftActive) return
-    if (!isHtmlEmpty(logContent)) {
-      await submitEntry(activeTaskId, logContent.trim(), 'log')
-      clearLogContentDraft(activeTaskId)
-    }
-    // markDone now auto-AFKs if working on this task
-    await markDone(activeTaskId)
-  }
-
-  const handleContinueTask = async () => {
-    if (!activeTaskId || isDraftActive) return
-    await updateTask(activeTaskId, { status: 'DOING' })
-  }
-
-  const handleDropTask = (taskId: string) => {
-    setDropTargetId(taskId)
-    setDropReason('')
-    setShowDropDialog(true)
-  }
-
-  const handleDropConfirm = async () => {
-    if (!dropTargetId || !dropReason.trim()) return
-    await doDrop(dropTargetId, dropReason.trim())
-    setShowDropDialog(false)
-    setDropReason('')
-    setDropTargetId(null)
-    setPinMenu(null)
-  }
-
   const handleTogglePin = async (taskId: string) => {
     await togglePinned(taskId)
     setPinMenu(null)
     loadTodos() // Refresh the list
-  }
-
-  const handleClaudeSession = async () => {
-    if (!activeTaskId) return
-    const conversationId = await getTaskExtraInfoValue(activeTaskId, 'claude_conversation_id')
-    const cmd = conversationId
-      ? `cd ~/IdeaProjects && claude -r ${conversationId}`
-      : `cd ~/IdeaProjects && claude 'chronicle taskId: ${activeTaskId}'`
-
-    // Try Tauri first, fall back to clipboard
-    if (isTauriEnv()) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('run_terminal_command', { command: cmd })
-        return
-      } catch {
-        // Fall back to clipboard
-      }
-    }
-    // Browser fallback: copy command to clipboard
-    await navigator.clipboard.writeText(cmd)
-    alert(`Copied to clipboard:\n${cmd}`)
   }
 
   const handleSetOnHold = async (taskId: string) => {
@@ -748,65 +663,14 @@ export function BoardPage() {
     setPinMenu(null)
   }
 
-  const handleTakeOver = async () => {
-    if (!activeTaskId || isDraftActive) return
-    // If taking over another task, close current session
-    if (currentSession) {
-      await doAfk()
-    }
-    await takeOver(activeTaskId)
-  }
-
   const handleAfk = async () => {
     await doAfk()
-  }
-
-  const handlePlanAction = async (detailId: string, status: 'DOING' | 'DONE' | 'SKIPPED') => {
-    try {
-      if (status === 'DOING' && selectedTask) {
-        await takeOverTask(selectedTask.id)
-      }
-      await updatePlanItem(detailId, {
-        status,
-        actualStartedAt: status === 'DOING' ? Date.now() : undefined,
-        actualCompletedAt: status === 'DONE' ? Date.now() : undefined,
-      })
-      // Refresh entries to get updated plan status
-      if (selectedTask) {
-        await setActiveTask(selectedTask.id)
-      }
-    } catch { /* ignore */ }
-  }
-
-  const handleTitleEdit = () => {
-    if (!selectedTask) return
-    setTitleInput(selectedTask.title)
-    setEditingTitle(true)
-  }
-
-  const handleTitleSave = async () => {
-    if (!activeTaskId || !titleInput.trim()) {
-      setEditingTitle(false)
-      return
-    }
-    await updateTask(activeTaskId, { title: titleInput.trim() })
-    setEditingTitle(false)
   }
 
   const compositionJustEnded = useRef(false)
   const handleCompositionEnd = () => {
     compositionJustEnded.current = true
     setTimeout(() => { compositionJustEnded.current = false }, 200)
-  }
-
-  const handleTitleKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.nativeEvent as KeyboardEvent).isComposing) return
-    if (compositionJustEnded.current) {
-      e.preventDefault()
-      return
-    }
-    if (e.key === 'Enter') handleTitleSave()
-    if (e.key === 'Escape') setEditingTitle(false)
   }
 
   const focusEditor = () => {
@@ -842,14 +706,6 @@ export function BoardPage() {
   const handleDraftBodyChange = (val: string) => {
     setDraftBody(val)
     startDraft({ title: draftTitle, body: val, type: draftType, priority: draftPriority, tags: draftTags.split(',').map(s => s.trim()).filter(Boolean), dueDate: draftDueDate ? new Date(draftDueDate).getTime() : null })
-  }
-
-  // ==================== Log entry submission ====================
-
-  const handleSubmitLog = async () => {
-    if (!activeTaskId || isHtmlEmpty(logContent) || isDraftActive) return
-    await submitEntry(activeTaskId, logContent.trim(), 'log')
-    clearLogContentDraft(activeTaskId)
   }
 
   // ==================== Render ====================

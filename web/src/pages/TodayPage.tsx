@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { usePlanStore, getTodayDate, loadPlanItems, selectPlanItem, startPlanItem, completePlanItem, checkHasPlanForDate, loadStartOfDayOffset } from '@/stores/planStore'
+import { usePlanStore, getTodayDate, loadPlanItems, selectPlanItem, checkHasPlanForDate, loadStartOfDayOffset } from '@/stores/planStore'
 import { useTaskStore } from '@/stores/taskStore'
 import type { PlanItem } from '@/types'
 import { TaskDetailWorkspace, IdleTimeIndicator, TrackingStatusIndicator } from '@/components/TaskDetailWorkspace'
