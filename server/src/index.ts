@@ -117,7 +117,9 @@ app.post('/api/tasks/:id/logs', async (c) => {
   const body = await c.req.json()
   const entry = await service.submitTaskEntry(c.req.param('id'), body.content, body.type ?? 'log')
   saveConversationId(c, c.req.param('id'))
-  broadcastEvent('entry_created', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
+  if (!body.silent) {
+    broadcastEvent('entry_created', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
+  }
   return c.json(entry, 201)
 })
 

@@ -40,8 +40,8 @@ export async function markTaskDone(id: string): Promise<Task | null> {
 export async function fetchTaskEntries(taskId: string): Promise<TaskEntry[]> {
   return (await getApi()).fetchTaskEntries(taskId)
 }
-export async function submitTaskEntry(taskId: string, content: string, type?: 'body' | 'log'): Promise<TaskEntry> {
-  return (await getApi()).submitTaskEntry(taskId, content, type)
+export async function submitTaskEntry(taskId: string, content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry> {
+  return (await getApi()).submitTaskEntry(taskId, content, type, silent)
 }
 export async function updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
   return (await getApi()).updateTaskEntry(taskId, entryId, content)

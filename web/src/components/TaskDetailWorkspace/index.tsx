@@ -4,7 +4,7 @@ import { useI18n } from '@/i18n/context'
 import type { TaskEntry, WorkSession, Task } from '@/types'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { RichEditor } from '@/components/RichEditor'
-import { getTaskExtraInfoValue } from '@/services/api'
+import { getTaskExtraInfoValue, submitTaskEntry } from '@/services/api'
 import { updatePlanItem, takeOverTask } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
@@ -153,11 +153,18 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
     clearLogContentDraft(activeTaskId)
   }
 
-  // Save draft silently — content is already persisted in Zustand store's logContentDraft.
-  // No server call needed; this just prevents accidental data loss in memory.
+  // Save draft silently — persist to server but don't refresh entries or clear editor state.
+  // Uses silent mode to skip SSE broadcast so it doesn't disrupt the editing experience.
   const saveSilently = useCallback(async () => {
-    // Draft is already in the store — no-op, keep the editor state as-is.
-  }, [])
+    if (!activeTaskId || isDraftActive) return
+    const content = useTaskStore.getState().logContentDraft[activeTaskId] || ''
+    if (isHtmlEmpty(content)) return
+    try {
+      await submitTaskEntry(activeTaskId, content.trim(), 'log', true /* silent */)
+    } catch (err) {
+      console.error('Silent save failed:', err)
+    }
+  }, [activeTaskId, isDraftActive])
 
   // Auto-save draft every 30s
   useEffect(() => {

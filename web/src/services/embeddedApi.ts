@@ -272,7 +272,7 @@ export class EmbeddedApiProvider implements ApiInterface {
     ).map(entryRowToTaskEntry)
   }
 
-  async submitTaskEntry(taskId: string, content: string, type: 'body' | 'log' = 'log'): Promise<TaskEntry> {
+  async submitTaskEntry(taskId: string, content: string, type: 'body' | 'log' = 'log', _silent?: boolean): Promise<TaskEntry> {
     await this.ensureDb()
     const task = await this.getTaskById(taskId)
     if (!task) throw new Error('Task not found')
