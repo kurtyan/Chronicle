@@ -153,15 +153,11 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
     clearLogContentDraft(activeTaskId)
   }
 
-  // Save draft silently — submit entry but keep draft content in editor
+  // Save draft silently — content is already persisted in Zustand store's logContentDraft.
+  // No server call needed; this just prevents accidental data loss in memory.
   const saveSilently = useCallback(async () => {
-    if (!activeTaskId || isDraftActive) return
-    const content = useTaskStore.getState().logContentDraft[activeTaskId] || ''
-    if (isHtmlEmpty(content)) return
-    await submitEntry(activeTaskId, content.trim(), 'log')
-    // Restore draft so it stays in the editor
-    setLogContentDraft(activeTaskId, content)
-  }, [activeTaskId, isDraftActive, submitEntry, setLogContentDraft])
+    // Draft is already in the store — no-op, keep the editor state as-is.
+  }, [])
 
   // Auto-save draft every 30s
   useEffect(() => {
