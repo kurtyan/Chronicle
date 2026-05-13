@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTaskStore } from '@/stores/taskStore'
+import { createTask } from '@/services/api'
 import { getTodayDate, savePlan } from '@/stores/planStore'
 import type { BatchCreatePlanItem } from '@/types'
 import { ArrowRight, ArrowLeft, GripVertical, Trash2, Save } from 'lucide-react'
@@ -128,6 +129,23 @@ function EditPlanStep({
     setEditMode('title')
   }
 
+  const handleCreateTask = async () => {
+    const title = editValue.startsWith('@') ? editValue.slice(1).trim() : editValue.trim()
+    if (!title) return
+    try {
+      const task = await createTask({ title, type: 'TODO', priority: 'MEDIUM' })
+      await useTaskStore.getState().loadTodos()
+      const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'task', taskId: task.id, taskTitle: task.title }
+      setRows(prev => [...prev, newRow])
+      setEditTaskId(task.id)
+      setEditValue('')
+      setEditMode('title')
+      setShowPicker(false)
+    } catch {
+      // task creation failed — stay in picker
+    }
+  }
+
   const commitTitle = () => {
     if (!editValue.trim() || !editTaskId) return
     setEditMode('duration')
@@ -145,9 +163,16 @@ function EditPlanStep({
   const handleEditKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if ((e.nativeEvent as KeyboardEvent).isComposing) return
     if (showPicker) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setPickerIndex(i => Math.min(i + 1, filteredTasks.length - 1)) }
+      if (e.key === 'ArrowDown') { e.preventDefault(); setPickerIndex(i => Math.min(i + 1, filteredTasks.length)) }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setPickerIndex(i => Math.max(i - 1, 0)) }
-      else if (e.key === 'Enter') { e.preventDefault(); if (filteredTasks[pickerIndex]) selectTask(filteredTasks[pickerIndex]) }
+      else if (e.key === 'Enter') {
+        e.preventDefault()
+        if (pickerIndex === filteredTasks.length) {
+          handleCreateTask()
+        } else if (filteredTasks[pickerIndex]) {
+          selectTask(filteredTasks[pickerIndex])
+        }
+      }
       else if (e.key === 'Escape') { setShowPicker(false); setEditValue('') }
       return
     }
@@ -295,22 +320,32 @@ function EditPlanStep({
                 />
                 {/* Task picker dropdown */}
                 {showPicker && (
-                  <div ref={pickerListRef} className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md max-h-48 overflow-auto z-50">
-                    {filteredTasks.length === 0 ? (
+                  <div ref={pickerListRef} className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md max-h-64 overflow-auto z-50">
+                    {filteredTasks.map((task, i) => (
+                      <button key={task.id}
+                        data-picker-index={i}
+                        className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${i === pickerIndex ? 'bg-muted' : 'hover:bg-muted'}`}
+                        onClick={() => selectTask(task)}
+                        onMouseEnter={() => setPickerIndex(i)}
+                      >
+                        <span className="truncate">{task.title}</span>
+                        <span className="text-xs text-muted-foreground flex-shrink-0">{task.id}</span>
+                      </button>
+                    ))}
+                    {filteredTasks.length === 0 && (
                       <p className="p-2 text-xs text-muted-foreground">No matching tasks</p>
-                    ) : (
-                      filteredTasks.map((task, i) => (
-                        <button key={task.id}
-                          data-picker-index={i}
-                          className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${i === pickerIndex ? 'bg-muted' : 'hover:bg-muted'}`}
-                          onClick={() => selectTask(task)}
-                          onMouseEnter={() => setPickerIndex(i)}
-                        >
-                          <span className="truncate">{task.title}</span>
-                          <span className="text-xs text-muted-foreground flex-shrink-0">{task.id}</span>
-                        </button>
-                      ))
                     )}
+                    <button
+                      data-picker-index={filteredTasks.length}
+                      className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 border-t bg-green-500/5 text-green-600 ${filteredTasks.length === pickerIndex ? 'bg-muted' : 'hover:bg-muted'}`}
+                      onClick={handleCreateTask}
+                      onMouseEnter={() => setPickerIndex(filteredTasks.length)}
+                    >
+                      <span className="font-medium">+ Create task</span>
+                      <span className="truncate text-muted-foreground">
+                        {editValue.startsWith('@') && editValue.slice(1).trim() ? `"${editValue.slice(1).trim()}"` : ''}
+                      </span>
+                    </button>
                   </div>
                 )}
               </div>
