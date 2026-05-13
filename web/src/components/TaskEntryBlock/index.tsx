@@ -10,9 +10,7 @@ import { ZoomIn, ZoomOut, X, Play, Check, SkipForward, Trash2 } from 'lucide-rea
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
-  // Remove HTML tags and check for remaining text
   const text = html.replace(/<[^>]*>/g, '').trim()
-  // Also check for &nbsp; and other common empty HTML entities
   const decoded = text.replace(/&nbsp;/g, '').replace(/\s+/g, '')
   return decoded.length === 0
 }
@@ -27,9 +25,7 @@ function convertImageSrcs(html: string): string {
   if (!isTauri()) return html
   try {
     const tauriCore = (window as any).__TAURI__.core
-    // Convert img data-fullpath to src + asset URL
     html = html.replace(/(<img\b[^>]*?)data-fullpath="([^"]+)"([^>]*?)>/g, (_match: string, before: string, fullPath: string, after: string) => {
-      // Remove src="" if present
       const cleaned = before.replace(/src=""\s*/, '')
       return `${cleaned}src="${tauriCore.convertFileSrc(fullPath)}" data-fullpath="${fullPath}"${after}>`
     })
@@ -40,15 +36,19 @@ function convertImageSrcs(html: string): string {
 }
 
 interface TaskEntryBlockProps {
-  entry: TaskEntry
+  entry?: TaskEntry
   onSave: (id: string, newContent: string) => void
   onDelete?: (id: string) => void
   editing?: boolean
   onEditingChange?: (editing: boolean) => void
+  isNewEntry?: boolean
+  onSubmit?: (content: string) => void
+  onSilentSave?: (content: string) => void
+  onChange?: (content: string) => void
+  initialContent?: string
   highlightTokens?: string[]
   highlightPlan?: boolean
   taskId?: string
-  // Plan-specific props (only relevant when entry.type === 'plan')
   planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
   planDetailId?: string
   onPlanStart?: (detailId: string) => void
@@ -143,24 +143,61 @@ function ImageViewer({ src, onClose }: ImageViewerProps) {
   )
 }
 
-export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, initialContent, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
-  const [draftContent, setDraftContent] = useState(entry.content)
+
+  // localStorage key for draft content persistence
+  const draftKey = taskId ? `chronicle:entry_draft:${taskId}:${entry?.id ?? '__new__'}` : null
+
+  // Initialize draft content from localStorage, then entry content, then initialContent
+  const [draftContent, setDraftContent] = useState(() => {
+    if (draftKey) {
+      const saved = localStorage.getItem(draftKey)
+      if (saved) return saved
+    }
+    return initialContent ?? entry?.content ?? ''
+  })
   const [imageViewerSrc, setImageViewerSrc] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
 
   const editing = externalEditing ?? internalEditing
 
+  // When not editing, sync draft content from entry (external updates) or clear localStorage
   useEffect(() => {
-    if (!editing) {
+    if (!editing && entry) {
       setDraftContent(entry.content)
+      if (draftKey) localStorage.removeItem(draftKey)
     }
-  }, [entry.content, editing])
+  }, [entry?.content, editing, draftKey])
+
+  // New entry mode: sync draft content when taskId changes (initialContent from store)
+  useEffect(() => {
+    if (!isNewEntry || editing) return
+    // Sync from localStorage key for this task's new entry
+    if (draftKey) {
+      const saved = localStorage.getItem(draftKey)
+      if (saved) {
+        setDraftContent(saved)
+        return
+      }
+    }
+    // No saved draft — sync from parent's initialContent
+    setDraftContent(initialContent ?? '')
+  }, [taskId, initialContent, isNewEntry, editing, draftKey])
+
+  // Auto-save draft content to localStorage on every change
+  const handleDraftChange = useCallback((html: string) => {
+    setDraftContent(html)
+    if (draftKey) localStorage.setItem(draftKey, html)
+    onChange?.(html)
+  }, [draftKey, onChange])
 
   const handleEdit = () => {
+    if (!entry) return
     setDraftContent(entry.content)
+    if (draftKey) localStorage.setItem(draftKey, entry.content)
     if (onEditingChange) {
       onEditingChange(true)
     } else {
@@ -169,10 +206,10 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
   }
 
   const handleSave = () => {
-    if (isHtmlEmpty(draftContent)) {
-      return
-    }
+    if (isHtmlEmpty(draftContent)) return
+    if (!entry) return
     onSave(entry.id, draftContent.trim())
+    if (draftKey) localStorage.removeItem(draftKey)
     if (onEditingChange) {
       onEditingChange(false)
     } else {
@@ -182,11 +219,14 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
 
   const handleSilentSave = () => {
     if (isHtmlEmpty(draftContent)) return
+    if (!entry) return
     onSave(entry.id, draftContent.trim())
+    // Don't clear localStorage or exit editing — keep draft state
   }
 
   const handleCancel = () => {
-    setDraftContent(entry.content)
+    if (draftKey) localStorage.removeItem(draftKey)
+    if (entry) setDraftContent(entry.content)
     if (onEditingChange) {
       onEditingChange(false)
     } else {
@@ -194,19 +234,81 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     }
   }
 
+  const handleSubmit = async () => {
+    if (isHtmlEmpty(draftContent)) return
+    await onSubmit?.(draftContent.trim())
+    if (draftKey) localStorage.removeItem(draftKey)
+    setDraftContent('')
+  }
+
+  // Auto-save to DB every 30s when editing an existing entry
+  useEffect(() => {
+    if (!editing || !entry || isNewEntry) return
+    const timer = setInterval(() => {
+      if (!isHtmlEmpty(draftContent)) {
+        onSave(entry.id, draftContent.trim())
+      }
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [editing, entry?.id, draftContent, onSave])
+
+  // Auto-save for new entry mode every 30s
+  useEffect(() => {
+    if (!isNewEntry || editing) return
+    const timer = setInterval(() => {
+      if (!isHtmlEmpty(draftContent)) {
+        onSilentSave?.(draftContent.trim())
+      }
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [isNewEntry, editing, draftContent, onSilentSave])
+
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!confirmDelete) {
       setConfirmDelete(true)
-      // Auto-reset confirmation after 3s
       setTimeout(() => setConfirmDelete(false), 3000)
     } else {
       setConfirmDelete(false)
-      onDelete?.(entry.id)
+      onDelete?.(entry!.id)
     }
   }
 
-  if (editing) {
+  // New entry mode
+  if (isNewEntry) {
+    return (
+      <>
+        <RichEditor
+          content={draftContent}
+          onChange={handleDraftChange}
+          placeholder={t('task.logPlaceholder')}
+          variant="full"
+          taskId={taskId}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+              e.preventDefault(); e.stopPropagation()
+              if (!isHtmlEmpty(draftContent)) onSilentSave?.(draftContent.trim())
+            } else if (e.key === 'Escape') {
+              e.preventDefault(); e.stopPropagation()
+            } else if (e.ctrlKey && e.key === 'Enter') {
+              e.preventDefault(); e.stopPropagation()
+              handleSubmit()
+            }
+          }}
+        />
+        <button
+          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 text-sm mt-2"
+          onClick={handleSubmit}
+          disabled={isHtmlEmpty(draftContent)}
+        >
+          {t('workspace.submitLog')}
+        </button>
+      </>
+    )
+  }
+
+  // Editing mode for existing entry
+  if (editing && entry) {
     return (
       <div className="py-2">
         <div className="flex items-center gap-2 mb-2">
@@ -227,7 +329,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
         <RichEditor
           key={entry.id}
           content={draftContent}
-          onChange={setDraftContent}
+          onChange={handleDraftChange}
           placeholder={t('entry.editPlaceholder')}
           minHeight="120px"
           autoFocus
@@ -333,9 +435,13 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     mouseDownPos.current = { x: e.clientX, y: e.clientY }
   }
 
+  // Display mode — show existing entry content
+  if (!entry) return null
+
   return (
     <>
       <div
+        data-testid="task-entry-block"
         className={`py-2 cursor-pointer hover:bg-muted/40 rounded group ${highlightPlan ? 'bg-primary/10 ring-1 ring-primary animate-highlight-flash' : ''}`}
         onMouseDown={handleMouseDown}
         onClick={handleContainerClick}
@@ -389,6 +495,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
           )}
         </div>
         <div
+          data-testid="entry-content"
           className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"
           dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(convertImageSrcs(entry.content), highlightTokens) : convertImageSrcs(entry.content), { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
         />
