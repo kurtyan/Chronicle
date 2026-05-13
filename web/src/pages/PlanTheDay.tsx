@@ -36,20 +36,22 @@ function EditPlanStep({
     taskId: string
     taskTitle?: string
     title?: string
-    minutes?: number
+    minutes?: number | null
   }
   const [rows, setRows] = useState<PlanRow[]>([])
 
   const [editValue, setEditValue] = useState('')
   const [editMode, setEditMode] = useState<'pick' | 'title' | 'duration'>('pick')
   const [editTaskId, setEditTaskId] = useState<string | null>(null)
-  const [editMinutes, setEditMinutes] = useState(30)
+  const [editMinutes, setEditMinutes] = useState<number | null>(30)
   const [showNextHint, setShowNextHint] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerQuery, setPickerQuery] = useState('')
   const [pickerIndex, setPickerIndex] = useState(0)
   const editRef = useRef<HTMLInputElement>(null)
   const minutesRef = useRef<HTMLInputElement>(null)
+  const pickerListRef = useRef<HTMLDivElement>(null)
+  const compositionJustEnded = useRef(false)
 
   useEffect(() => { loadTodos() }, [loadTodos])
 
@@ -74,10 +76,23 @@ function EditPlanStep({
     }
   }, [editValue])
 
+  // Auto-scroll picker to selected item
+  useEffect(() => {
+    if (showPicker && pickerListRef.current) {
+      const active = pickerListRef.current.querySelector(`[data-picker-index="${pickerIndex}"]`)
+      active?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [pickerIndex, showPicker])
+
+  const handleEditCompositionEnd = () => {
+    compositionJustEnded.current = true
+    queueMicrotask(() => { compositionJustEnded.current = false })
+  }
+
   const selectTask = (task: typeof availableTasks[0]) => {
     if (editTaskId) {
       // Commit any in-progress subtask before switching to a new task context
-      if (editValue.trim()) {
+      if (editValue.trim() && !editValue.startsWith('@')) {
         setRows(prev => [...prev, { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes }])
       }
       // Add a new task row
@@ -98,7 +113,7 @@ function EditPlanStep({
   const setTaskContext = (task: typeof availableTasks[0]) => {
     if (editTaskId) {
       // Commit any in-progress subtask before switching
-      if (editValue.trim()) {
+      if (editValue.trim() && !editValue.startsWith('@')) {
         setRows(prev => [...prev, { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes }])
       }
       // Add a new task row
@@ -121,13 +136,14 @@ function EditPlanStep({
 
   const commitDuration = () => {
     if (!editValue.trim() || !editTaskId) return
-    const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes }
+    const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes ?? 30 }
     setRows(prev => [...prev, newRow])
     setEditValue('')
     setEditMode('title')
   }
 
   const handleEditKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if ((e.nativeEvent as KeyboardEvent).isComposing) return
     if (showPicker) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setPickerIndex(i => Math.min(i + 1, filteredTasks.length - 1)) }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setPickerIndex(i => Math.max(i - 1, 0)) }
@@ -136,6 +152,7 @@ function EditPlanStep({
       return
     }
     if (e.key === 'Tab' || e.key === 'Enter') {
+      if (compositionJustEnded.current) { e.preventDefault(); return }
       e.preventDefault()
       if (editTaskId && editValue.trim()) commitTitle()
     }
@@ -152,6 +169,7 @@ function EditPlanStep({
   }
 
   const handleMinutesKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if ((e.nativeEvent as KeyboardEvent).isComposing) return
     if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); commitDuration() }
   }
 
@@ -162,7 +180,7 @@ function EditPlanStep({
   const editSubtask = (row: PlanRow) => {
     setEditTaskId(row.taskId)
     setEditValue(row.title || '')
-    setEditMinutes(row.minutes ?? 30)
+    setEditMinutes(row.minutes ?? null)
     setEditMode('title')
     setShowPicker(false)
     // Remove the old row so user can re-edit it
@@ -178,7 +196,7 @@ function EditPlanStep({
       }
     }
     if (editValue.trim() && editTaskId) {
-      items.push({ taskId: editTaskId, content: editValue.trim(), estimatedMinutes: editMinutes, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
+      items.push({ taskId: editTaskId, content: editValue.trim(), estimatedMinutes: editMinutes ?? 30, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
     }
     if (items.length === 0) {
       setShowNextHint(true)
@@ -263,9 +281,9 @@ function EditPlanStep({
           <div className={`flex gap-2 items-center ${editTaskId ? 'pl-6' : ''}`}>
             {editMode === 'duration' ? (
               <>
-                <input className="flex-1 px-2 py-1.5 border rounded text-sm bg-background" value={editValue} readOnly />
+                <input className="flex-1 px-2 py-1.5 border rounded text-sm bg-background cursor-pointer" value={editValue} readOnly onClick={() => setEditMode('title')} />
                 <input ref={minutesRef} className="w-20 px-2 py-1.5 border rounded text-sm bg-background text-center" type="number" min={1} placeholder="min"
-                  value={editMinutes} onChange={(e) => setEditMinutes(parseInt(e.target.value) || 0)} onKeyDown={handleMinutesKeyDown} />
+                  value={editMinutes ?? ''} onChange={(e) => setEditMinutes(parseInt(e.target.value) || null)} onKeyDown={handleMinutesKeyDown} />
                 <span className="text-xs text-muted-foreground w-8">min</span>
               </>
             ) : (
@@ -273,16 +291,17 @@ function EditPlanStep({
                 <input ref={editRef}
                   className="w-full px-3 py-2 border rounded-lg text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary"
                   placeholder={editTaskId ? "Sub-task title (Tab/Enter for duration, @ to switch task)" : "Type @ to pick a task"}
-                  value={editValue} onChange={handleEditChange} onKeyDown={handleEditKeyDown}
+                  value={editValue} onChange={handleEditChange} onKeyDown={handleEditKeyDown} onCompositionEnd={handleEditCompositionEnd}
                 />
                 {/* Task picker dropdown */}
                 {showPicker && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md max-h-48 overflow-auto z-50">
+                  <div ref={pickerListRef} className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-md shadow-md max-h-48 overflow-auto z-50">
                     {filteredTasks.length === 0 ? (
                       <p className="p-2 text-xs text-muted-foreground">No matching tasks</p>
                     ) : (
                       filteredTasks.map((task, i) => (
                         <button key={task.id}
+                          data-picker-index={i}
                           className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${i === pickerIndex ? 'bg-muted' : 'hover:bg-muted'}`}
                           onClick={() => selectTask(task)}
                           onMouseEnter={() => setPickerIndex(i)}
@@ -315,7 +334,7 @@ function ScheduleStep({
 }) {
   // Compute initial timeline: start from now + 10min, rounded up to 5min
   const [scheduleItems, setScheduleItems] = useState(() => {
-    const base = roundUpTo5Minutes(new Date(Date.now() + 10 * 60 * 1000))
+    const base = roundUpTo5Minutes(new Date(Date.now()))
     let current = timeToMinutes(
       `${String(base.getHours()).padStart(2, '0')}:${String(base.getMinutes()).padStart(2, '0')}`
     )
@@ -463,6 +482,22 @@ function ScheduleStep({
     onSave(scheduleItems)
   }
 
+  const handleDeleteScheduleItem = (index: number) => {
+    setScheduleItems(prev => {
+      const next = prev.filter((_, i) => i !== index)
+      if (index === 0 || next.length === 0) return next
+      // Recalculate from the item before deleted position
+      let current = timeToMinutes(next[index - 1].estimatedEnd)
+      return next.map((item, i) => {
+        if (i < index) return item
+        const start = minutesToTime(current)
+        const end = minutesToTime(current + item.estimatedMinutes)
+        current += item.estimatedMinutes
+        return { ...item, estimatedStart: start, estimatedEnd: end }
+      })
+    })
+  }
+
   return (
     <div className="flex flex-col h-full p-4">
       <div className="flex items-center justify-between mb-4">
@@ -519,6 +554,13 @@ function ScheduleStep({
                       {item.taskId} · {item.estimatedMinutes} min
                     </div>
                   </div>
+                  <button
+                    className="p-1 hover:bg-destructive/20 rounded"
+                    onClick={(e) => { e.stopPropagation(); handleDeleteScheduleItem(index) }}
+                    title="Delete"
+                  >
+                    <Trash2 className="w-3 h-3 text-destructive" />
+                  </button>
                   <GripVertical
                     className={`w-4 h-4 text-muted-foreground flex-shrink-0 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
                     onMouseDown={(e) => handleMouseDown(index, e)}

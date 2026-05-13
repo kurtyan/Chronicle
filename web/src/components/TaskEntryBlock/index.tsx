@@ -54,6 +54,8 @@ interface TaskEntryBlockProps {
   onPlanStart?: (detailId: string) => void
   onPlanComplete?: (detailId: string) => void
   onPlanSkip?: (detailId: string) => void
+  onPlanRevert?: (detailId: string) => void
+  onDeletePlan?: (detailId: string) => void
 }
 
 interface ImageViewerProps {
@@ -143,7 +145,7 @@ function ImageViewer({ src, onClose }: ImageViewerProps) {
   )
 }
 
-export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, initialContent, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, initialContent, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip, onPlanRevert, onDeletePlan }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
 
@@ -160,6 +162,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
   })
   const [imageViewerSrc, setImageViewerSrc] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [planConfirmDelete, setPlanConfirmDelete] = useState(false)
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
 
   const editing = externalEditing ?? internalEditing
@@ -460,36 +463,77 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
           <span className="text-xs text-muted-foreground">
             {format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm', { locale: dateLocale })}
           </span>
-          <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-            <button
-              className={`p-1 rounded transition ${confirmDelete ? 'bg-red-500 text-white' : 'text-muted-foreground hover:text-red-500 hover:bg-red-500/10'}`}
-              onClick={handleDeleteClick}
-              title={confirmDelete ? t('entry.confirmDelete') : t('entry.delete')}
-            >
-              {confirmDelete ? <X className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-          {entry.type === 'plan' && planDetailId && planStatus !== 'DONE' && planStatus !== 'SKIPPED' && (
-            <div className="flex gap-1 ml-auto">
-              {planStatus !== 'DOING' && (
+          {entry.type === 'plan' && planDetailId && (
+            <div className="ml-auto flex items-center gap-1">
+              {planStatus !== 'DONE' && planStatus !== 'SKIPPED' && (
                 <button
-                  className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                  onClick={(e) => { e.stopPropagation(); onPlanStart?.(planDetailId) }}
+                  className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (!planConfirmDelete) {
+                      setPlanConfirmDelete(true)
+                      setTimeout(() => setPlanConfirmDelete(false), 3000)
+                    } else {
+                      setPlanConfirmDelete(false)
+                      onDeletePlan?.(planDetailId!)
+                    }
+                  }}
+                  title={planConfirmDelete ? t('entry.confirmDelete') : t('entry.delete')}
                 >
-                  <Play className="w-3 h-3 inline mr-0.5" />Start
+                  {planConfirmDelete ? <X className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
                 </button>
               )}
+              {planStatus !== 'DONE' && planStatus !== 'SKIPPED' && (
+                <>
+                  {planStatus !== 'DOING' && (
+                    <button
+                      className="px-2 py-0.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
+                      onClick={(e) => { e.stopPropagation(); onPlanStart?.(planDetailId) }}
+                    >
+                      <Play className="w-3 h-3 inline mr-0.5" />Start
+                    </button>
+                  )}
+                  <button
+                    className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600"
+                    onClick={(e) => { e.stopPropagation(); onPlanComplete?.(planDetailId) }}
+                  >
+                    <Check className="w-3 h-3 inline mr-0.5" />Complete
+                  </button>
+                  <button
+                    className="px-2 py-0.5 text-xs bg-gray-400 text-white rounded hover:bg-gray-500"
+                    onClick={(e) => { e.stopPropagation(); onPlanSkip?.(planDetailId) }}
+                  >
+                    <SkipForward className="w-3 h-3 inline mr-0.5" />Skip
+                  </button>
+                </>
+              )}
+              {(planStatus === 'DONE' || planStatus === 'SKIPPED') && (
+                <>
+                  <button
+                    className="px-2 py-0.5 text-xs bg-purple-500 text-white rounded hover:bg-purple-600"
+                    onClick={(e) => { e.stopPropagation(); onPlanRevert?.(planDetailId) }}
+                  >
+                    Revert
+                  </button>
+                  <button
+                    className="p-1 rounded text-muted-foreground hover:text-red-500 hover:bg-red-500/10 transition"
+                    onClick={(e) => { e.stopPropagation(); onDeletePlan?.(planDetailId) }}
+                    title={t('entry.delete')}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {entry.type !== 'plan' && (
+            <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
               <button
-                className="px-2 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600"
-                onClick={(e) => { e.stopPropagation(); onPlanComplete?.(planDetailId) }}
+                className={`p-1 rounded transition ${confirmDelete ? 'bg-red-500 text-white' : 'text-muted-foreground hover:text-red-500 hover:bg-red-500/10'}`}
+                onClick={handleDeleteClick}
+                title={confirmDelete ? t('entry.confirmDelete') : t('entry.delete')}
               >
-                <Check className="w-3 h-3 inline mr-0.5" />Complete
-              </button>
-              <button
-                className="px-2 py-0.5 text-xs bg-gray-400 text-white rounded hover:bg-gray-500"
-                onClick={(e) => { e.stopPropagation(); onPlanSkip?.(planDetailId) }}
-              >
-                <SkipForward className="w-3 h-3 inline mr-0.5" />Skip
+                {confirmDelete ? <X className="w-3.5 h-3.5" /> : <Trash2 className="w-3.5 h-3.5" />}
               </button>
             </div>
           )}
