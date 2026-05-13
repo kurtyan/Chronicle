@@ -2,10 +2,10 @@ import { useEffect, useState, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePlanStore, getTodayDate, loadPlanItems, selectPlanItem, checkHasPlanForDate, loadStartOfDayOffset } from '@/stores/planStore'
 import { useTaskStore } from '@/stores/taskStore'
-import type { PlanItem } from '@/types'
-import { updatePlanItem } from '@/services/api'
+import type { PlanItem, BatchCreatePlanItem } from '@/types'
+import { updatePlanItem, fetchUnfinishedPlans, batchCreatePlanItems, createTask } from '@/services/api'
 import { TaskDetailWorkspace, IdleTimeIndicator, TrackingStatusIndicator } from '@/components/TaskDetailWorkspace'
-import { ChevronLeft, ChevronRight, CalendarPlus, GripVertical, Trash2, Check, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarPlus, GripVertical, Trash2, Check, X, Plus } from 'lucide-react'
 
 function formatDate(dateStr: string): string {
   const parts = dateStr.split('-').map(Number)
@@ -286,6 +286,80 @@ function PlanView({ displayDate, onChangeDate }: {
     window.removeEventListener('mouseup', handleResizeMouseUp)
   }
 
+  // --- Add sub-task dialog (edit mode) ---
+  const [showAddDialog, setShowAddDialog] = useState(false)
+  const [addMode, setAddMode] = useState<'new' | 'import'>('new')
+  // New sub-task fields
+  const [newTaskId, setNewTaskId] = useState<string | null>(null)
+  const [newTitle, setNewTitle] = useState('')
+  const [newMinutes, setNewMinutes] = useState(30)
+  const [showTaskPicker, setShowTaskPicker] = useState(false)
+  const [taskPickerQuery, setTaskPickerQuery] = useState('')
+  const newTitleRef = useRef<HTMLInputElement>(null)
+  const newMinutesRef = useRef<HTMLInputElement>(null)
+  // Import unfinished
+  const [unfinishedPlanList, setUnfinishedPlanList] = useState<PlanItem[]>([])
+  const [selectedDetailIds, setSelectedDetailIds] = useState<Set<string>>(new Set())
+  const { tasks, loadTodos: loadTasksForPicker } = useTaskStore()
+  const availableTasks = tasks.filter(t => t.status !== 'DONE' && t.status !== 'DROPPED')
+
+  const openAddDialog = async () => {
+    setAddMode('new')
+    setNewTaskId(null)
+    setNewTitle('')
+    setNewMinutes(30)
+    setShowTaskPicker(false)
+    setTaskPickerQuery('')
+    setSelectedDetailIds(new Set())
+    try {
+      const plans = await fetchUnfinishedPlans()
+      setUnfinishedPlanList(plans)
+    } catch { setUnfinishedPlanList([]) }
+    await loadTasksForPicker()
+    setShowAddDialog(true)
+    setTimeout(() => newTitleRef.current?.focus(), 50)
+  }
+
+  const filteredTasks = showTaskPicker
+    ? (taskPickerQuery ? availableTasks.filter(t => t.title.toLowerCase().includes(taskPickerQuery) || t.id.toLowerCase().includes(taskPickerQuery)) : availableTasks)
+    : []
+
+  const refreshEditItems = async () => {
+    await loadPlanItems(displayDate)
+    const refreshed = usePlanStore.getState().planItems
+    setEditedItems([...refreshed])
+    setDeletedDetailIds(new Set())
+    setEditing(true)
+  }
+
+  const handleAddNewSubtask = async () => {
+    if (!newTaskId || !newTitle.trim()) return
+    try {
+      const sortOrder = editedItems.length
+      const item: BatchCreatePlanItem = { taskId: newTaskId, content: newTitle.trim(), estimatedMinutes: newMinutes, estimatedStart: '', estimatedEnd: '', sortOrder }
+      await batchCreatePlanItems({ planDate: displayDate, items: [item] })
+      await refreshEditItems()
+    } catch { /* error */ }
+    setShowAddDialog(false)
+  }
+
+  const handleImportPlans = async () => {
+    if (selectedDetailIds.size === 0) return
+    try {
+      const items: BatchCreatePlanItem[] = []
+      const nowOrder = editedItems.length
+      let order = 0
+      for (const plan of unfinishedPlanList) {
+        if (selectedDetailIds.has(plan.detailId)) {
+          items.push({ taskId: plan.taskId, content: plan.content, estimatedMinutes: plan.estimatedMinutes, estimatedStart: '', estimatedEnd: '', sortOrder: nowOrder + order++, detailId: plan.detailId })
+        }
+      }
+      await batchCreatePlanItems({ planDate: displayDate, items })
+      await refreshEditItems()
+    } catch { /* error */ }
+    setShowAddDialog(false)
+  }
+
   const editTimelineHeight = useMemo(() => {
     const items = editing ? editedItems : planItems
     let h = 0
@@ -482,8 +556,20 @@ function PlanView({ displayDate, onChangeDate }: {
               )
             })}
 
+            {/* + button for adding sub-tasks (edit mode) */}
+            {editing && (
+              <div className="px-3 mt-1">
+                <button
+                  className="w-full py-1.5 border-2 border-dashed border-muted-foreground/20 rounded-lg text-xs text-muted-foreground hover:bg-muted/50 flex items-center justify-center gap-1"
+                  onClick={openAddDialog}
+                >
+                  <Plus className="w-3 h-3" /> Add
+                </button>
+              </div>
+            )}
+
             {/* Time progress bar — left edge */}
-            {progressOffset !== null && (
+            {!editing && progressOffset !== null && (
               <div className="absolute left-0 top-0 bottom-0 w-[10px] pointer-events-none z-10">
                 {/* Background track */}
                 <div className="absolute inset-0 bg-muted-foreground/8" />
@@ -516,6 +602,126 @@ function PlanView({ displayDate, onChangeDate }: {
           </div>
         )}
       </div>
+
+      {/* Add Sub-task Dialog */}
+      {showAddDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20" onClick={() => setShowAddDialog(false)}>
+          <div className="bg-popover border rounded-lg shadow-lg w-96 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-3 border-b flex items-center justify-between">
+              <h3 className="font-semibold text-sm">Add to Plan</h3>
+              <button className="p-1 hover:bg-muted rounded" onClick={() => setShowAddDialog(false)}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Tab switcher */}
+            <div className="flex border-b">
+              <button className={`flex-1 py-2 text-xs font-medium ${addMode === 'new' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground'}`} onClick={() => setAddMode('new')}>
+                New Sub-task
+              </button>
+              <button className={`flex-1 py-2 text-xs font-medium ${addMode === 'import' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground'}`} onClick={() => setAddMode('import')}>
+                Import ({unfinishedPlanList.length})
+              </button>
+            </div>
+
+            <div className="p-3 flex-1 overflow-auto">
+              {addMode === 'new' ? (
+                <div className="space-y-3">
+                  {/* Task picker */}
+                  <div>
+                    <label className="text-xs text-muted-foreground">Task</label>
+                    <div className="relative">
+                      {newTaskId ? (
+                        <div className="flex items-center gap-2 mt-1 p-2 border rounded text-sm bg-muted/30">
+                          <span className="font-mono text-xs text-muted-foreground">{newTaskId}</span>
+                          <span className="flex-1 truncate">{availableTasks.find(t => t.id === newTaskId)?.title}</span>
+                          <button className="p-0.5 hover:bg-muted rounded" onClick={() => { setNewTaskId(null); setShowTaskPicker(false) }}>
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="w-full text-left p-2 border rounded text-sm mt-1 hover:bg-muted"
+                          onClick={() => { setShowTaskPicker(true); setTaskPickerQuery('') }}
+                        >
+                          Select a task...
+                        </button>
+                      )}
+                      {showTaskPicker && (
+                        <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded shadow-md max-h-48 overflow-auto z-10">
+                          <input
+                            className="w-full px-2 py-1.5 text-sm border-b outline-none"
+                            placeholder="Filter tasks..."
+                            value={taskPickerQuery}
+                            onChange={e => setTaskPickerQuery(e.target.value)}
+                            autoFocus
+                          />
+                          {filteredTasks.slice(0, 20).map(t => (
+                            <button
+                              key={t.id}
+                              className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted flex items-center gap-2"
+                              onClick={() => { setNewTaskId(t.id); setShowTaskPicker(false); setTimeout(() => newTitleRef.current?.focus(), 50) }}
+                            >
+                              <span className="truncate">{t.title}</span>
+                              <span className="text-xs text-muted-foreground flex-shrink-0">{t.id}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Title */}
+                  <div>
+                    <label className="text-xs text-muted-foreground">Title</label>
+                    <input ref={newTitleRef} className="w-full px-2 py-1.5 border rounded text-sm mt-1" placeholder="Sub-task title" value={newTitle} onChange={e => setNewTitle(e.target.value)} />
+                  </div>
+
+                  {/* Minutes */}
+                  <div>
+                    <label className="text-xs text-muted-foreground">Duration (min)</label>
+                    <input ref={newMinutesRef} className="w-full px-2 py-1.5 border rounded text-sm mt-1" type="number" min={5} step={5} value={newMinutes} onChange={e => setNewMinutes(parseInt(e.target.value) || 30)} />
+                  </div>
+
+                  <button className="w-full py-2 bg-primary text-primary-foreground rounded text-sm" onClick={handleAddNewSubtask} disabled={!newTaskId || !newTitle.trim()}>
+                    Add
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {unfinishedPlanList.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No unfinished plans</p>
+                  ) : (
+                    <>
+                      {unfinishedPlanList.map(plan => (
+                        <label key={plan.detailId} className={`flex items-center gap-2 p-2 rounded text-sm cursor-pointer ${selectedDetailIds.has(plan.detailId) ? 'bg-primary/10' : 'hover:bg-muted'}`}>
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4"
+                            checked={selectedDetailIds.has(plan.detailId)}
+                            onChange={e => {
+                              const next = new Set(selectedDetailIds)
+                              e.target.checked ? next.add(plan.detailId) : next.delete(plan.detailId)
+                              setSelectedDetailIds(next)
+                            }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs">{plan.content}</div>
+                            <div className="text-[10px] text-muted-foreground">{plan.taskId} · {plan.planDate} · {plan.estimatedMinutes}m</div>
+                          </div>
+                        </label>
+                      ))}
+                      <button className="w-full py-2 bg-primary text-primary-foreground rounded text-sm" onClick={handleImportPlans} disabled={selectedDetailIds.size === 0}>
+                        Import Selected ({selectedDetailIds.size})
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
