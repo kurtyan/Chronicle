@@ -18,7 +18,7 @@ export interface PlanItemDetail {
   estimatedEnd: string | null
   actualStartedAt: number | null
   actualCompletedAt: number | null
-  status: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  status: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   sortOrder: number
 }
 
@@ -33,7 +33,7 @@ export interface PlanItem {
   estimatedEnd: string | null
   actualStartedAt: number | null
   actualCompletedAt: number | null
-  planStatus: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planStatus: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   planDate: string
   sortOrder: number
   createdAt: number
@@ -48,6 +48,7 @@ export interface BatchCreatePlanItem {
   estimatedStart: string
   estimatedEnd: string
   sortOrder: number
+  detailId?: string
 }
 
 function rowToPlanItem(row: any): PlanItem {
@@ -62,7 +63,7 @@ function rowToPlanItem(row: any): PlanItem {
     estimatedEnd: row.estimated_end,
     actualStartedAt: row.actual_started_at,
     actualCompletedAt: row.actual_completed_at,
-    planStatus: row.status as 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED',
+    planStatus: row.status as 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED',
     planDate: row.plan_date,
     sortOrder: row.sort_order,
     createdAt: row.created_at,
@@ -81,7 +82,7 @@ function rowToPlanItemDetail(row: any): PlanItemDetail {
     estimatedEnd: row.estimated_end,
     actualStartedAt: row.actual_started_at,
     actualCompletedAt: row.actual_completed_at,
-    status: row.status as 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED',
+    status: row.status as 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED',
     sortOrder: row.sort_order,
   }
 }
@@ -118,16 +119,17 @@ export function batchCreatePlanItems(planDate: string, items: BatchCreatePlanIte
   const now = Date.now()
   const db = getDb()
 
-  const created: PlanItem[] = []
-
   const insertEntry = db.prepare(
     'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)'
   )
   const insertDetail = db.prepare(
-    `INSERT INTO plan_item_details (id, entry_id, plan_date, estimated_minutes, estimated_start, estimated_end, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO plan_item_details (id, entry_id, plan_date, estimated_minutes, estimated_start, estimated_end, sort_order, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'PLANNED')`
   )
   const updateTask = db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?')
+  const markOldUnfinished = db.prepare(
+    'UPDATE plan_item_details SET status = ? WHERE id = ?'
+  )
 
   const transaction = db.transaction(() => {
     for (let i = 0; i < items.length; i++) {
@@ -139,6 +141,11 @@ export function batchCreatePlanItems(planDate: string, items: BatchCreatePlanIte
       insertDetail.run(detailId, entryId, planDate, item.estimatedMinutes, item.estimatedStart, item.estimatedEnd, item.sortOrder)
       updateTask.run(now, item.taskId)
       indexEntry(item.taskId, entryId, item.content, 'plan')
+
+      // Imported plan: mark old detail as UNFINISHED
+      if (item.detailId) {
+        markOldUnfinished.run('UNFINISHED', item.detailId)
+      }
     }
   })
 
@@ -148,7 +155,7 @@ export function batchCreatePlanItems(planDate: string, items: BatchCreatePlanIte
 }
 
 export function updatePlanItem(detailId: string, data: {
-  status?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  status?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   content?: string
   actualStartedAt?: number | null
   actualCompletedAt?: number | null
@@ -208,4 +215,38 @@ export function clearPlanForDate(planDate: string): number {
     deletePlanItem(item.detailId)
   }
   return items.length
+}
+
+export function getUnfinishedPlans(beforeDate: string): PlanItem[] {
+  const rows = queryAll(`
+    SELECT
+      te.id, te.task_id, te.content, te.created_at,
+      t.title as task_title, t.type, t.priority,
+      pid.id as detail_id,
+      pid.estimated_minutes, pid.estimated_start, pid.estimated_end,
+      pid.actual_started_at, pid.actual_completed_at,
+      pid.status, pid.plan_date, pid.sort_order
+    FROM plan_item_details pid
+    JOIN task_entries te ON te.id = pid.entry_id
+    JOIN tasks t ON t.id = te.task_id
+    WHERE pid.plan_date < ? AND pid.status IN ('PLANNED', 'DOING', 'SKIPPED')
+    ORDER BY pid.plan_date DESC, pid.sort_order ASC
+  `, [beforeDate])
+  return rows.map(rowToPlanItem)
+}
+
+export function reparentPlanItem(detailId: string, newPlanDate: string): boolean {
+  const detail = getPlanItemDetail(detailId)
+  if (!detail) return false
+  run('UPDATE plan_item_details SET plan_date = ?, sort_order = -1 WHERE id = ?', [newPlanDate, detailId])
+  return true
+}
+
+export function reparentPlanItems(detailIds: string[], newPlanDate: string): void {
+  if (detailIds.length === 0) return
+  const placeholders = detailIds.map(() => '?').join(',')
+  run(
+    `UPDATE plan_item_details SET plan_date = ?, sort_order = -1 WHERE id IN (${placeholders})`,
+    [newPlanDate, ...detailIds]
+  )
 }

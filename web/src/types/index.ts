@@ -43,7 +43,7 @@ export interface TaskEntry {
   content: string
   type: 'body' | 'log' | 'plan'
   createdAt: number
-  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   planDetailId?: string
   planEstimatedMinutes?: number
   planEstimatedStart?: string
@@ -107,18 +107,19 @@ export interface PlanItemDetail {
   estimatedEnd: string | null
   actualStartedAt: number | null
   actualCompletedAt: number | null
-  status: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  status: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   sortOrder: number
 }
 
 export interface PlanItem extends TaskEntry {
   detailId: string
+  taskTitle: string
   estimatedMinutes: number
   estimatedStart: string | null
   estimatedEnd: string | null
   actualStartedAt: number | null
   actualCompletedAt: number | null
-  planStatus: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planStatus: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   planDate: string
   sortOrder: number
 }
@@ -130,6 +131,7 @@ export interface BatchCreatePlanItem {
   estimatedStart: string
   estimatedEnd: string
   sortOrder: number
+  detailId?: string
 }
 
 export interface BatchCreatePlanItemsRequest {

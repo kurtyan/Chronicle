@@ -49,7 +49,7 @@ interface TaskEntryBlockProps {
   highlightTokens?: string[]
   highlightPlan?: boolean
   taskId?: string
-  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   planDetailId?: string
   onPlanStart?: (detailId: string) => void
   onPlanComplete?: (detailId: string) => void

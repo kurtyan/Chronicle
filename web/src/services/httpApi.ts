@@ -281,6 +281,15 @@ export const httpApi: ApiInterface = {
     return data.cleared
   },
 
+  async fetchUnfinishedPlans(qs: string): Promise<PlanItem[]> {
+    const { data } = await (await withClientId()).get<PlanItem[]>(`/api/plans/unfinished${qs}`)
+    return data
+  },
+
+  async reparentPlanItems(body: { detailIds: string[], newPlanDate: string }): Promise<void> {
+    await (await withClientId()).post('/api/plans/reparent', body)
+  },
+
   async fetchStartOfDayOffset(): Promise<number> {
     const { data } = await (await withClientId()).get<{ offset: number }>('/api/settings/start-of-day-offset')
     return data.offset

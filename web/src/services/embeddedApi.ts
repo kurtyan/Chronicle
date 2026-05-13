@@ -628,6 +628,12 @@ export class EmbeddedApiProvider implements ApiInterface {
   async setStartOfDayOffset(_offset: number): Promise<number> {
     return _offset
   }
+  async fetchUnfinishedPlans(): Promise<import('@/types').PlanItem[]> {
+    return []
+  }
+  async reparentPlanItems(_body: { detailIds: string[], newPlanDate: string }): Promise<void> {
+    // no-op in embedded mode
+  }
 }
 
 export const embeddedApi = new EmbeddedApiProvider()

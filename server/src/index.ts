@@ -319,6 +319,23 @@ app.delete('/api/plan-items', async (c) => {
   return c.json({ cleared: count })
 })
 
+app.get('/api/plans/unfinished', async (c) => {
+  const beforeDate = c.req.query('before') || new Date().toISOString().slice(0, 10)
+  const items = await service.fetchUnfinishedPlans(beforeDate)
+  return c.json(items)
+})
+
+app.post('/api/plans/reparent', async (c) => {
+  const body = await c.req.json()
+  const { detailIds, newPlanDate } = body
+  if (!detailIds || !Array.isArray(detailIds) || !newPlanDate) {
+    return c.json({ error: 'detailIds array and newPlanDate required' }, 400)
+  }
+  await service.reparentPlanItems(detailIds, newPlanDate)
+  broadcastEvent('plan_reparented', { newPlanDate }, c.get('clientId'))
+  return c.json({ success: true })
+})
+
 // --- Settings API ---
 app.get('/api/settings/export', async (c) => {
   const { data, path: dbPath } = exportDatabase()

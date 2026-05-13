@@ -151,6 +151,13 @@ export async function deletePlanItem(detailId: string): Promise<void> {
 export async function clearPlanForDate(date: string): Promise<number> {
   return (await getApi()).clearPlanForDate(date)
 }
+export async function fetchUnfinishedPlans(beforeDate?: string): Promise<PlanItem[]> {
+  const qs = beforeDate ? `?before=${encodeURIComponent(beforeDate)}` : ''
+  return (await getApi()).fetchUnfinishedPlans(qs)
+}
+export async function reparentPlanItems(detailIds: string[], newPlanDate: string): Promise<void> {
+  return (await getApi()).reparentPlanItems({ detailIds, newPlanDate })
+}
 
 // Start of day offset
 export async function fetchStartOfDayOffset(): Promise<number> {

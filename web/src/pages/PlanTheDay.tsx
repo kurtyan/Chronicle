@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTaskStore } from '@/stores/taskStore'
-import { createTask } from '@/services/api'
+import { createTask, fetchUnfinishedPlans } from '@/services/api'
 import { getTodayDate, savePlan } from '@/stores/planStore'
-import type { BatchCreatePlanItem } from '@/types'
+import type { BatchCreatePlanItem, PlanItem } from '@/types'
 import { ArrowRight, ArrowLeft, GripVertical, Trash2, Save } from 'lucide-react'
 
 function roundUpTo5Minutes(date: Date): Date {
@@ -30,14 +30,20 @@ function EditPlanStep({
 }) {
   const { tasks, loadTodos } = useTaskStore()
   const availableTasks = tasks.filter(t => t.status !== 'DONE' && t.status !== 'DROPPED')
+  const [unfinishedPlans, setUnfinishedPlans] = useState<PlanItem[]>([])
+
+  useEffect(() => {
+    fetchUnfinishedPlans().then(setUnfinishedPlans).catch(() => {})
+  }, [])
 
   interface PlanRow {
     id: string
-    kind: 'task' | 'subtask'
+    kind: 'task' | 'subtask' | 'imported-plan'
     taskId: string
     taskTitle?: string
     title?: string
     minutes?: number | null
+    detailId?: string
   }
   const [rows, setRows] = useState<PlanRow[]>([])
 
@@ -218,6 +224,8 @@ function EditPlanStep({
     for (const row of rows) {
       if (row.kind === 'subtask' && row.title?.trim()) {
         items.push({ taskId: row.taskId, content: row.title.trim(), estimatedMinutes: row.minutes ?? 30, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
+      } else if (row.kind === 'imported-plan' && row.detailId) {
+        items.push({ taskId: row.taskId, content: row.title?.trim() || '', estimatedMinutes: row.minutes ?? 30, estimatedStart: row.estimatedStart ?? '', estimatedEnd: row.estimatedEnd ?? '', sortOrder: order++, detailId: row.detailId })
       }
     }
     if (editValue.trim() && editTaskId) {
@@ -233,10 +241,10 @@ function EditPlanStep({
 
   return (
     <div className="flex h-full">
-      {/* Left: Available Tasks */}
+      {/* Left: Available Tasks + Unfinished Plans */}
       <div className="w-[30%] border-r bg-card p-4 flex flex-col">
         <h3 className="text-sm font-semibold mb-3 text-muted-foreground">Tasks</h3>
-        <div className="flex-1 overflow-auto space-y-1">
+        <div className="flex-1 overflow-auto space-y-1 min-h-0">
           {availableTasks.map(task => (
             <button key={task.id}
               className="w-full text-left p-2 rounded hover:bg-muted text-sm flex items-center gap-2"
@@ -249,6 +257,27 @@ function EditPlanStep({
             </button>
           ))}
         </div>
+        {unfinishedPlans.length > 0 && (
+          <>
+            <div className="border-t my-3" />
+            <h3 className="text-sm font-semibold mb-3 text-muted-foreground">Unfinished Plans</h3>
+            <div className="flex-1 overflow-auto space-y-1 min-h-0">
+              {unfinishedPlans.map(plan => (
+                <button key={plan.detailId}
+                  className="w-full text-left p-2 rounded hover:bg-muted/80 text-sm flex items-center gap-2 bg-blue-500/5"
+                  draggable onDragStart={(e) => {
+                    e.dataTransfer.setData('detailId', plan.detailId)
+                    e.dataTransfer.setData('taskId', plan.taskId)
+                  }}
+                >
+                  <GripVertical className="w-3 h-3 text-muted-foreground flex-shrink-0" />
+                  <span className="truncate">{plan.content}</span>
+                  <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">{plan.estimatedMinutes}m</span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Right: Plan Editor */}
@@ -256,9 +285,19 @@ function EditPlanStep({
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault()
+          const detailId = e.dataTransfer.getData('detailId')
           const taskId = e.dataTransfer.getData('taskId')
-          const task = availableTasks.find(t => t.id === taskId)
-          if (task) setTaskContext(task)
+          if (detailId) {
+            // Dropped an unfinished plan item
+            const plan = unfinishedPlans.find(p => p.detailId === detailId)
+            if (plan) {
+              const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'imported-plan', taskId: plan.taskId, taskTitle: plan.taskTitle, title: plan.content, minutes: plan.estimatedMinutes, detailId: plan.detailId }
+              setRows(prev => [...prev, newRow])
+            }
+          } else if (taskId) {
+            const task = availableTasks.find(t => t.id === taskId)
+            if (task) setTaskContext(task)
+          }
         }}
       >
         <div className="flex items-center justify-between mb-4">
@@ -277,6 +316,19 @@ function EditPlanStep({
                   <span className="text-xs px-2 py-0.5 rounded bg-muted text-muted-foreground font-mono">{row.taskId}</span>
                   <span className="text-sm font-medium">{row.taskTitle}</span>
                   <button className="ml-auto opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/20 rounded" onClick={() => removeRow(row.id)}>
+                    <Trash2 className="w-3 h-3 text-destructive" />
+                  </button>
+                </div>
+              )
+            }
+            if (row.kind === 'imported-plan') {
+              return (
+                <div key={row.id} className="flex gap-2 items-center group pl-6 bg-blue-500/5 rounded border border-blue-500/10">
+                  <span className="text-xs text-muted-foreground/50 font-mono flex-shrink-0">{row.taskId}</span>
+                  <span className="flex-1 text-sm">{row.title}</span>
+                  <span className="text-xs text-muted-foreground w-16 text-right">{row.minutes} min</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 flex-shrink-0">imported</span>
+                  <button className="opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/20 rounded" onClick={(e) => { e.stopPropagation(); removeRow(row.id) }}>
                     <Trash2 className="w-3 h-3 text-destructive" />
                   </button>
                 </div>

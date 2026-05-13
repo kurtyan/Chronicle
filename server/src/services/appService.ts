@@ -8,7 +8,7 @@ import {
 } from './taskService'
 import {
   batchCreatePlanItems, getPlanItems, updatePlanItem, hasPlanForDate,
-  deletePlanItem, clearPlanForDate,
+  deletePlanItem, clearPlanForDate, getUnfinishedPlans, reparentPlanItem, reparentPlanItems,
   type BatchCreatePlanItem, type PlanItem, type PlanItemDetail,
 } from './planService'
 import { getDb } from '../db'
@@ -344,5 +344,17 @@ export class AppService {
 
   async clearPlanForDate(planDate: string): Promise<number> {
     return clearPlanForDate(planDate)
+  }
+
+  async fetchUnfinishedPlans(beforeDate: string): Promise<PlanItem[]> {
+    return getUnfinishedPlans(beforeDate)
+  }
+
+  async reparentPlanItem(detailId: string, newPlanDate: string): Promise<boolean> {
+    return reparentPlanItem(detailId, newPlanDate)
+  }
+
+  async reparentPlanItems(detailIds: string[], newPlanDate: string): Promise<void> {
+    return reparentPlanItems(detailIds, newPlanDate)
   }
 }
