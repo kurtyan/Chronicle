@@ -36,14 +36,14 @@ function EditPlanStep({
     taskId: string
     taskTitle?: string
     title?: string
-    minutes?: number
+    minutes?: number | null
   }
   const [rows, setRows] = useState<PlanRow[]>([])
 
   const [editValue, setEditValue] = useState('')
   const [editMode, setEditMode] = useState<'pick' | 'title' | 'duration'>('pick')
   const [editTaskId, setEditTaskId] = useState<string | null>(null)
-  const [editMinutes, setEditMinutes] = useState(30)
+  const [editMinutes, setEditMinutes] = useState<number | null>(30)
   const [showNextHint, setShowNextHint] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerQuery, setPickerQuery] = useState('')
@@ -51,6 +51,7 @@ function EditPlanStep({
   const editRef = useRef<HTMLInputElement>(null)
   const minutesRef = useRef<HTMLInputElement>(null)
   const pickerListRef = useRef<HTMLDivElement>(null)
+  const compositionJustEnded = useRef(false)
 
   useEffect(() => { loadTodos() }, [loadTodos])
 
@@ -82,6 +83,11 @@ function EditPlanStep({
       active?.scrollIntoView({ block: 'nearest' })
     }
   }, [pickerIndex, showPicker])
+
+  const handleEditCompositionEnd = () => {
+    compositionJustEnded.current = true
+    queueMicrotask(() => { compositionJustEnded.current = false })
+  }
 
   const selectTask = (task: typeof availableTasks[0]) => {
     if (editTaskId) {
@@ -130,7 +136,7 @@ function EditPlanStep({
 
   const commitDuration = () => {
     if (!editValue.trim() || !editTaskId) return
-    const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes }
+    const newRow: PlanRow = { id: crypto.randomUUID(), kind: 'subtask', taskId: editTaskId, title: editValue.trim(), minutes: editMinutes ?? 30 }
     setRows(prev => [...prev, newRow])
     setEditValue('')
     setEditMode('title')
@@ -146,6 +152,7 @@ function EditPlanStep({
       return
     }
     if (e.key === 'Tab' || e.key === 'Enter') {
+      if (compositionJustEnded.current) { e.preventDefault(); return }
       e.preventDefault()
       if (editTaskId && editValue.trim()) commitTitle()
     }
@@ -173,7 +180,7 @@ function EditPlanStep({
   const editSubtask = (row: PlanRow) => {
     setEditTaskId(row.taskId)
     setEditValue(row.title || '')
-    setEditMinutes(row.minutes ?? 30)
+    setEditMinutes(row.minutes ?? null)
     setEditMode('title')
     setShowPicker(false)
     // Remove the old row so user can re-edit it
@@ -189,7 +196,7 @@ function EditPlanStep({
       }
     }
     if (editValue.trim() && editTaskId) {
-      items.push({ taskId: editTaskId, content: editValue.trim(), estimatedMinutes: editMinutes, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
+      items.push({ taskId: editTaskId, content: editValue.trim(), estimatedMinutes: editMinutes ?? 30, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
     }
     if (items.length === 0) {
       setShowNextHint(true)
@@ -274,9 +281,9 @@ function EditPlanStep({
           <div className={`flex gap-2 items-center ${editTaskId ? 'pl-6' : ''}`}>
             {editMode === 'duration' ? (
               <>
-                <input className="flex-1 px-2 py-1.5 border rounded text-sm bg-background" value={editValue} readOnly />
+                <input className="flex-1 px-2 py-1.5 border rounded text-sm bg-background cursor-pointer" value={editValue} readOnly onClick={() => setEditMode('title')} />
                 <input ref={minutesRef} className="w-20 px-2 py-1.5 border rounded text-sm bg-background text-center" type="number" min={1} placeholder="min"
-                  value={editMinutes} onChange={(e) => { const v = parseInt(e.target.value); setEditMinutes(isNaN(v) ? 30 : Math.max(1, v)) }} onKeyDown={handleMinutesKeyDown} />
+                  value={editMinutes ?? ''} onChange={(e) => setEditMinutes(parseInt(e.target.value) || null)} onKeyDown={handleMinutesKeyDown} />
                 <span className="text-xs text-muted-foreground w-8">min</span>
               </>
             ) : (
@@ -284,7 +291,7 @@ function EditPlanStep({
                 <input ref={editRef}
                   className="w-full px-3 py-2 border rounded-lg text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary"
                   placeholder={editTaskId ? "Sub-task title (Tab/Enter for duration, @ to switch task)" : "Type @ to pick a task"}
-                  value={editValue} onChange={handleEditChange} onKeyDown={handleEditKeyDown}
+                  value={editValue} onChange={handleEditChange} onKeyDown={handleEditKeyDown} onCompositionEnd={handleEditCompositionEnd}
                 />
                 {/* Task picker dropdown */}
                 {showPicker && (
@@ -476,7 +483,19 @@ function ScheduleStep({
   }
 
   const handleDeleteScheduleItem = (index: number) => {
-    setScheduleItems(prev => prev.filter((_, i) => i !== index))
+    setScheduleItems(prev => {
+      const next = prev.filter((_, i) => i !== index)
+      if (index === 0 || next.length === 0) return next
+      // Recalculate from the item before deleted position
+      let current = timeToMinutes(next[index - 1].estimatedEnd)
+      return next.map((item, i) => {
+        if (i < index) return item
+        const start = minutesToTime(current)
+        const end = minutesToTime(current + item.estimatedMinutes)
+        current += item.estimatedMinutes
+        return { ...item, estimatedStart: start, estimatedEnd: end }
+      })
+    })
   }
 
   return (
