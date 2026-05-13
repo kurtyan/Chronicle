@@ -267,7 +267,7 @@ export const httpApi: ApiInterface = {
     return data
   },
 
-  async updatePlanItem(detailId: string, body: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null }): Promise<PlanItemDetail> {
+  async updatePlanItem(detailId: string, body: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null; estimatedMinutes?: number; estimatedStart?: string; estimatedEnd?: string; sortOrder?: number }): Promise<PlanItemDetail> {
     const { data } = await (await withClientId()).put<PlanItemDetail>(`/api/plan-items/${detailId}`, body)
     return data
   },

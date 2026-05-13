@@ -142,7 +142,7 @@ export async function batchCreatePlanItems(req: BatchCreatePlanItemsRequest): Pr
 export async function fetchPlanItems(date: string): Promise<PlanItem[]> {
   return (await getApi()).fetchPlanItems(date)
 }
-export async function updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null }): Promise<PlanItemDetail> {
+export async function updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null; estimatedMinutes?: number; estimatedStart?: string; estimatedEnd?: string; sortOrder?: number }): Promise<PlanItemDetail> {
   return (await getApi()).updatePlanItem(detailId, data)
 }
 export async function deletePlanItem(detailId: string): Promise<void> {

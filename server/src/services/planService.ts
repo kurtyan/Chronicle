@@ -88,7 +88,7 @@ function rowToPlanItemDetail(row: any): PlanItemDetail {
 }
 
 export function hasPlanForDate(planDate: string): boolean {
-  const row = queryAll('SELECT COUNT(*) as cnt FROM plan_item_details WHERE plan_date = ?', [planDate])[0] as { cnt: number } | undefined
+  const row = queryAll("SELECT COUNT(*) as cnt FROM plan_item_details WHERE plan_date = ? AND status != 'UNFINISHED'", [planDate])[0] as { cnt: number } | undefined
   return (row?.cnt ?? 0) > 0
 }
 
@@ -104,14 +104,14 @@ export function getPlanItems(planDate: string): PlanItem[] {
     FROM plan_item_details pid
     JOIN task_entries te ON te.id = pid.entry_id
     JOIN tasks t ON t.id = te.task_id
-    WHERE pid.plan_date = ?
+    WHERE pid.plan_date = ? AND pid.status != 'UNFINISHED'
     ORDER BY pid.sort_order ASC
   `, [planDate])
   return rows.map(rowToPlanItem)
 }
 
 export function getPlanItemDetail(detailId: string): PlanItemDetail | null {
-  const row = queryAll('SELECT * FROM plan_item_details WHERE id = ?', [detailId])[0]
+  const row = queryAll("SELECT * FROM plan_item_details WHERE id = ? AND status != 'UNFINISHED'", [detailId])[0]
   return row ? rowToPlanItemDetail(row) : null
 }
 
@@ -159,6 +159,10 @@ export function updatePlanItem(detailId: string, data: {
   content?: string
   actualStartedAt?: number | null
   actualCompletedAt?: number | null
+  estimatedMinutes?: number
+  estimatedStart?: string
+  estimatedEnd?: string
+  sortOrder?: number
 }): PlanItemDetail | null {
   const detail = getPlanItemDetail(detailId)
   if (!detail) return null
@@ -177,6 +181,22 @@ export function updatePlanItem(detailId: string, data: {
   if (data.actualCompletedAt !== undefined) {
     updates.push('actual_completed_at = ?')
     params.push(data.actualCompletedAt)
+  }
+  if (data.estimatedMinutes !== undefined) {
+    updates.push('estimated_minutes = ?')
+    params.push(data.estimatedMinutes)
+  }
+  if (data.estimatedStart !== undefined) {
+    updates.push('estimated_start = ?')
+    params.push(data.estimatedStart)
+  }
+  if (data.estimatedEnd !== undefined) {
+    updates.push('estimated_end = ?')
+    params.push(data.estimatedEnd)
+  }
+  if (data.sortOrder !== undefined) {
+    updates.push('sort_order = ?')
+    params.push(data.sortOrder)
   }
 
   if (updates.length > 0) {
@@ -238,6 +258,7 @@ export function getUnfinishedPlans(beforeDate: string): PlanItem[] {
 export function reparentPlanItem(detailId: string, newPlanDate: string): boolean {
   const detail = getPlanItemDetail(detailId)
   if (!detail) return false
+  if (detail.status === 'UNFINISHED') return false
   run('UPDATE plan_item_details SET plan_date = ?, sort_order = -1 WHERE id = ?', [newPlanDate, detailId])
   return true
 }
@@ -246,7 +267,7 @@ export function reparentPlanItems(detailIds: string[], newPlanDate: string): voi
   if (detailIds.length === 0) return
   const placeholders = detailIds.map(() => '?').join(',')
   run(
-    `UPDATE plan_item_details SET plan_date = ?, sort_order = -1 WHERE id IN (${placeholders})`,
+    `UPDATE plan_item_details SET plan_date = ?, sort_order = -1 WHERE id IN (${placeholders}) AND status != 'UNFINISHED'`,
     [newPlanDate, ...detailIds]
   )
 }

@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { usePlanStore, getTodayDate, loadPlanItems, selectPlanItem, checkHasPlanForDate, loadStartOfDayOffset } from '@/stores/planStore'
 import { useTaskStore } from '@/stores/taskStore'
 import type { PlanItem } from '@/types'
+import { updatePlanItem } from '@/services/api'
 import { TaskDetailWorkspace, IdleTimeIndicator, TrackingStatusIndicator } from '@/components/TaskDetailWorkspace'
-import { ChevronLeft, ChevronRight, CalendarPlus } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarPlus, GripVertical, Trash2, Check, X } from 'lucide-react'
 
 function formatDate(dateStr: string): string {
   const parts = dateStr.split('-').map(Number)
@@ -15,6 +16,12 @@ function formatDate(dateStr: string): string {
 function timeToMinutes(time: string): number {
   const [h, m] = time.split(':').map(Number)
   return h * 60 + m
+}
+
+function minutesToTime(totalMinutes: number): string {
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
 // Empty state when no plan exists
@@ -163,20 +170,149 @@ function PlanView({ displayDate, onChangeDate }: {
 
   const SCALE = 2.5 // px per minute, strictly linear
 
+  // --- Edit mode ---
+  const [editing, setEditing] = useState(false)
+  const [editedItems, setEditedItems] = useState<PlanItem[]>([])
+  const [deletedDetailIds, setDeletedDetailIds] = useState<Set<string>>(new Set())
+  const displayItems = editing ? editedItems : planItems
+
+  // Drag state for break adjustment
+  const dragState = useRef<{ index: number; startY: number; originalItems: PlanItem[] } | null>(null)
+  const resizeState = useRef<{ index: number; startY: number; originalMin: number; originalItems: PlanItem[] } | null>(null)
+
+  const enterEdit = () => {
+    setEditedItems([...planItems])
+    setDeletedDetailIds(new Set())
+    setEditing(true)
+  }
+
+  const cancelEdit = () => {
+    setEditing(false)
+    setEditedItems([])
+    setDeletedDetailIds(new Set())
+    dragState.current = null
+    resizeState.current = null
+  }
+
+  const saveEdit = async () => {
+    try {
+      for (let i = 0; i < editedItems.length; i++) {
+        const item = editedItems[i]
+        const prev = planItems[i]
+        if (!prev || item.estimatedStart !== prev.estimatedStart || item.estimatedEnd !== prev.estimatedEnd || item.estimatedMinutes !== prev.estimatedMinutes) {
+          await updatePlanItem(item.detailId, { estimatedStart: item.estimatedStart ?? undefined, estimatedEnd: item.estimatedEnd ?? undefined, estimatedMinutes: item.estimatedMinutes, sortOrder: i })
+        }
+      }
+      for (const detailId of deletedDetailIds) {
+        await updatePlanItem(detailId, { status: 'UNFINISHED' })
+      }
+      await loadPlanItems(displayDate)
+    } catch { /* error */ }
+    cancelEdit()
+  }
+
+  const deleteEditedItem = (index: number) => {
+    const item = editedItems[index]
+    setDeletedDetailIds(prev => new Set(prev).add(item.detailId))
+    setEditedItems(prev => prev.filter((_, i) => i !== index))
+  }
+
+  // Drag/resize handlers (same pattern as PlanTheDay Step 2)
+  const handleBreakMouseDown = (index: number, e: React.MouseEvent) => {
+    if (index === 0 || !editing) return
+    e.preventDefault()
+    dragState.current = { index, startY: e.clientY, originalItems: [...editedItems] }
+    window.addEventListener('mousemove', handleBreakMouseMove)
+    window.addEventListener('mouseup', handleBreakMouseUp)
+  }
+
+  const handleBreakMouseMove = (e: MouseEvent) => {
+    const ds = dragState.current
+    if (!ds) return
+    const deltaPx = e.clientY - ds.startY
+    const deltaMin = Math.round(deltaPx / 12) * 5
+    if (deltaMin === 0) { setEditedItems([...ds.originalItems]); return }
+    const prevEnd = timeToMinutes(ds.originalItems[ds.index - 1].estimatedEnd ?? '00:00')
+    const currStart = timeToMinutes(ds.originalItems[ds.index].estimatedStart ?? '00:00')
+    const originalBreak = currStart - prevEnd
+    const newBreak = Math.max(0, originalBreak + deltaMin)
+    const breakChange = newBreak - originalBreak
+    setEditedItems(ds.originalItems.map((item, i) => {
+      if (i < ds.index) return item
+      const startMin = timeToMinutes(item.estimatedStart ?? '00:00') + breakChange
+      const endMin = timeToMinutes(item.estimatedEnd ?? '00:00') + breakChange
+      return { ...item, estimatedStart: minutesToTime(startMin), estimatedEnd: minutesToTime(endMin) }
+    }))
+  }
+
+  const handleBreakMouseUp = () => {
+    dragState.current = null
+    window.removeEventListener('mousemove', handleBreakMouseMove)
+    window.removeEventListener('mouseup', handleBreakMouseUp)
+  }
+
+  const handleResizeMouseDown = (index: number, e: React.MouseEvent) => {
+    if (!editing) return
+    e.preventDefault(); e.stopPropagation()
+    const item = editedItems[index]
+    resizeState.current = { index, startY: e.clientY, originalMin: item.estimatedMinutes ?? 30, originalItems: [...editedItems] }
+    window.addEventListener('mousemove', handleResizeMouseMove)
+    window.addEventListener('mouseup', handleResizeMouseUp)
+  }
+
+  const handleResizeMouseMove = (e: MouseEvent) => {
+    const rs = resizeState.current
+    if (!rs) return
+    const deltaPx = e.clientY - rs.startY
+    const deltaMin = Math.round(deltaPx / 12) * 5
+    const newMin = Math.max(5, rs.originalMin + deltaMin)
+    if (newMin === rs.originalMin) { setEditedItems([...rs.originalItems]); return }
+    const minDiff = newMin - rs.originalMin
+    setEditedItems(rs.originalItems.map((item, i) => {
+      if (i < rs.index) return item
+      if (i === rs.index) {
+        const startMin = timeToMinutes(item.estimatedStart ?? '00:00')
+        return { ...item, estimatedMinutes: newMin, estimatedEnd: minutesToTime(startMin + newMin) }
+      }
+      const startMin = timeToMinutes(item.estimatedStart ?? '00:00') + minDiff
+      const endMin = timeToMinutes(item.estimatedEnd ?? '00:00') + minDiff
+      return { ...item, estimatedStart: minutesToTime(startMin), estimatedEnd: minutesToTime(endMin) }
+    }))
+  }
+
+  const handleResizeMouseUp = () => {
+    resizeState.current = null
+    window.removeEventListener('mousemove', handleResizeMouseMove)
+    window.removeEventListener('mouseup', handleResizeMouseUp)
+  }
+
+  const editTimelineHeight = useMemo(() => {
+    const items = editing ? editedItems : planItems
+    let h = 0
+    for (let i = 0; i < items.length; i++) {
+      if (i > 0) {
+        const prevEnd = items[i - 1].estimatedEnd
+        const currStart = items[i].estimatedStart
+        if (prevEnd && currStart) { const bm = timeToMinutes(currStart) - timeToMinutes(prevEnd); if (bm > 0) h += bm * SCALE }
+      }
+      h += (items[i].estimatedMinutes ?? 30) * SCALE
+    }
+    return Math.max(1, h)
+  }, [editing, editedItems, planItems])
+
   // Compute progress marker pixel offset by walking timeline segments
   const progressOffset = useMemo(() => {
-    if (planItems.length === 0) return null
+    const items = displayItems
+    if (items.length === 0) return null
     const dayStartMin = startOfDayOffset * 60
     const d = new Date(now)
     let nowMin = d.getHours() * 60 + d.getMinutes()
-    // If before day start, treat as next day (e.g. 1:29 → 25:29)
     if (nowMin < dayStartMin) nowMin += 24 * 60
     let px = 0
-    for (let i = 0; i < planItems.length; i++) {
-      const item = planItems[i]
-      // Break before this item
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
       if (i > 0) {
-        const prevEnd = planItems[i - 1].estimatedEnd
+        const prevEnd = items[i - 1].estimatedEnd
         const currStart = item.estimatedStart
         if (prevEnd && currStart) {
           let pe = timeToMinutes(prevEnd)
@@ -194,7 +330,6 @@ function PlanView({ displayDate, onChangeDate }: {
           }
         }
       }
-      // Sub task
       const im = item.estimatedMinutes ?? 30
       const ih = im * SCALE
       let is_ = item.estimatedStart ? timeToMinutes(item.estimatedStart) : 0
@@ -205,8 +340,8 @@ function PlanView({ displayDate, onChangeDate }: {
       if (nowMin < is_) return px
       px += ih
     }
-    return px // past end of timeline
-  }, [planItems, now, startOfDayOffset])
+    return px
+  }, [displayItems, now, startOfDayOffset])
 
   const planStatusBadge = (status: string) => {
     switch (status) {
@@ -226,23 +361,6 @@ function PlanView({ displayDate, onChangeDate }: {
     }
   }
 
-  // Total timeline pixel height (same linear formula as rendering)
-  const timelineHeight = useMemo(() => {
-    let h = 0
-    for (let i = 0; i < planItems.length; i++) {
-      if (i > 0) {
-        const prevEnd = planItems[i - 1].estimatedEnd
-        const currStart = planItems[i].estimatedStart
-        if (prevEnd && currStart) {
-          const bm = timeToMinutes(currStart) - timeToMinutes(prevEnd)
-          if (bm > 0) h += bm * SCALE
-        }
-      }
-      h += (planItems[i].estimatedMinutes ?? 30) * SCALE
-    }
-    return Math.max(1, h)
-  }, [planItems])
-
   return (
     <div className="flex h-full">
       {/* Left: Timeline */}
@@ -256,14 +374,27 @@ function PlanView({ displayDate, onChangeDate }: {
             <button className="p-1 hover:bg-muted rounded" onClick={() => onChangeDate(1)}>
               <ChevronRight className="w-4 h-4" />
             </button>
+            {!editing ? (
+              <button className="px-3 py-1 text-xs border rounded hover:bg-muted" onClick={enterEdit}>Edit</button>
+            ) : (
+              <>
+                <button className="px-3 py-1 text-xs bg-primary text-primary-foreground rounded flex items-center gap-1" onClick={saveEdit}>
+                  <Check className="w-3 h-3" /> Save
+                </button>
+                <button className="px-3 py-1 text-xs border rounded hover:bg-muted flex items-center gap-1" onClick={cancelEdit}>
+                  <X className="w-3 h-3" /> Cancel
+                </button>
+              </>
+            )}
           </div>
         </div>
         <div ref={scrollRef} className="flex-1 overflow-auto relative">
-          <div className="relative" style={{ height: timelineHeight }}>
-            {planItems.map((item, index) => {
+          <div className="relative" style={{ height: editTimelineHeight }}>
+            {displayItems.map((item, index) => {
+              const items = editing ? editedItems : planItems
               const breakBefore = index > 0
                 ? (() => {
-                    const prevEnd = planItems[index - 1].estimatedEnd
+                    const prevEnd = items[index - 1].estimatedEnd
                     const currStart = item.estimatedStart
                     if (prevEnd && currStart) return timeToMinutes(currStart) - timeToMinutes(prevEnd)
                     return 0
@@ -274,50 +405,79 @@ function PlanView({ displayDate, onChangeDate }: {
               const breakH = breakBefore > 0 ? breakBefore * SCALE : 0
 
               return (
-                <div key={item.id}>
+                <div key={editing ? item.detailId : item.id}>
                   {breakBefore > 0 && (
-                    <div
-                      className="flex items-center gap-1 px-3"
-                      style={{ height: breakH }}
-                    >
+                    <div className="flex items-center gap-1 px-3" style={{ height: breakH }}>
                       <div className="flex-1 border-t border-dashed border-muted-foreground/20" />
                       <span className="text-[10px] text-muted-foreground whitespace-nowrap">{breakBefore}m</span>
                       <div className="flex-1 border-t border-dashed border-muted-foreground/20" />
                     </div>
                   )}
-                  <button
+                  <div
                     data-plan-index={index}
-                    className={`text-left px-3 ml-[14px] mr-2 transition flex items-center gap-3 border-l-[3px] ${
-                      index === selectedItemIndex
+                    className={`text-left px-3 ml-[14px] mr-2 transition flex items-center gap-3 border-l-[3px] overflow-hidden ${
+                      editing ? 'border rounded-lg bg-card flex-col' :
+                      (index === selectedItemIndex
                         ? 'bg-muted border-l-primary shadow-sm'
                         : item.planStatus === 'DOING' ? 'bg-blue-500/5 border-l-blue-400' :
                           item.planStatus === 'DONE' ? 'bg-green-500/5 border-l-green-400' :
                           item.planStatus === 'SKIPPED' ? 'bg-muted/30 border-l-muted-foreground/30' :
-                          'bg-card border-l-purple-400/60 hover:bg-muted/40'
+                          'bg-card border-l-purple-400/60 hover:bg-muted/40 cursor-pointer')
                     }`}
                     style={{ height: subH, minHeight: 0 }}
-                    onClick={() => selectPlanItem(index)}
+                    onClick={() => { if (!editing) selectPlanItem(index) }}
                   >
-                    {/* Time on left — matching step 2 card style */}
-                    <div className="flex-shrink-0 w-12 text-center leading-tight">
-                      <div className="text-[11px] font-mono text-muted-foreground">{item.estimatedStart}</div>
-                      <div className="text-[9px] text-muted-foreground/50">{item.estimatedMinutes}m</div>
-                      <div className="text-[11px] font-mono text-muted-foreground">{item.estimatedEnd}</div>
-                    </div>
-                    {/* Content */}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm truncate">{stripHtml(item.content)}</div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5">
-                        <span className="font-mono">{item.taskId}</span>
+                    {editing ? (
+                      <div className="flex items-center gap-3 w-full flex-1 min-h-0 pt-1">
+                        <div className="flex-shrink-0 w-12 text-center leading-tight">
+                          <div className="text-[11px] font-mono text-muted-foreground">{item.estimatedStart}</div>
+                          <div className="text-[9px] text-muted-foreground/50">{item.estimatedMinutes}m</div>
+                          <div className="text-[11px] font-mono text-muted-foreground">{item.estimatedEnd}</div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate">{stripHtml(item.content)}</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5">
+                            <span className="font-mono">{item.taskId}</span>
+                          </div>
+                        </div>
+                        <button
+                          className="p-1 hover:bg-destructive/20 rounded flex-shrink-0"
+                          onClick={(e) => { e.stopPropagation(); deleteEditedItem(index) }}
+                        >
+                          <Trash2 className="w-3 h-3 text-destructive" />
+                        </button>
+                        <GripVertical
+                          className="w-4 h-4 text-muted-foreground flex-shrink-0 cursor-grab"
+                          onMouseDown={(e) => handleBreakMouseDown(index, e)}
+                        />
                       </div>
-                    </div>
-                    {/* Status badge and duration */}
-                    <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium leading-none ${planStatusBadge(item.planStatus)}`}>
-                        {planStatusLabel(item.planStatus)}
-                      </span>
-                    </div>
-                  </button>
+                    ) : (
+                      <>
+                        <div className="flex-shrink-0 w-12 text-center leading-tight">
+                          <div className="text-[11px] font-mono text-muted-foreground">{item.estimatedStart}</div>
+                          <div className="text-[9px] text-muted-foreground/50">{item.estimatedMinutes}m</div>
+                          <div className="text-[11px] font-mono text-muted-foreground">{item.estimatedEnd}</div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate">{stripHtml(item.content)}</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5">
+                            <span className="font-mono">{item.taskId}</span>
+                          </div>
+                        </div>
+                        <div className="flex-shrink-0 flex flex-col items-end gap-0.5">
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium leading-none ${planStatusBadge(item.planStatus)}`}>
+                            {planStatusLabel(item.planStatus)}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                    {editing && (
+                      <div
+                        className="h-[6px] w-full flex-shrink-0 bg-muted-foreground/10 hover:bg-primary/30 cursor-ns-resize transition-colors rounded-b-lg"
+                        onMouseDown={(e) => handleResizeMouseDown(index, e)}
+                      />
+                    )}
+                  </div>
                 </div>
               )
             })}

@@ -60,7 +60,7 @@ export interface ApiInterface {
   hasPlanForDate(date: string): Promise<boolean>
   batchCreatePlanItems(req: BatchCreatePlanItemsRequest): Promise<PlanItem[]>
   fetchPlanItems(date: string): Promise<PlanItem[]>
-  updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null }): Promise<PlanItemDetail>
+  updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null; estimatedMinutes?: number; estimatedStart?: string; estimatedEnd?: string; sortOrder?: number }): Promise<PlanItemDetail>
   deletePlanItem(detailId: string): Promise<void>
   clearPlanForDate(date: string): Promise<number>
   fetchUnfinishedPlans(qs: string): Promise<PlanItem[]>
