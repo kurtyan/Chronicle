@@ -44,6 +44,8 @@ function EditPlanStep({
     title?: string
     minutes?: number | null
     detailId?: string
+    estimatedStart?: string
+    estimatedEnd?: string
   }
   const [rows, setRows] = useState<PlanRow[]>([])
 

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { usePlanStore, getTodayDate, loadPlanItems, selectPlanItem, checkHasPlanForDate, loadStartOfDayOffset } from '@/stores/planStore'
 import { useTaskStore } from '@/stores/taskStore'
 import type { PlanItem, BatchCreatePlanItem } from '@/types'
-import { updatePlanItem, fetchUnfinishedPlans, batchCreatePlanItems, createTask } from '@/services/api'
+import { updatePlanItem, fetchUnfinishedPlans, batchCreatePlanItems } from '@/services/api'
 import { TaskDetailWorkspace, IdleTimeIndicator, TrackingStatusIndicator } from '@/components/TaskDetailWorkspace'
 import { ChevronLeft, ChevronRight, CalendarPlus, GripVertical, Trash2, Check, X, Plus } from 'lucide-react'
 
