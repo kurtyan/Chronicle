@@ -3,12 +3,12 @@ import { test, expect } from '@playwright/test'
 test.describe('Phase 4: Task Status Enhancement', () => {
   test('T1: Task status flow - PENDING -> DOING -> DONE -> DOING -> DROPPED', async ({ page }) => {
     const uniqueName = `T1-UI-${Date.now()}`
-    const res = await page.request.post('http://localhost:9983/api/tasks', {
+    const res = await page.request.post('http://localhost:8083/api/tasks', {
       data: { title: uniqueName, type: 'TODO', priority: 'MEDIUM' }
     })
     const task = await res.json()
 
-    await page.goto('http://localhost:9983/?lang=zh-CN')
+    await page.goto('http://localhost:8083/?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.waitForTimeout(300)
 
@@ -31,7 +31,7 @@ test.describe('Phase 4: Task Status Enhancement', () => {
     await expect(infoBar.getByRole('button', { name: '废弃' })).toBeVisible()
 
     // === Phase 3: Mark as DONE via API ===
-    await page.request.put(`http://localhost:9983/api/tasks/${task.id}`, { data: { status: 'DONE' } })
+    await page.request.put(`http://localhost:8083/api/tasks/${task.id}`, { data: { status: 'DONE' } })
 
     // Reload page to get fresh data with DONE status
     await page.reload()
@@ -52,7 +52,7 @@ test.describe('Phase 4: Task Status Enhancement', () => {
     await expect(infoBar2.getByRole('button', { name: '重做' })).toBeVisible()
 
     // === Phase 4: Redo → back to DOING ===
-    await page.request.put(`http://localhost:9983/api/tasks/${task.id}`, { data: { status: 'DOING' } })
+    await page.request.put(`http://localhost:8083/api/tasks/${task.id}`, { data: { status: 'DOING' } })
 
     // Reload to get fresh data
     await page.reload()
@@ -89,21 +89,21 @@ test.describe('Phase 4: Task Status Enhancement', () => {
 
   test('T2: Filter by Done and Dropped', async ({ page }) => {
     // Create and complete a task
-    const res = await page.request.post('http://localhost:9983/api/tasks', {
+    const res = await page.request.post('http://localhost:8083/api/tasks', {
       data: { title: `T2-Done-${Date.now()}`, type: 'TODO', priority: 'MEDIUM' }
     })
     const task = await res.json()
-    await page.request.put(`http://localhost:9983/api/tasks/${task.id}`, { data: { status: 'DOING' } })
-    await page.request.put(`http://localhost:9983/api/tasks/${task.id}/done`)
+    await page.request.put(`http://localhost:8083/api/tasks/${task.id}`, { data: { status: 'DOING' } })
+    await page.request.put(`http://localhost:8083/api/tasks/${task.id}/done`)
 
     // Create and drop a task
-    const res2 = await page.request.post('http://localhost:9983/api/tasks', {
+    const res2 = await page.request.post('http://localhost:8083/api/tasks', {
       data: { title: `T2-Dropped-${Date.now()}`, type: 'TODO', priority: 'MEDIUM' }
     })
     const task2 = await res2.json()
-    await page.request.post(`http://localhost:9983/api/tasks/${task2.id}/drop`, { data: { reason: '废弃测试' } })
+    await page.request.post(`http://localhost:8083/api/tasks/${task2.id}/drop`, { data: { reason: '废弃测试' } })
 
-    await page.goto('http://localhost:9983/?lang=zh-CN')
+    await page.goto('http://localhost:8083/?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.waitForTimeout(300)
 
@@ -128,15 +128,15 @@ test.describe('Phase 4: Task Status Enhancement', () => {
 
   test('T3: Take Over / AFK workflow', async ({ page }) => {
     // Clean up any existing session from previous tests
-    await page.request.post('http://localhost:9983/api/afk')
+    await page.request.post('http://localhost:8083/api/afk')
 
     const uniqueName = `T3-TakeOver-${Date.now()}`
-    const res = await page.request.post('http://localhost:9983/api/tasks', {
+    const res = await page.request.post('http://localhost:8083/api/tasks', {
       data: { title: uniqueName, type: 'TODO', priority: 'MEDIUM' }
     })
     const task = await res.json()
 
-    await page.goto('http://localhost:9983/?lang=zh-CN')
+    await page.goto('http://localhost:8083/?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.waitForTimeout(500)
 
@@ -167,22 +167,22 @@ test.describe('Phase 4: Task Status Enhancement', () => {
     await expect(infoBar.getByRole('button', { name: 'Take' })).toBeVisible()
 
     // Verify session was recorded
-    const sessionsRes = await page.request.get('http://localhost:9983/api/sessions?start=0&end=9999999999999')
+    const sessionsRes = await page.request.get('http://localhost:8083/api/sessions?start=0&end=9999999999999')
     const sessions = await sessionsRes.json()
     expect(sessions.length).toBeGreaterThan(0)
     expect(sessions[0].endedAt).not.toBeNull()
   })
 
   test('T4: Report page - session section visible', async ({ page }) => {
-    const res = await page.request.post('http://localhost:9983/api/tasks', {
+    const res = await page.request.post('http://localhost:8083/api/tasks', {
       data: { title: `T4-Report-${Date.now()}`, type: 'TODO', priority: 'MEDIUM' }
     })
     const task = await res.json()
-    await page.request.post(`http://localhost:9983/api/tasks/${task.id}/takeover`)
+    await page.request.post(`http://localhost:8083/api/tasks/${task.id}/takeover`)
     await page.waitForTimeout(2000)
-    await page.request.post('http://localhost:9983/api/afk')
+    await page.request.post('http://localhost:8083/api/afk')
 
-    await page.goto('http://localhost:9983/report?lang=zh-CN')
+    await page.goto('http://localhost:8083/report?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.waitForTimeout(1000)
 
@@ -197,20 +197,20 @@ test.describe('Phase 4: Task Status Enhancement', () => {
     await expect(page.getByText('摸鱼时长')).toBeVisible()
 
     // Should see session data
-    const sessionsRes = await page.request.get('http://localhost:9983/api/sessions?start=0&end=9999999999999')
+    const sessionsRes = await page.request.get('http://localhost:8083/api/sessions?start=0&end=9999999999999')
     const sessions = await sessionsRes.json()
     expect(sessions.length).toBeGreaterThan(0)
   })
 
   test('T5: Cmd+N creates draft, ESC cancels', async ({ page }) => {
     const uniqueName = `T5-CmdN-${Date.now()}`
-    const res = await page.request.post('http://localhost:9983/api/tasks', {
+    const res = await page.request.post('http://localhost:8083/api/tasks', {
       data: { title: uniqueName, type: 'TODO', priority: 'MEDIUM' }
     })
     const task = await res.json()
-    await page.request.post(`http://localhost:9983/api/tasks/${task.id}/takeover`)
+    await page.request.post(`http://localhost:8083/api/tasks/${task.id}/takeover`)
 
-    await page.goto('http://localhost:9983/?lang=zh-CN')
+    await page.goto('http://localhost:8083/?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.locator('h4').filter({ hasText: uniqueName }).first().click()
     await page.waitForTimeout(500)
@@ -230,17 +230,17 @@ test.describe('Phase 4: Task Status Enhancement', () => {
     await expect(page.locator('h1').filter({ hasText: uniqueName })).toBeVisible()
 
     // Clean up: AFK to close the restored session
-    await page.request.post('http://localhost:9983/api/afk')
+    await page.request.post('http://localhost:8083/api/afk')
   })
 
   test('T6: Drop dialog - confirm disabled without reason', async ({ page }) => {
     const uniqueName = `T6-DropValidation-${Date.now()}`
-    const res = await page.request.post('http://localhost:9983/api/tasks', {
+    const res = await page.request.post('http://localhost:8083/api/tasks', {
       data: { title: uniqueName, type: 'TODO', priority: 'MEDIUM' }
     })
     const task = await res.json()
 
-    await page.goto('http://localhost:9983/?lang=zh-CN')
+    await page.goto('http://localhost:8083/?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.locator('h4').filter({ hasText: uniqueName }).first().click()
     await page.waitForTimeout(500)
