@@ -63,7 +63,7 @@ export interface SearchResult {
   taskType: TaskType
   taskStatus: TaskStatus
   taskTags: string[]
-  matchType: 'task' | 'entry_body' | 'entry_log'
+  matchType: 'task' | 'entry_body' | 'entry_log' | 'entry_plan'
   matchedContent: string
   originalTitle: string
   matchedOriginal: string

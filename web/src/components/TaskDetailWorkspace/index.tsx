@@ -4,7 +4,7 @@ import { useI18n } from '@/i18n/context'
 import type { TaskEntry, WorkSession, Task } from '@/types'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { getTaskExtraInfoValue, submitTaskEntry } from '@/services/api'
-import { updatePlanItem, deletePlanItem, takeOverTask } from '@/services/api'
+import { updatePlanItem, takeOverTask } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
 import { Copy, AlertTriangle } from 'lucide-react'
@@ -533,9 +533,9 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
                   onPlanComplete={(detailId) => handlePlanAction(detailId, 'DONE')}
                   onPlanSkip={(detailId) => handlePlanAction(detailId, 'SKIPPED')}
                   onPlanRevert={(detailId) => handlePlanAction(detailId, 'PLANNED')}
-                  onDeletePlan={(detailId) => deletePlanItem(detailId).then(() => {
-                    if (activeTaskId) setActiveTask(activeTaskId) // refresh view
-                  })}
+                  onDeletePlan={async () => {
+                    await deleteEntry(selectedTask.id, entry.id)
+                  }}
                   onFirstMeaningfulEdit={handleFirstMeaningfulEdit}
                   onEditingChange={(editing) => {
                     if (editing) {

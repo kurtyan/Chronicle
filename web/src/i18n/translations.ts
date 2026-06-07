@@ -188,6 +188,7 @@ export const translations: Record<string, TranslationEntry> = {
   'search.matchTitle': { 'zh-CN': '标题', en: 'Title' },
   'search.matchBody': { 'zh-CN': '正文', en: 'Body' },
   'search.matchLog': { 'zh-CN': '记录', en: 'Log' },
+  'search.matchPlan': { 'zh-CN': '计划', en: 'Plan' },
   'search.close': { 'zh-CN': '关闭', en: 'Close' },
 
   // Auto-AFK Settings

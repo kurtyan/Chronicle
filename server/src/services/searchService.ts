@@ -3,20 +3,31 @@ import { tokenize } from './tokenizer'
 
 // --- Index write operations ---
 
+type EntryType = 'body' | 'log' | 'plan'
+type EntrySource = 'entry_body' | 'entry_log' | 'entry_plan'
+
+function sourceForEntryType(type: string): EntrySource {
+  return type === 'body' ? 'entry_body' : type === 'plan' ? 'entry_plan' : 'entry_log'
+}
+
+function entryTypeForSource(source: string): EntryType {
+  return source === 'entry_body' ? 'body' : source === 'entry_plan' ? 'plan' : 'log'
+}
+
 export function indexTask(taskId: string, title: string): void {
   const db = getDb()
   db.prepare('DELETE FROM tasks_fts WHERE task_id = ? AND source = ?').run(taskId, 'task')
-  db.prepare('INSERT INTO tasks_fts(task_id, source, content) VALUES (?, ?, ?)').run(
-    taskId, 'task', tokenize(title)
+  db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
+    taskId, null, 'task', tokenize(title)
   )
 }
 
-export function indexEntry(taskId: string, _entryId: string, content: string, type: 'body' | 'log' | 'plan'): void {
+export function indexEntry(taskId: string, entryId: string, content: string, type: EntryType): void {
   const db = getDb()
-  const source = type === 'body' ? 'entry_body' : type === 'log' ? 'entry_log' : 'entry_plan'
-  db.prepare('DELETE FROM tasks_fts WHERE task_id = ? AND source = ?').run(taskId, source)
-  db.prepare('INSERT INTO tasks_fts(task_id, source, content) VALUES (?, ?, ?)').run(
-    taskId, source, tokenize(content)
+  const source = sourceForEntryType(type)
+  db.prepare('DELETE FROM tasks_fts WHERE entry_id = ?').run(entryId)
+  db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
+    taskId, entryId, source, tokenize(content)
   )
 }
 
@@ -24,9 +35,8 @@ export function removeTaskFromIndex(taskId: string): void {
   getDb().prepare('DELETE FROM tasks_fts WHERE task_id = ?').run(taskId)
 }
 
-export function removeEntryFromIndex(taskId: string, type: 'body' | 'log' | 'plan'): void {
-  const source = type === 'body' ? 'entry_body' : type === 'log' ? 'entry_log' : 'entry_plan'
-  getDb().prepare('DELETE FROM tasks_fts WHERE task_id = ? AND source = ?').run(taskId, source)
+export function removeEntryFromIndex(entryId: string): void {
+  getDb().prepare('DELETE FROM tasks_fts WHERE entry_id = ?').run(entryId)
 }
 
 // --- Populate FTS index from existing data ---
@@ -40,16 +50,16 @@ export function populateFtsIndex(): void {
 
   const tasks = db.prepare('SELECT id, title FROM tasks').all() as Array<{ id: string; title: string }>
   for (const t of tasks) {
-    db.prepare('INSERT INTO tasks_fts(task_id, source, content) VALUES (?, ?, ?)').run(
-      t.id, 'task', tokenize(t.title)
+    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
+      t.id, null, 'task', tokenize(t.title)
     )
   }
 
-  const entries = db.prepare('SELECT task_id, type, content FROM task_entries').all() as Array<{ task_id: string; type: string; content: string }>
+  const entries = db.prepare('SELECT id, task_id, type, content FROM task_entries').all() as Array<{ id: string; task_id: string; type: string; content: string }>
   for (const e of entries) {
-    const source = e.type === 'body' ? 'entry_body' : 'entry_log'
-    db.prepare('INSERT INTO tasks_fts(task_id, source, content) VALUES (?, ?, ?)').run(
-      e.task_id, source, tokenize(e.content)
+    const source = sourceForEntryType(e.type)
+    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
+      e.task_id, e.id, source, tokenize(e.content)
     )
   }
 
@@ -66,16 +76,16 @@ export function rebuildFtsIndex(): void {
 
   const tasks = db.prepare('SELECT id, title FROM tasks').all() as Array<{ id: string; title: string }>
   for (const t of tasks) {
-    db.prepare('INSERT INTO tasks_fts(task_id, source, content) VALUES (?, ?, ?)').run(
-      t.id, 'task', tokenize(t.title)
+    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
+      t.id, null, 'task', tokenize(t.title)
     )
   }
 
-  const entries = db.prepare('SELECT task_id, type, content FROM task_entries').all() as Array<{ task_id: string; type: string; content: string }>
+  const entries = db.prepare('SELECT id, task_id, type, content FROM task_entries').all() as Array<{ id: string; task_id: string; type: string; content: string }>
   for (const e of entries) {
-    const source = e.type === 'body' ? 'entry_body' : 'entry_log'
-    db.prepare('INSERT INTO tasks_fts(task_id, source, content) VALUES (?, ?, ?)').run(
-      e.task_id, source, tokenize(e.content)
+    const source = sourceForEntryType(e.type)
+    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
+      e.task_id, e.id, source, tokenize(e.content)
     )
   }
 
@@ -90,7 +100,7 @@ export interface SearchResult {
   taskType: string
   taskStatus: string
   taskTags: string[]
-  matchType: 'task' | 'entry_body' | 'entry_log'
+  matchType: 'task' | EntrySource
   matchedContent: string
   // Original text for highlighting
   originalTitle: string
@@ -122,13 +132,14 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
   // --- Phase 1: FTS5 tokenized search ---
   const ftsResults = ftsQuery.trim()
     ? db.prepare(`
-    SELECT f.task_id, f.source, f.content, f.rank
+    SELECT f.task_id, f.entry_id, f.source, f.content, f.rank
     FROM tasks_fts f
     WHERE tasks_fts MATCH ?
     ORDER BY f.rank
     LIMIT ?
   `).all(ftsQuery, limit) as Array<{
     task_id: string
+    entry_id: string | null
     source: string
     content: string
     rank: number
@@ -139,10 +150,23 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
   const exactTaskIds = new Set<string>()
   const exactResults: Array<{
     task_id: string
-    source: 'task' | 'entry_body' | 'entry_log'
+    entry_id: string | null
+    source: 'task' | EntrySource
     content: string
     rank: number
   }> = []
+
+  function addFallbackResult(result: {
+    task_id: string
+    entry_id: string | null
+    source: 'task' | EntrySource
+    content: string
+    rank: number
+  }) {
+    const key = `${result.task_id}:${result.entry_id ?? result.source}`
+    if (exactResults.some((existing) => `${existing.task_id}:${existing.entry_id ?? existing.source}` === key)) return
+    exactResults.push(result)
+  }
 
   // Match in task titles
   const titleMatches = db.prepare(
@@ -150,21 +174,49 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
   ).all(`%${trimmed}%`) as Array<{ id: string; title: string }>
   for (const m of titleMatches) {
     exactTaskIds.add(m.id)
-    exactResults.push({ task_id: m.id, source: 'task', content: '', rank: -1.0 })
+    addFallbackResult({ task_id: m.id, entry_id: null, source: 'task', content: '', rank: -1.0 })
   }
 
-  // Match in task entries (body + log)
+  // Match in task entries (body + log + plan)
   const entryMatches = db.prepare(
-    `SELECT task_id, type, content FROM task_entries WHERE content LIKE ?`
-  ).all(`%${trimmed}%`) as Array<{ task_id: string; type: string; content: string }>
+    `SELECT id, task_id, type, content FROM task_entries WHERE content LIKE ?`
+  ).all(`%${trimmed}%`) as Array<{ id: string; task_id: string; type: string; content: string }>
   for (const m of entryMatches) {
     exactTaskIds.add(m.task_id)
-    exactResults.push({
+    addFallbackResult({
       task_id: m.task_id,
-      source: m.type === 'body' ? 'entry_body' : 'entry_log',
+      entry_id: m.id,
+      source: sourceForEntryType(m.type),
       content: m.content,
       rank: -1.0,
     })
+  }
+
+  const uniqueTokens = [...new Set(tokens)]
+  if (uniqueTokens.length > 1) {
+    const titleTokenMatches = db.prepare(
+      'SELECT id, title FROM tasks'
+    ).all() as Array<{ id: string; title: string }>
+    for (const m of titleTokenMatches) {
+      if (!uniqueTokens.every((token) => m.title.includes(token))) continue
+      exactTaskIds.add(m.id)
+      addFallbackResult({ task_id: m.id, entry_id: null, source: 'task', content: '', rank: -0.5 })
+    }
+
+    const entryTokenMatches = db.prepare(
+      'SELECT id, task_id, type, content FROM task_entries'
+    ).all() as Array<{ id: string; task_id: string; type: string; content: string }>
+    for (const m of entryTokenMatches) {
+      if (!uniqueTokens.every((token) => m.content.includes(token))) continue
+      exactTaskIds.add(m.task_id)
+      addFallbackResult({
+        task_id: m.task_id,
+        entry_id: m.id,
+        source: sourceForEntryType(m.type),
+        content: m.content,
+        rank: -0.5,
+      })
+    }
   }
 
   // Combine FTS + exact results (exact matches get rank -1.0 so they sort first)
@@ -229,23 +281,20 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
   for (const tm of tagMatches) {
     if (!taskMap.has(tm.id)) {
       taskMap.set(tm.id, tm)
-      combined.push({ task_id: tm.id, source: 'task', content: '', rank: 0.5 })
+      combined.push({ task_id: tm.id, entry_id: null, source: 'task', content: '', rank: 0.5 })
     }
   }
 
   // Fetch original entry content for highlighting
-  const entryResultIds = combined.filter(r => r.source !== 'task').map(r => r.task_id)
+  const entryResultIds = combined.filter(r => r.source !== 'task' && r.entry_id).map(r => r.entry_id!)
   let entryOriginalMap = new Map<string, string>()
   if (entryResultIds.length > 0) {
     const entryPlaceholders = entryResultIds.map(() => '?').join(', ')
     const entries = db.prepare(`
-      SELECT task_id, type, content FROM task_entries WHERE task_id IN (${entryPlaceholders})
-    `).all(...entryResultIds) as Array<{ task_id: string; type: string; content: string }>
-    for (const f of combined) {
-      if (f.source === 'task') continue
-      const entryType = f.source === 'entry_body' ? 'body' : 'log'
-      const entry = entries.find(e => e.task_id === f.task_id && e.type === entryType)
-      if (entry) entryOriginalMap.set(f.task_id + ':' + f.source, entry.content)
+      SELECT id, content FROM task_entries WHERE id IN (${entryPlaceholders})
+    `).all(...entryResultIds) as Array<{ id: string; content: string }>
+    for (const entry of entries) {
+      entryOriginalMap.set(entry.id, entry.content)
     }
   }
 
@@ -255,7 +304,7 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
     const task = taskMap.get(f.task_id)
     if (!task) continue
 
-    const matchedOrig = f.source === 'task' ? '' : (entryOriginalMap.get(f.task_id + ':' + f.source) || '')
+    const matchedOrig = f.source === 'task' ? '' : (f.entry_id ? entryOriginalMap.get(f.entry_id) || '' : '')
     const isExact = exactTaskIds.has(f.task_id)
 
     const result: SearchResult = {
@@ -264,7 +313,7 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
       taskType: task.type,
       taskStatus: task.status,
       taskTags: JSON.parse(task.tags || '[]'),
-      matchType: f.source === 'task' ? 'task' : f.source === 'entry_body' ? 'entry_body' : 'entry_log',
+      matchType: f.source === 'task' ? 'task' : sourceForEntryType(entryTypeForSource(f.source)),
       matchedContent: f.source === 'task' ? '' : f.content,
       originalTitle: task.title,
       matchedOriginal: matchedOrig,

@@ -1,5 +1,5 @@
 import { getDb } from '../db'
-import { indexEntry } from './searchService'
+import { indexEntry, removeEntryFromIndex } from './searchService'
 
 function queryAll(sql: string, params: any[] = []): any[] {
   return getDb().prepare(sql).all(...params)
@@ -111,7 +111,12 @@ export function getPlanItems(planDate: string): PlanItem[] {
 }
 
 export function getPlanItemDetail(detailId: string): PlanItemDetail | null {
-  const row = queryAll("SELECT * FROM plan_item_details WHERE id = ? AND status != 'UNFINISHED'", [detailId])[0]
+  const row = queryAll('SELECT * FROM plan_item_details WHERE id = ?', [detailId])[0]
+  return row ? rowToPlanItemDetail(row) : null
+}
+
+function getPlanItemDetailForDelete(detailId: string): PlanItemDetail | null {
+  const row = queryAll('SELECT * FROM plan_item_details WHERE id = ?', [detailId])[0]
   return row ? rowToPlanItemDetail(row) : null
 }
 
@@ -217,15 +222,21 @@ export function updatePlanItem(detailId: string, data: {
 }
 
 export function deletePlanItem(detailId: string): boolean {
-  const detail = getPlanItemDetail(detailId)
+  const detail = getPlanItemDetailForDelete(detailId)
   if (!detail) return false
 
   const entry = queryAll('SELECT * FROM task_entries WHERE id = ?', [detail.entryId])[0] as any
-  run('DELETE FROM plan_item_details WHERE id = ?', [detailId])
-  if (entry) {
-    run('DELETE FROM task_entries WHERE id = ?', [detail.entryId])
-    run('DELETE FROM tasks_fts WHERE task_id = ? AND source = ?', [entry.task_id, 'entry_plan'])
-  }
+  const db = getDb()
+  const transaction = db.transaction(() => {
+    db.prepare('DELETE FROM plan_item_details WHERE id = ?').run(detailId)
+    if (entry) {
+      db.prepare('DELETE FROM task_entries WHERE id = ?').run(detail.entryId)
+      db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(Date.now(), entry.task_id)
+      removeEntryFromIndex(detail.entryId)
+    }
+  })
+
+  transaction()
   return true
 }
 

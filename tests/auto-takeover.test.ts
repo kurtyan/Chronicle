@@ -1,16 +1,14 @@
 import { test, expect } from '@playwright/test'
 
-const baseUrl = 'http://localhost:18080'
-
 async function createTaskWithTitle(page: import('@playwright/test').Page, title: string) {
-  const res = await page.request.post(`${baseUrl}/api/tasks`, {
+  const res = await page.request.post('/api/tasks', {
     data: { title, type: 'TODO', priority: 'MEDIUM' },
   })
   return res.json()
 }
 
 async function openTask(page: import('@playwright/test').Page, title: string) {
-  await page.goto(`${baseUrl}/?lang=zh-CN`)
+  await page.goto('/?lang=zh-CN')
   await page.waitForLoadState('load')
   await page.locator('h4').filter({ hasText: title }).first().click()
   await expect(page.getByTestId('workspace-info-bar')).toBeVisible()
@@ -18,13 +16,13 @@ async function openTask(page: import('@playwright/test').Page, title: string) {
 
 test.describe('Auto takeover on actual edit', () => {
   test.beforeEach(async ({ page }) => {
-    await page.request.post(`${baseUrl}/api/afk`).catch(() => {})
+    await page.request.post('/api/afk').catch(() => {})
   })
 
   test('existing entry takeover waits for content change and fires once per edit session', async ({ page }) => {
     const title = `AutoTakeoverExisting-${Date.now()}`
     const task = await createTaskWithTitle(page, title)
-    await page.request.post(`${baseUrl}/api/tasks/${task.id}/logs`, {
+    await page.request.post(`/api/tasks/${task.id}/logs`, {
       data: { content: '<p>Original entry</p>', type: 'log' },
     })
 
@@ -44,7 +42,7 @@ test.describe('Auto takeover on actual edit', () => {
     await page.locator('[data-rich-editor="true"] .ProseMirror').fill('Original entry updated')
     await expect.poll(() => takeoverCount).toBe(1)
 
-    const currentSession = await (await page.request.get(`${baseUrl}/api/sessions/current`)).json()
+    const currentSession = await (await page.request.get('/api/sessions/current')).json()
     expect(currentSession.taskId).toBe(task.id)
 
     await page.locator('[data-rich-editor="true"] .ProseMirror').fill('Original entry updated again')

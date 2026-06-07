@@ -31,7 +31,7 @@ export interface TaskEntry {
   content: string
   type: 'body' | 'log' | 'plan'
   createdAt: number
-  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
+  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
   planDetailId?: string
   planEstimatedMinutes?: number
   planEstimatedStart?: string
@@ -204,10 +204,24 @@ export function markTaskDone(id: string): Task | null {
 }
 
 export function deleteTask(id: string): boolean {
-  const result = getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id)
-  getDb().prepare('DELETE FROM task_entries WHERE task_id = ?').run(id)
-  removeTaskFromIndex(id)
-  return result.changes > 0
+  const db = getDb()
+  const existing = getTaskById(id)
+  if (!existing) return false
+
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      DELETE FROM plan_item_details
+      WHERE entry_id IN (SELECT id FROM task_entries WHERE task_id = ?)
+    `).run(id)
+    db.prepare('DELETE FROM task_entries WHERE task_id = ?').run(id)
+    db.prepare('DELETE FROM work_sessions WHERE task_id = ?').run(id)
+    db.prepare('DELETE FROM task_extra_info WHERE task_id = ?').run(id)
+    removeTaskFromIndex(id)
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
+  })
+
+  transaction()
+  return true
 }
 
 // --- Task Entries ---
@@ -246,23 +260,41 @@ export function createTaskEntry(taskId: string, content: string, type: 'body' | 
   return { id, taskId, content, type, createdAt: now }
 }
 
-export function updateTaskEntry(entryId: string, content: string): TaskEntry | null {
-  const existing = queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])
+export function updateTaskEntry(taskId: string, entryId: string, content: string): TaskEntry | null {
+  const existing = queryOne('SELECT * FROM task_entries WHERE id = ? AND task_id = ?', [entryId, taskId])
   if (!existing) return null
 
   run('UPDATE task_entries SET content = ? WHERE id = ?', [content, entryId])
-  run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), existing.task_id])
-  indexEntry(existing.task_id, entryId, content, existing.type as 'body' | 'log' | 'plan')
-  return rowToTaskEntry(queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])!)
+  run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), taskId])
+  indexEntry(taskId, entryId, content, existing.type as 'body' | 'log' | 'plan')
+  const updated = queryOne(
+    `SELECT te.*,
+      pid.status as plan_status,
+      pid.id as plan_detail_id,
+      pid.estimated_minutes as plan_estimated_minutes,
+      pid.estimated_start as plan_estimated_start,
+      pid.estimated_end as plan_estimated_end
+     FROM task_entries te
+     LEFT JOIN plan_item_details pid ON pid.entry_id = te.id
+     WHERE te.id = ? AND te.task_id = ?`,
+    [entryId, taskId]
+  )
+  return updated ? rowToTaskEntry(updated) : null
 }
 
-export function deleteTaskEntry(entryId: string): boolean {
-  const existing = queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])
+export function deleteTaskEntry(taskId: string, entryId: string): boolean {
+  const existing = queryOne('SELECT * FROM task_entries WHERE id = ? AND task_id = ?', [entryId, taskId])
   if (!existing) return false
 
-  run('DELETE FROM task_entries WHERE id = ?', [entryId])
-  run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), existing.task_id])
-  removeEntryFromIndex(entryId, existing.task_id as string)
+  const db = getDb()
+  const transaction = db.transaction(() => {
+    db.prepare('DELETE FROM plan_item_details WHERE entry_id = ?').run(entryId)
+    db.prepare('DELETE FROM task_entries WHERE id = ? AND task_id = ?').run(entryId, taskId)
+    db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(Date.now(), taskId)
+    removeEntryFromIndex(entryId)
+  })
+
+  transaction()
   return true
 }
 

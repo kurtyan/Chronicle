@@ -49,9 +49,20 @@ export function initDb() {
     )
   `)
 
+  let ftsSchemaChanged = false
+  const ftsExists = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tasks_fts'").get()
+  if (ftsExists) {
+    const columns = db.prepare("PRAGMA table_info('tasks_fts')").all() as Array<{ name: string }>
+    if (!columns.some((col) => col.name === 'entry_id')) {
+      db.exec('DROP TABLE tasks_fts')
+      ftsSchemaChanged = true
+    }
+  }
+
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
       task_id,
+      entry_id,
       source,
       content,
       tokenize = 'unicode61'
@@ -100,7 +111,27 @@ export function initDb() {
     )
   `)
 
+  if (ftsSchemaChanged) {
+    db.prepare('DELETE FROM _meta WHERE key = ?').run('fts_tokenizer_version')
+  }
+
+  cleanupOrphans()
+  db.pragma('foreign_keys = ON')
+
   getLogger().info(`Database initialized: ${dbPath}`)
+}
+
+function cleanupOrphans(): void {
+  getDb().exec(`
+    DELETE FROM plan_item_details
+    WHERE entry_id NOT IN (SELECT id FROM task_entries);
+
+    DELETE FROM work_sessions
+    WHERE task_id NOT IN (SELECT id FROM tasks);
+
+    DELETE FROM task_extra_info
+    WHERE task_id NOT IN (SELECT id FROM tasks);
+  `)
 }
 
 export function getMetaValue(key: string): string | null {

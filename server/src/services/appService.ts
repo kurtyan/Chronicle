@@ -72,11 +72,11 @@ export class AppService {
   }
 
   async updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
-    return updateTaskEntry(entryId, content)
+    return updateTaskEntry(taskId, entryId, content)
   }
 
   async deleteTaskEntry(taskId: string, entryId: string): Promise<boolean> {
-    return deleteTaskEntryImpl(entryId)
+    return deleteTaskEntryImpl(taskId, entryId)
   }
 
   // --- Work Sessions ---

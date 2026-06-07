@@ -447,7 +447,7 @@ import { getMetaValue, setMetaValue } from './db'
 
 // Auto-rebuild FTS index when tokenizer version changes
 const FTS_INDEX_VERSION_KEY = 'fts_tokenizer_version'
-const CURRENT_TOKENIZER_VERSION = '2' // v1: old (single-letter English), v2: new (full English words + jieba)
+const CURRENT_TOKENIZER_VERSION = '3' // v3: per-entry FTS rows with entry_id
 const storedVersion = getMetaValue(FTS_INDEX_VERSION_KEY)
 if (storedVersion !== CURRENT_TOKENIZER_VERSION) {
   const log = getLogger()
