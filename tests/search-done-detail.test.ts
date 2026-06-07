@@ -3,26 +3,26 @@ import { test, expect } from '@playwright/test'
 test.describe('Search DONE task detail', () => {
   test('Search DONE task, view detail, exit search restores previous task', async ({ page }) => {
     // Clean up any existing session
-    await page.request.post('http://localhost:8083/api/afk').catch(() => {})
+    await page.request.post('http://localhost:9983/api/afk').catch(() => {})
 
     // Create a PENDING task (will be selected before search)
     const pendingName = `PreSearch-${Date.now()}`
-    const res1 = await page.request.post('http://localhost:8083/api/tasks', {
+    const res1 = await page.request.post('http://localhost:9983/api/tasks', {
       data: { title: pendingName, type: 'TODO', priority: 'MEDIUM' }
     })
     const pendingTask = await res1.json()
 
     // Create a DONE task (will be found via search)
     const doneName = `SearchDone-${Date.now()}`
-    const res2 = await page.request.post('http://localhost:8083/api/tasks', {
+    const res2 = await page.request.post('http://localhost:9983/api/tasks', {
       data: { title: doneName, type: 'TODO', priority: 'MEDIUM' }
     })
     const doneTask = await res2.json()
-    await page.request.put(`http://localhost:8083/api/tasks/${doneTask.id}`, { data: { status: 'DOING' } })
-    await page.request.put(`http://localhost:8083/api/tasks/${doneTask.id}/done`)
+    await page.request.put(`http://localhost:9983/api/tasks/${doneTask.id}`, { data: { status: 'DOING' } })
+    await page.request.put(`http://localhost:9983/api/tasks/${doneTask.id}/done`)
 
     // Navigate to the page
-    await page.goto('http://localhost:8083/?lang=zh-CN')
+    await page.goto('http://localhost:9983/?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.waitForTimeout(500)
 
@@ -71,19 +71,19 @@ test.describe('Search DONE task detail', () => {
 
   test('Search DONE task when no task pre-selected, exit clears right panel', async ({ page }) => {
     // Clean up any existing session
-    await page.request.post('http://localhost:8083/api/afk').catch(() => {})
+    await page.request.post('http://localhost:9983/api/afk').catch(() => {})
 
     // Create a DONE task
     const doneName = `SearchDone-NoPre-${Date.now()}`
-    const res = await page.request.post('http://localhost:8083/api/tasks', {
+    const res = await page.request.post('http://localhost:9983/api/tasks', {
       data: { title: doneName, type: 'TODO', priority: 'MEDIUM' }
     })
     const doneTask = await res.json()
-    await page.request.put(`http://localhost:8083/api/tasks/${doneTask.id}`, { data: { status: 'DOING' } })
-    await page.request.put(`http://localhost:8083/api/tasks/${doneTask.id}/done`)
+    await page.request.put(`http://localhost:9983/api/tasks/${doneTask.id}`, { data: { status: 'DOING' } })
+    await page.request.put(`http://localhost:9983/api/tasks/${doneTask.id}/done`)
 
     // Navigate to the page
-    await page.goto('http://localhost:8083/?lang=zh-CN')
+    await page.goto('http://localhost:9983/?lang=zh-CN')
     await page.waitForLoadState('load')
     await page.waitForTimeout(500)
 

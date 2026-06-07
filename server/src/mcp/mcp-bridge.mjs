@@ -33,11 +33,30 @@ const baseUrl = (() => {
   return `http://${config.host}:${config.port}`
 })()
 
+/**
+ * Auto-detect the Claude Code conversation ID from the parent process.
+ * chronicle-mcp runs as a direct child of the Claude Code process,
+ * so process.ppid is the Claude Code PID, and the session file is named
+ * by that PID under ~/.claude/sessions/.
+ */
+function detectConversationId() {
+  try {
+    const sessionPath = path.join(os.homedir(), '.claude', 'sessions', `${process.ppid}.json`)
+    if (fs.existsSync(sessionPath)) {
+      const session = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'))
+      return session.sessionId || undefined
+    }
+  } catch {}
+  return undefined
+}
+const autoConversationId = detectConversationId()
+
 async function api(path, options = {}) {
   const url = `${baseUrl}${path}`
+  const conversationId = options.conversationId || autoConversationId
   const headers = { 'Content-Type': 'application/json' }
-  if (options.conversationId) {
-    headers['X-Claude-Conversation-Id'] = options.conversationId
+  if (conversationId) {
+    headers['X-Claude-Conversation-Id'] = conversationId
   }
   const res = await fetch(url, {
     method: options.method ?? 'GET',
@@ -52,7 +71,10 @@ async function api(path, options = {}) {
 }
 
 function conversationIdSchema() {
-  return z.string().optional().describe('Current Claude conversation ID. Retrieved from ~/.claude/sessions/<PID>.json by the caller.')
+  return z.string().optional().describe(
+    'Claude conversation ID. Auto-detected from parent process — only pass this ' +
+    'to override the auto-detected value.'
+  )
 }
 
 const server = new McpServer(

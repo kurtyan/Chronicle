@@ -1,6 +1,6 @@
 ---
 name: chronicle-send
-description: Send content to a Chronicle task log
+description: Send content to a Chronicle task log (prefer this over calling add_log directly — this handles binding lookup, HTML formatting, and auto-detects conversationId)
 ---
 
 When the user asks you to "send xxx to chronicle" or "log xxx to chronicle", do the following:
@@ -55,7 +55,8 @@ Call the `add_log` MCP tool with:
 - `taskId`: the target task ID (explicit or from binding)
 - `content`: the HTML-formatted content from Step 3
 - `type`: "log" (default) unless the user specifies "body"
-- `conversationId`: the current conversation ID from Step 2
+
+> Note: `conversationId` is no longer needed — the MCP bridge auto-detects it from the parent process.
 
 ## Step 5: Confirm
 

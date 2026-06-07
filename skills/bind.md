@@ -40,6 +40,6 @@ If the conversation was compacted and the user references a task:
 
 ## Important
 
-- Every time you call a Chronicle MCP tool (get_task, add_log, takeover_task, etc.), pass `conversationId` as a parameter. Get it by running the bash command in Step 1.
 - Each conversation has its own binding file — they are completely isolated.
 - A new conversation will not find an existing binding and needs the user to bind a task first.
+- When calling Chronicle MCP tools (`add_log`, `takeover_task`, etc.), `conversationId` is auto-detected by the MCP bridge — you no longer need to pass it manually.
