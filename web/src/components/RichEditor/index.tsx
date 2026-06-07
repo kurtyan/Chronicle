@@ -354,7 +354,7 @@ function RichEditorInner({
   useEffect(() => {
     if (!editor) return
     if (content !== contentRef.current) {
-      editor.commands.setContent(content)
+      editor.commands.setContent(content, { emitUpdate: false })
       contentRef.current = content
     }
   }, [content, editor])

@@ -119,6 +119,12 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
 
   const handleAfk = async () => { await doAfk() }
 
+  const handleFirstMeaningfulEdit = useCallback(() => {
+    if (activeTaskId && activeTaskId !== DRAFT_ID) {
+      autoTakeOver(activeTaskId)
+    }
+  }, [activeTaskId, autoTakeOver])
+
   const handlePlanAction = async (detailId: string, status: 'DOING' | 'DONE' | 'SKIPPED' | 'PLANNED') => {
     try {
       if (status === 'DOING' && selectedTask) await takeOverTask(selectedTask.id)
@@ -530,11 +536,11 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
                   onDeletePlan={(detailId) => deletePlanItem(detailId).then(() => {
                     if (activeTaskId) setActiveTask(activeTaskId) // refresh view
                   })}
+                  onFirstMeaningfulEdit={handleFirstMeaningfulEdit}
                   onEditingChange={(editing) => {
                     if (editing) {
                       setEditingEntryId(entry.id)
                       if (activeTaskId && activeTaskId !== DRAFT_ID) {
-                        autoTakeOver(activeTaskId)
                         localStorage.setItem(`chronicle:editing_entry_id:${activeTaskId}`, entry.id)
                       }
                       // Auto-start plan entry when editing starts
@@ -570,6 +576,7 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
               onChange={(content) => { if (activeTaskId) setLogContentDraft(activeTaskId, content) }}
               onSubmit={handleSubmitLog}
               onSilentSave={handleSilentSave}
+              onFirstMeaningfulEdit={handleFirstMeaningfulEdit}
               initialContent={logContent}
               taskId={activeTaskId ?? undefined}
               onSave={() => {}}

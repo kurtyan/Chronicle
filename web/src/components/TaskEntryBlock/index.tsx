@@ -45,6 +45,7 @@ interface TaskEntryBlockProps {
   onSubmit?: (content: string) => void
   onSilentSave?: (content: string) => void
   onChange?: (content: string) => void
+  onFirstMeaningfulEdit?: () => void
   initialContent?: string
   highlightTokens?: string[]
   highlightPlan?: boolean
@@ -145,7 +146,7 @@ function ImageViewer({ src, onClose }: ImageViewerProps) {
   )
 }
 
-export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, initialContent, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip, onPlanRevert, onDeletePlan }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, onFirstMeaningfulEdit, initialContent, highlightTokens, highlightPlan, taskId, planStatus, planDetailId, onPlanStart, onPlanComplete, onPlanSkip, onPlanRevert, onDeletePlan }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
 
@@ -164,8 +165,15 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [planConfirmDelete, setPlanConfirmDelete] = useState(false)
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null)
+  const hasFiredFirstMeaningfulEditRef = useRef(false)
+  const originalContentRef = useRef(entry?.content ?? '')
 
   const editing = externalEditing ?? internalEditing
+
+  useEffect(() => {
+    hasFiredFirstMeaningfulEditRef.current = false
+    originalContentRef.current = entry?.content ?? ''
+  }, [taskId, entry?.id, isNewEntry])
 
   // When not editing, sync draft content from entry (external updates) or clear localStorage
   useEffect(() => {
@@ -195,10 +203,23 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     setDraftContent(html)
     if (draftKey) localStorage.setItem(draftKey, html)
     onChange?.(html)
-  }, [draftKey, onChange])
+
+    if (hasFiredFirstMeaningfulEditRef.current || !onFirstMeaningfulEdit) return
+
+    const isMeaningfulEdit = isNewEntry
+      ? !isHtmlEmpty(html)
+      : Boolean(entry && html.trim() !== originalContentRef.current.trim())
+
+    if (isMeaningfulEdit) {
+      hasFiredFirstMeaningfulEditRef.current = true
+      onFirstMeaningfulEdit()
+    }
+  }, [draftKey, onChange, onFirstMeaningfulEdit, isNewEntry, entry])
 
   const handleEdit = () => {
     if (!entry) return
+    hasFiredFirstMeaningfulEditRef.current = false
+    originalContentRef.current = entry.content
     setDraftContent(entry.content)
     if (draftKey) localStorage.setItem(draftKey, entry.content)
     if (onEditingChange) {
@@ -212,6 +233,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     if (isHtmlEmpty(draftContent)) return
     if (!entry) return
     onSave(entry.id, draftContent.trim())
+    hasFiredFirstMeaningfulEditRef.current = false
     if (draftKey) localStorage.removeItem(draftKey)
     if (onEditingChange) {
       onEditingChange(false)
@@ -228,6 +250,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
   }
 
   const handleCancel = () => {
+    hasFiredFirstMeaningfulEditRef.current = false
     if (draftKey) localStorage.removeItem(draftKey)
     if (entry) setDraftContent(entry.content)
     if (onEditingChange) {
@@ -240,6 +263,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
   const handleSubmit = async () => {
     if (isHtmlEmpty(draftContent)) return
     await onSubmit?.(draftContent.trim())
+    hasFiredFirstMeaningfulEditRef.current = false
     if (draftKey) localStorage.removeItem(draftKey)
     setDraftContent('')
   }
