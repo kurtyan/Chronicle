@@ -11,6 +11,7 @@ import { getNextTaskId } from '@/services/api'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
 import { registerShortcut } from '@/shortcuts/registry'
+import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 
 const DRAFT_ID = '__draft__'
 
@@ -187,6 +188,7 @@ export function BoardPage() {
 
   // Cancel confirm dialog
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [showMeetingDialog, setShowMeetingDialog] = useState(false)
 
   // beforeunload: ensure active session is closed via sendBeacon
   useEffect(() => {
@@ -811,7 +813,7 @@ export function BoardPage() {
           {/* Status filter expansion — animated NEW | < / New-Done-Dropped */}
           <div
             className="overflow-hidden transition-all duration-300 ease-in-out ml-2"
-            style={{ maxWidth: expandedFilter ? '260px' : '80px' }}
+            style={{ maxWidth: expandedFilter ? '330px' : '165px' }}
           >
             <div
               className="flex gap-1 whitespace-nowrap relative"
@@ -828,6 +830,12 @@ export function BoardPage() {
                   onClick={handleNewTask}
                 >
                   {t('task.newLabel')}
+                </button>
+                <button
+                  className="text-xs px-2 py-0.5 border border-l-0 border-border transition hover:bg-muted text-muted-foreground whitespace-nowrap"
+                  onClick={() => setShowMeetingDialog(true)}
+                >
+                  Meeting
                 </button>
                 <button
                   className="text-xs px-1.5 py-0.5 rounded-r border border-l-0 border-border transition hover:bg-muted text-muted-foreground"
@@ -848,6 +856,12 @@ export function BoardPage() {
                   onClick={handleNewTask}
                 >
                   {t('task.newLabel')}
+                </button>
+                <button
+                  className="text-xs px-2 py-0.5 rounded transition hover:bg-muted text-muted-foreground whitespace-nowrap"
+                  onClick={() => setShowMeetingDialog(true)}
+                >
+                  Meeting
                 </button>
                 <button
                   className={`text-xs px-2 py-0.5 rounded transition whitespace-nowrap ${
@@ -1203,6 +1217,15 @@ export function BoardPage() {
           </>
         )}
       </div>
+      <MeetingExtractionDialog
+        open={showMeetingDialog}
+        mode="record"
+        onOpenChange={setShowMeetingDialog}
+        onSaved={async (task) => {
+          await loadTodos()
+          await setActiveTask(task.id)
+        }}
+      />
     </div>
   )
 }

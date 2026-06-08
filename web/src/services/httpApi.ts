@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -298,5 +298,30 @@ export const httpApi: ApiInterface = {
   async setStartOfDayOffset(offset: number): Promise<number> {
     const { data } = await (await withClientId()).put<{ offset: number }>('/api/settings/start-of-day-offset', { offset })
     return data.offset
+  },
+
+  async fetchLlmSettings(): Promise<LlmSettings> {
+    const { data } = await (await withClientId()).get<LlmSettings>('/api/settings/llm')
+    return data
+  },
+
+  async saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings> {
+    const { data } = await (await withClientId()).put<LlmSettings>('/api/settings/llm', settings)
+    return data
+  },
+
+  async testLlmConnection(): Promise<{ ok: boolean; latencyMs?: number; model?: string; error?: string }> {
+    const { data } = await (await withClientId()).post('/api/settings/llm/test-connection')
+    return data
+  },
+
+  async extractMeeting(rawContent: string, mode: 'record' | 'test' = 'record'): Promise<MeetingExtractionResult> {
+    const { data } = await (await withClientId()).post<MeetingExtractionResult>('/api/meetings/extract', { rawContent, mode })
+    return data
+  },
+
+  async createMeeting(req: CreateMeetingRequest): Promise<Task> {
+    const { data } = await (await withClientId()).post<Task>('/api/meetings', req)
+    return data
   },
 }

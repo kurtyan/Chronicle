@@ -1,0 +1,767 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chronicle Work OS Product Plan</title>
+  <style>
+    :root {
+      --paper: #fbfaf6;
+      --ink: #171717;
+      --muted: #66645f;
+      --line: #d7d2c8;
+      --soft: #f0ede5;
+      --blue: #2563eb;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --green: #15803d;
+      --red: #b91c1c;
+      --violet: #6d28d9;
+      --slate: #334155;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #dedbd2;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      display: grid;
+      gap: 28px;
+      padding: 28px;
+    }
+
+    .slide {
+      position: relative;
+      width: min(1280px, calc(100vw - 56px));
+      aspect-ratio: 16 / 9;
+      margin: 0 auto;
+      overflow: hidden;
+      background: var(--paper);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      box-shadow: 0 18px 44px rgba(0, 0, 0, 0.16);
+      page-break-after: always;
+    }
+
+    .slide::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0, 0, 0, 0.034) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.034) 1px, transparent 1px);
+      background-size: 32px 32px;
+      pointer-events: none;
+    }
+
+    .inner {
+      position: relative;
+      z-index: 1;
+      height: 100%;
+      padding: 52px 64px;
+    }
+
+    .kicker {
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 {
+      max-width: 920px;
+      font-size: 62px;
+      line-height: 1.08;
+      font-weight: 860;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      max-width: 980px;
+      font-size: 43px;
+      line-height: 1.12;
+      font-weight: 840;
+      letter-spacing: 0;
+    }
+
+    .sub {
+      max-width: 900px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 23px;
+      line-height: 1.45;
+    }
+
+    .footer {
+      position: absolute;
+      left: 64px;
+      right: 64px;
+      bottom: 28px;
+      display: flex;
+      justify-content: space-between;
+      color: #77736d;
+      font-size: 13px;
+    }
+
+    .hero-grid {
+      position: absolute;
+      right: 70px;
+      bottom: 78px;
+      width: 480px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .hero-card {
+      min-height: 118px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.86);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
+    }
+
+    .hero-card strong {
+      display: block;
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+
+    .hero-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.4;
+      font-weight: 650;
+    }
+
+    .stripe-blue { border-top: 6px solid var(--blue); }
+    .stripe-teal { border-top: 6px solid var(--teal); }
+    .stripe-amber { border-top: 6px solid var(--amber); }
+    .stripe-violet { border-top: 6px solid var(--violet); }
+
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+      margin-top: 36px;
+    }
+
+    .principle {
+      min-height: 370px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .principle .num {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      margin-bottom: 18px;
+      border-radius: 50%;
+      color: white;
+      background: #171717;
+      font-weight: 850;
+    }
+
+    .principle h3 {
+      font-size: 25px;
+      line-height: 1.18;
+      margin-bottom: 14px;
+    }
+
+    .principle p {
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.55;
+    }
+
+    .timeline-layout {
+      display: grid;
+      grid-template-columns: 0.78fr 1.22fr;
+      gap: 34px;
+      margin-top: 34px;
+      align-items: stretch;
+    }
+
+    .metric-board {
+      display: grid;
+      gap: 14px;
+    }
+
+    .metric {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.84);
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 32px;
+      line-height: 1;
+    }
+
+    .session-chart {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.84);
+    }
+
+    .hours {
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      margin-bottom: 12px;
+    }
+
+    .lane {
+      display: grid;
+      grid-template-columns: 105px 1fr;
+      gap: 12px;
+      align-items: center;
+      min-height: 52px;
+      border-top: 1px solid var(--line);
+    }
+
+    .lane:first-of-type { border-top: 0; }
+
+    .lane-label {
+      font-size: 15px;
+      font-weight: 780;
+    }
+
+    .lane-track {
+      position: relative;
+      height: 34px;
+      background: #f5f3ee;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .bar {
+      position: absolute;
+      top: 5px;
+      height: 24px;
+      border-radius: 7px;
+      color: white;
+      display: flex;
+      align-items: center;
+      padding: 0 9px;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .blue { background: var(--blue); }
+    .teal { background: var(--teal); }
+    .amber { background: var(--amber); }
+    .green { background: var(--green); }
+    .red { background: var(--red); }
+    .violet { background: var(--violet); }
+    .slate { background: var(--slate); }
+
+    .meeting-flow {
+      display: grid;
+      grid-template-columns: 1fr 1.1fr;
+      gap: 30px;
+      margin-top: 34px;
+    }
+
+    .form-mock, .split-mock {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.86);
+    }
+
+    .field {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fffdf8;
+      color: #333;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .field small {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .arrow-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 18px;
+      font-size: 24px;
+      font-weight: 840;
+    }
+
+    .split-row {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      gap: 12px;
+      align-items: center;
+      margin-top: 14px;
+    }
+
+    .split-row span {
+      color: var(--muted);
+      font-weight: 760;
+    }
+
+    .split-track {
+      height: 38px;
+      border-radius: 9px;
+      overflow: hidden;
+      background: #f4f1ea;
+      display: grid;
+      grid-auto-flow: column;
+    }
+
+    .seg {
+      display: grid;
+      place-items: center;
+      color: white;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .taxonomy {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 34px;
+      margin-top: 36px;
+    }
+
+    .tree, .tag-cloud {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.84);
+      min-height: 390px;
+    }
+
+    .tree h3, .tag-cloud h3 {
+      font-size: 26px;
+      margin-bottom: 18px;
+    }
+
+    .area {
+      margin-top: 12px;
+      padding: 13px 14px;
+      border-left: 6px solid var(--blue);
+      border-radius: 8px;
+      background: #f8fafc;
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .area:nth-child(3) { border-left-color: var(--teal); }
+    .area:nth-child(4) { border-left-color: var(--amber); }
+    .area:nth-child(5) { border-left-color: var(--violet); }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .tag {
+      padding: 9px 12px;
+      border-radius: 999px;
+      color: white;
+      background: var(--slate);
+      font-size: 16px;
+      font-weight: 800;
+    }
+
+    .tag.ktlo { background: var(--red); }
+    .tag.req { background: var(--blue); }
+    .tag.res { background: var(--violet); }
+    .tag.meet { background: var(--teal); }
+    .tag.follow { background: var(--amber); }
+    .tag.bug { background: var(--green); }
+
+    .llm-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 14px;
+      margin-top: 38px;
+    }
+
+    .llm-card {
+      min-height: 280px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.84);
+    }
+
+    .llm-card strong {
+      display: block;
+      font-size: 20px;
+      margin-bottom: 10px;
+    }
+
+    .llm-card p {
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.48;
+    }
+
+    .follow-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      margin-top: 36px;
+    }
+
+    .log-card, .reminder-card {
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.86);
+      min-height: 330px;
+    }
+
+    .log-text {
+      margin-top: 20px;
+      padding: 20px;
+      border-left: 6px solid var(--amber);
+      background: #fff8e8;
+      font-size: 24px;
+      line-height: 1.5;
+      font-weight: 760;
+    }
+
+    .reminder {
+      display: grid;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .reminder div {
+      padding: 14px;
+      border-radius: 10px;
+      background: #f8fafc;
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .roadmap {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      margin-top: 34px;
+    }
+
+    .road {
+      min-height: 408px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.84);
+    }
+
+    .road h3 {
+      font-size: 25px;
+      margin-bottom: 16px;
+    }
+
+    .pill {
+      display: inline-flex;
+      margin-bottom: 14px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: white;
+      font-size: 13px;
+      font-weight: 850;
+    }
+
+    .pill.blue { background: var(--blue); }
+    .pill.teal { background: var(--teal); }
+    .pill.amber { background: var(--amber); }
+
+    .todo {
+      display: grid;
+      gap: 10px;
+    }
+
+    .todo div {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 9px;
+      color: #333;
+      font-size: 16.5px;
+      line-height: 1.36;
+    }
+
+    .todo b {
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      color: white;
+      background: #171717;
+      font-size: 12px;
+    }
+
+    .quote {
+      margin-top: 34px;
+      padding: 19px 22px;
+      border-left: 7px solid var(--blue);
+      background: rgba(37, 99, 235, 0.08);
+      font-size: 22px;
+      line-height: 1.45;
+      font-weight: 760;
+    }
+
+    @media print {
+      body { background: white; }
+      main { padding: 0; gap: 0; }
+      .slide { width: 100vw; border: 0; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Chronicle Work OS</div>
+        <h1>以时间为主线的个人工作操作系统</h1>
+        <p class="sub">Chronicle 的核心不只是任务，而是还原真实工作日：时间花到哪里、当前该做什么、工作留下什么知识、如何提升效率。</p>
+        <div class="hero-grid">
+          <div class="hero-card stripe-blue"><strong>时间管理</strong><span>Take over、AFK、会议、KTLO、Idle 都进入统一时间线。</span></div>
+          <div class="hero-card stripe-teal"><strong>任务执行</strong><span>Day Script 牵引注意力，任务和日志承载执行过程。</span></div>
+          <div class="hero-card stripe-amber"><strong>知识沉淀</strong><span>从日志、会议、任务中提炼 Notes，按 Area 聚合上下文。</span></div>
+          <div class="hero-card stripe-violet"><strong>LLM 助理</strong><span>识别、转换、计划、总结、建议，而不是替你静默管理。</span></div>
+        </div>
+        <div class="footer"><span>01 / 08</span><span>产品重新定义</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Design Principles</div>
+        <h2>设计理念：让 Chronicle 贴近真实工作，而不是强迫工作迁就系统</h2>
+        <div class="principles">
+          <div class="principle">
+            <div class="num">1</div>
+            <h3>时间是真实主线</h3>
+            <p>任务、会议、空闲、打断、恢复都应该落到同一条时间线里，Report 才能解释真实工作日。</p>
+          </div>
+          <div class="principle">
+            <div class="num">2</div>
+            <h3>标签优于固定类型</h3>
+            <p>KTLO、需求、调研、会议、Bug 可以叠加。旧 task type 应弱化，Area + Tags 更符合现实。</p>
+          </div>
+          <div class="principle">
+            <div class="num">3</div>
+            <h3>低摩擦捕获</h3>
+            <p>会议补录、KTLO 快速创建、日志后续提醒，都应该几秒内完成，不进入复杂管理模式。</p>
+          </div>
+          <div class="principle">
+            <div class="num">4</div>
+            <h3>LLM 做转换器</h3>
+            <p>LLM 负责识别标签、提取 follow-up、生成计划、总结知识和效率建议，重要写入由用户确认。</p>
+          </div>
+        </div>
+        <div class="footer"><span>02 / 08</span><span>设计原则</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Time Analytics</div>
+        <h2>工作时间统计从“展示数据”升级为“解释一天”</h2>
+        <p class="sub">Report 不只看做了几个任务，而是区分 Focus、Meeting、KTLO、Idle、Planned vs Unplanned，并给出可执行建议。</p>
+        <div class="timeline-layout">
+          <div class="metric-board">
+            <div class="metric"><span>Focus Time</span><strong>4h 20m</strong></div>
+            <div class="metric"><span>Meeting Time</span><strong>1h 40m</strong></div>
+            <div class="metric"><span>KTLO Time</span><strong>55m</strong></div>
+            <div class="metric"><span>Idle / Gap</span><strong>1h 10m</strong></div>
+          </div>
+          <div class="session-chart">
+            <div class="hours"><div>09</div><div>10</div><div>11</div><div>12</div><div>13</div><div>14</div><div>15</div><div>16</div><div>17</div></div>
+            <div class="lane"><div class="lane-label">Chronicle</div><div class="lane-track"><div class="bar blue" style="left: 4%; width: 26%;">Focus</div><div class="bar blue" style="left: 67%; width: 20%;">Focus</div></div></div>
+            <div class="lane"><div class="lane-label">Meeting</div><div class="lane-track"><div class="bar teal" style="left: 33%; width: 21%;">Planning Meeting</div></div></div>
+            <div class="lane"><div class="lane-label">KTLO</div><div class="lane-track"><div class="bar red" style="left: 55%; width: 12%;">Incident</div></div></div>
+            <div class="lane"><div class="lane-label">Idle</div><div class="lane-track"><div class="bar slate" style="left: 24%; width: 9%;">Gap</div><div class="bar slate" style="left: 88%; width: 8%;">Gap</div></div></div>
+          </div>
+        </div>
+        <div class="quote">效率建议必须基于证据：会议是否挤压深度工作、KTLO 是否过多、任务切换是否碎片化、计划和实际偏差在哪里。</div>
+        <div class="footer"><span>03 / 08</span><span>时间统计与效率分析</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Record Meeting</div>
+        <h2>会议补录：把 Chronicle 外发生的工作纳入时间线</h2>
+        <div class="meeting-flow">
+          <div class="form-mock">
+            <div class="arrow-title">Record Meeting</div>
+            <div class="field"><small>标题</small>Team sync: search indexing</div>
+            <div class="field"><small>时间</small>10:30 - 11:15</div>
+            <div class="field"><small>纪要</small>确认 per-entry FTS 方案；后续补充数据完整性测试。</div>
+            <div class="field"><small>Area / Tags</small>Chronicle · meeting · follow-up</div>
+          </div>
+          <div class="split-mock">
+            <div class="arrow-title">自动生成 task、log、work session</div>
+            <div class="split-row"><span>Before</span><div class="split-track"><div class="seg blue" style="width: 100%;">10:00-11:30 Task A</div></div></div>
+            <div class="split-row"><span>After</span><div class="split-track" style="grid-template-columns: 1fr 1.5fr 1fr;"><div class="seg blue">Task A</div><div class="seg teal">Meeting</div><div class="seg blue">Task A</div></div></div>
+            <div class="field"><small>Overlap 规则</small>会议 session 优先，自动 split 现有 session，避免 report 重复计时。</div>
+          </div>
+        </div>
+        <div class="footer"><span>04 / 08</span><span>会议场景</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Area + Tags</div>
+        <h2>旧 Task Type 失效后，使用 Area 聚合方向，用 Tags 表达属性</h2>
+        <p class="sub">方向需要统计和恢复上下文，所以用 Area；KTLO、需求、调研、会议、Bug 可以叠加，所以用 Tags。</p>
+        <div class="taxonomy">
+          <div class="tree">
+            <h3>Area：工作方向</h3>
+            <div class="area">Chronicle</div>
+            <div class="area">Project A</div>
+            <div class="area">Team / Collaboration</div>
+            <div class="area">Personal Improvement</div>
+          </div>
+          <div class="tag-cloud">
+            <h3>Tags：任务属性</h3>
+            <div class="tags">
+              <span class="tag ktlo">ktlo</span>
+              <span class="tag req">requirement</span>
+              <span class="tag res">research</span>
+              <span class="tag meet">meeting</span>
+              <span class="tag follow">follow-up</span>
+              <span class="tag bug">bug</span>
+              <span class="tag">reading</span>
+              <span class="tag">urgent</span>
+              <span class="tag">decision</span>
+              <span class="tag">note-worthy</span>
+            </div>
+          </div>
+        </div>
+        <div class="footer"><span>05 / 08</span><span>信息组织模型</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Follow-up Detection</div>
+        <h2>日志里的“稍后跟进”应该变成提醒和醒目标识</h2>
+        <div class="follow-layout">
+          <div class="log-card">
+            <h3>Task Log Entry</h3>
+            <div class="log-text">已经发给 Jack 确认，2 小时后跟进一下。</div>
+          </div>
+          <div class="reminder-card">
+            <h3>Chronicle 识别结果</h3>
+            <div class="reminder">
+              <div>提醒时间：今天 16:30</div>
+              <div>提醒内容：跟进 Jack 确认结果</div>
+              <div>来源：当前 task log entry</div>
+              <div>界面：Today + 原日志醒目标识</div>
+            </div>
+          </div>
+        </div>
+        <div class="quote">实现策略：明确时间表达先用规则识别；模糊表达由 LLM 建议；默认生成 suggestion，用户确认后创建 reminder。</div>
+        <div class="footer"><span>06 / 08</span><span>Follow-up 识别</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">LLM Productization</div>
+        <h2>LLM 的五类产品化用法</h2>
+        <div class="llm-grid">
+          <div class="llm-card"><strong>创建时识别</strong><p>Quick Capture 自动建议 title、area、tags、是否 KTLO、估时和优先级。</p></div>
+          <div class="llm-card"><strong>记录时识别</strong><p>从 log 和会议纪要中发现 follow-up、action item、风险、决策、知识点。</p></div>
+          <div class="llm-card"><strong>计划时生成</strong><p>根据 pending tasks、会议、可用时间生成 Day Script 或重排剩余时间。</p></div>
+          <div class="llm-card"><strong>复盘时总结</strong><p>按天、周、Area 总结进展，并结合时间数据给效率建议。</p></div>
+          <div class="llm-card"><strong>查询时召回</strong><p>从 task、log、meeting、note 中恢复项目上下文，回答必须带来源。</p></div>
+        </div>
+        <div class="quote">LLM 的定位：识别、转换、总结、建议。关键写操作需要确认，避免把错误自动写进系统。</div>
+        <div class="footer"><span>07 / 08</span><span>LLM 使用边界</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Roadmap</div>
+        <h2>Roadmap：先补齐真实工作捕获，再形成智能复盘闭环</h2>
+        <div class="roadmap">
+          <div class="road">
+            <span class="pill blue">近期 1-3 周</span>
+            <h3>立刻可落地</h3>
+            <div class="todo">
+              <div><b>1</b><span>Record Meeting：补录会议，生成 task/log/session，处理 overlap split</span></div>
+              <div><b>2</b><span>Area + Tags 基础改造，弱化旧 type</span></div>
+              <div><b>3</b><span>Follow-up Reminder MVP，规则识别 + Today 提醒</span></div>
+              <div><b>4</b><span>KTLO Quick Capture，LLM 建议标签</span></div>
+              <div><b>5</b><span>Report 增加 focus / meeting / KTLO / idle 分类</span></div>
+            </div>
+          </div>
+          <div class="road">
+            <span class="pill teal">中期 1-3 个月</span>
+            <h3>形成闭环</h3>
+            <div class="todo">
+              <div><b>1</b><span>Day Script：当前 block、顺延、跳过、重排</span></div>
+              <div><b>2</b><span>Notes MVP：关联 task/log/area，LLM 生成 note draft</span></div>
+              <div><b>3</b><span>Area Dashboard：任务、时间、notes、follow-ups 聚合</span></div>
+              <div><b>4</b><span>Time Analytics v1：计划偏差、切换频率、效率建议</span></div>
+            </div>
+          </div>
+          <div class="road">
+            <span class="pill amber">远期 Think Big</span>
+            <h3>Work OS</h3>
+            <div class="todo">
+              <div><b>1</b><span>Planner / Timeline / Gantt：ETA、deadline、依赖、过载检测</span></div>
+              <div><b>2</b><span>Work Pattern Intelligence：拖延、估时偏差、高效时间段分析</span></div>
+              <div><b>3</b><span>Knowledge Graph：Area、Task、Log、Note、Meeting、Reminder 互联</span></div>
+              <div><b>4</b><span>API / MCP：外部 agent 可控访问 Chronicle</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="footer"><span>08 / 08</span><span>实施路线</span></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

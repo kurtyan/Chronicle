@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chronicle 产品规划可视化</title>
+  <style>
+    :root {
+      --ink: #171717;
+      --muted: #646464;
+      --line: #d8d8d8;
+      --paper: #fbfaf7;
+      --soft: #f2f0eb;
+      --blue: #2563eb;
+      --teal: #0f766e;
+      --amber: #b45309;
+      --green: #15803d;
+      --red: #b91c1c;
+      --violet: #6d28d9;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #e7e5de;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      display: grid;
+      gap: 28px;
+      padding: 28px;
+    }
+
+    .slide {
+      position: relative;
+      width: min(1280px, calc(100vw - 56px));
+      aspect-ratio: 16 / 9;
+      margin: 0 auto;
+      background: var(--paper);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      overflow: hidden;
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.16);
+      page-break-after: always;
+    }
+
+    .slide::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0, 0, 0, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.035) 1px, transparent 1px);
+      background-size: 32px 32px;
+      pointer-events: none;
+    }
+
+    .inner {
+      position: relative;
+      z-index: 1;
+      height: 100%;
+      padding: 54px 64px;
+    }
+
+    .kicker {
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    h1, h2 {
+      margin: 0;
+      letter-spacing: 0;
+      line-height: 1.08;
+    }
+
+    h1 {
+      max-width: 900px;
+      font-size: 64px;
+      font-weight: 820;
+    }
+
+    h2 {
+      font-size: 44px;
+      font-weight: 800;
+    }
+
+    .sub {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 24px;
+      line-height: 1.45;
+      max-width: 830px;
+    }
+
+    .footer {
+      position: absolute;
+      left: 64px;
+      right: 64px;
+      bottom: 28px;
+      display: flex;
+      justify-content: space-between;
+      color: #777;
+      font-size: 13px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.72);
+      font-size: 14px;
+      font-weight: 700;
+      color: #333;
+    }
+
+    .vision-map {
+      position: absolute;
+      right: 72px;
+      bottom: 86px;
+      width: 430px;
+      height: 370px;
+    }
+
+    .orbit {
+      position: absolute;
+      inset: 0;
+      border: 2px solid rgba(37, 99, 235, 0.18);
+      border-radius: 50%;
+    }
+
+    .orbit.o2 {
+      inset: 52px;
+      border-color: rgba(15, 118, 110, 0.23);
+    }
+
+    .orbit.o3 {
+      inset: 104px;
+      border-color: rgba(180, 83, 9, 0.25);
+    }
+
+    .core {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 142px;
+      height: 142px;
+      transform: translate(-50%, -50%);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: white;
+      font-size: 22px;
+      font-weight: 820;
+      background: #171717;
+      box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+    }
+
+    .node {
+      position: absolute;
+      width: 136px;
+      min-height: 70px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.08);
+      font-size: 15px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+
+    .node small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .n1 { left: 146px; top: -6px; border-top: 5px solid var(--blue); }
+    .n2 { right: -6px; top: 128px; border-top: 5px solid var(--teal); }
+    .n3 { left: 150px; bottom: -8px; border-top: 5px solid var(--amber); }
+    .n4 { left: -10px; top: 128px; border-top: 5px solid var(--violet); }
+
+    .columns {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 22px;
+      margin-top: 34px;
+    }
+
+    .panel {
+      min-height: 390px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.75);
+    }
+
+    .panel h3 {
+      margin: 0 0 14px;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+
+    .panel ul {
+      margin: 0;
+      padding-left: 20px;
+      color: #333;
+      font-size: 18px;
+      line-height: 1.65;
+    }
+
+    .tagline {
+      display: inline-block;
+      margin-bottom: 16px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      color: white;
+      font-size: 13px;
+      font-weight: 780;
+    }
+
+    .bg-blue { background: var(--blue); }
+    .bg-teal { background: var(--teal); }
+    .bg-amber { background: var(--amber); }
+
+    .focus-layout {
+      display: grid;
+      grid-template-columns: 0.85fr 1.15fr;
+      gap: 34px;
+      margin-top: 30px;
+      align-items: stretch;
+    }
+
+    .now-box {
+      padding: 28px;
+      border-radius: 14px;
+      color: white;
+      background: #171717;
+      box-shadow: 0 18px 34px rgba(0, 0, 0, 0.22);
+    }
+
+    .now-box .label {
+      color: #c8c8c8;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .now-box .time {
+      margin-top: 18px;
+      font-size: 52px;
+      line-height: 1;
+      font-weight: 840;
+      letter-spacing: 0;
+    }
+
+    .now-box .task {
+      margin-top: 18px;
+      font-size: 28px;
+      line-height: 1.35;
+      font-weight: 760;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 28px;
+    }
+
+    .action {
+      padding: 9px 12px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.14);
+      color: white;
+      font-size: 14px;
+      font-weight: 720;
+    }
+
+    .script {
+      padding: 20px;
+      border: 1px solid #cfc9bd;
+      border-radius: 14px;
+      background: #fffdf7;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 20px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .line-current {
+      display: block;
+      margin: 4px -8px;
+      padding: 0 8px;
+      border-left: 5px solid var(--blue);
+      background: rgba(37, 99, 235, 0.1);
+      font-weight: 780;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 16px;
+      margin-top: 42px;
+      align-items: center;
+    }
+
+    .flow-step {
+      position: relative;
+      min-height: 172px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .flow-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      right: -22px;
+      top: 58px;
+      color: #777;
+      font-size: 30px;
+      font-weight: 700;
+    }
+
+    .flow-step strong {
+      display: block;
+      font-size: 21px;
+      margin-bottom: 10px;
+    }
+
+    .flow-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+    }
+
+    .arch {
+      display: grid;
+      grid-template-columns: 1fr 1.2fr 1fr;
+      gap: 30px;
+      margin-top: 44px;
+      align-items: center;
+    }
+
+    .stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .box {
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.84);
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .box span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .api-core {
+      padding: 30px 28px;
+      border-radius: 18px;
+      color: white;
+      background: #171717;
+      text-align: center;
+      box-shadow: 0 18px 36px rgba(0, 0, 0, 0.22);
+    }
+
+    .api-core strong {
+      display: block;
+      font-size: 34px;
+      margin-bottom: 12px;
+    }
+
+    .api-core p {
+      margin: 0;
+      color: #d8d8d8;
+      font-size: 17px;
+      line-height: 1.5;
+    }
+
+    .timeline {
+      margin-top: 40px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.78);
+      overflow: hidden;
+    }
+
+    .timeline-head,
+    .timeline-row {
+      display: grid;
+      grid-template-columns: 150px repeat(8, 1fr);
+      min-height: 54px;
+      align-items: center;
+    }
+
+    .timeline-head {
+      color: var(--muted);
+      background: #f6f4ef;
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .timeline-row {
+      border-top: 1px solid var(--line);
+      font-size: 15px;
+      font-weight: 720;
+    }
+
+    .timeline-row > div,
+    .timeline-head > div {
+      padding: 0 12px;
+    }
+
+    .bar {
+      height: 26px;
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      padding: 0 9px;
+      color: white;
+      font-size: 12px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .bar.blue { background: var(--blue); }
+    .bar.teal { background: var(--teal); }
+    .bar.amber { background: var(--amber); }
+    .bar.green { background: var(--green); }
+
+    .roadmap {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      margin-top: 34px;
+    }
+
+    .road {
+      min-height: 408px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .road h3 {
+      margin: 0 0 16px;
+      font-size: 25px;
+    }
+
+    .todo {
+      display: grid;
+      gap: 10px;
+    }
+
+    .todo div {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 9px;
+      align-items: start;
+      color: #333;
+      font-size: 17px;
+      line-height: 1.38;
+    }
+
+    .num {
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      color: white;
+      background: #171717;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .note {
+      margin-top: 28px;
+      padding: 18px 20px;
+      border-left: 6px solid var(--blue);
+      background: rgba(37, 99, 235, 0.08);
+      font-size: 22px;
+      line-height: 1.45;
+      font-weight: 760;
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      main {
+        padding: 0;
+        gap: 0;
+      }
+
+      .slide {
+        width: 100vw;
+        box-shadow: none;
+        border: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Chronicle Product Roadmap</div>
+        <h1>从任务记录工具，到个人工作操作系统</h1>
+        <p class="sub">核心不是“管理更多事项”，而是把今天该干什么、现在该干什么、做完留下什么知识串成闭环。</p>
+        <div class="vision-map">
+          <div class="orbit"></div>
+          <div class="orbit o2"></div>
+          <div class="orbit o3"></div>
+          <div class="core">Chronicle<br />Core</div>
+          <div class="node n1">执行牵引<small>Day Script / Focus / Session</small></div>
+          <div class="node n2">知识沉淀<small>Notes / Links / Search</small></div>
+          <div class="node n3">计划调度<small>ETA / Week / Timeline</small></div>
+          <div class="node n4">本地智能<small>LLM / API / Agent</small></div>
+        </div>
+        <div class="footer"><span>01 / 07</span><span>愿景图</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Product Structure</div>
+        <h2>三层产品结构：执行、知识、智能</h2>
+        <p class="sub">近期不要把 Chronicle 做成重型项目管理软件。先围绕你的真实工作习惯，建立三个能每天复用的支柱。</p>
+        <div class="columns">
+          <div class="panel">
+            <span class="tagline bg-blue">每天盯着用</span>
+            <h3>Today Focus</h3>
+            <ul>
+              <li>像记事本一样编辑</li>
+              <li>10-20 分钟工作块</li>
+              <li>当前项高亮和倒计时</li>
+              <li>顺延、跳过、完成、重排</li>
+              <li>降低启动阻力</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <span class="tagline bg-teal">长期留下来</span>
+            <h3>Notes</h3>
+            <ul>
+              <li>从 task log 提炼知识</li>
+              <li>项目、决策、手册、复盘</li>
+              <li>任务和日志反向链接</li>
+              <li>统一搜索和回顾</li>
+              <li>减少重复理解成本</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <span class="tagline bg-amber">帮你做转换</span>
+            <h3>Local LLM</h3>
+            <ul>
+              <li>生成今日计划</li>
+              <li>重排剩余时间</li>
+              <li>任务拆解成小块</li>
+              <li>总结任务成为 note</li>
+              <li>日报、周报、回顾</li>
+            </ul>
+          </div>
+        </div>
+        <div class="footer"><span>02 / 07</span><span>产品分层</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Near Term MVP</div>
+        <h2>近期最应该先做：今日工作纸条</h2>
+        <p class="sub">它不是 plan board 的增强版，而是一个能对抗拖延和注意力漂移的外置执行脚本。</p>
+        <div class="focus-layout">
+          <div class="now-box">
+            <div class="label">现在正在做</div>
+            <div class="time">10:15-10:35</div>
+            <div class="task">写 data integrity test</div>
+            <div class="actions">
+              <span class="action">完成当前</span>
+              <span class="action">顺延 10m</span>
+              <span class="action">我卡住了</span>
+              <span class="action">记录到日志</span>
+            </div>
+          </div>
+          <div class="script">09:30-09:45  整理昨天遗留事项
+09:45-10:05  看 searchService diff
+10:05-10:15  休息
+<span class="line-current">10:15-10:35  写 data integrity test</span>
+10:35-10:50  跑测试并记录结果
+10:50-11:10  总结成 task log</div>
+        </div>
+        <div class="note">设计原则：UI 像文本，数据可结构化；用户只需要直接改字，不需要进入“管理系统模式”。</div>
+        <div class="footer"><span>03 / 07</span><span>Day Script 草图</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Knowledge Loop</div>
+        <h2>Notes 不是替代日志，而是把日志沉淀成长期知识</h2>
+        <p class="sub">task/log 保留原始工作痕迹；note 承载未来还会复用的信息、判断和流程。</p>
+        <div class="flow">
+          <div class="flow-step">
+            <strong>任务执行</strong>
+            <p>在 task 里记录过程、进展、命令、问题、决策。</p>
+          </div>
+          <div class="flow-step">
+            <strong>完成回顾</strong>
+            <p>任务完成后触发“是否值得沉淀？”</p>
+          </div>
+          <div class="flow-step">
+            <strong>LLM 提炼</strong>
+            <p>生成 note 草稿、标题、标签、来源链接。</p>
+          </div>
+          <div class="flow-step">
+            <strong>人工确认</strong>
+            <p>你编辑和确认，避免垃圾知识进入长期库。</p>
+          </div>
+          <div class="flow-step">
+            <strong>未来召回</strong>
+            <p>搜索、相关 notes、Ask Chronicle 都能引用它。</p>
+          </div>
+        </div>
+        <div class="note">关键闭环：工作记录 → 知识提炼 → 来源可追溯 → 后续任务可复用。</div>
+        <div class="footer"><span>04 / 07</span><span>知识沉淀闭环</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">LLM Strategy</div>
+        <h2>LLM 策略：API-first，加内置高频工作流</h2>
+        <p class="sub">Chronicle 不应该只是接一个聊天框。它应该先稳定数据和 API，再把 LLM 嵌入具体动作。</p>
+        <div class="arch">
+          <div class="stack">
+            <div class="box">内置 LLM 工作流<span>Plan Today / Replan / Summarize / Extract Note</span></div>
+            <div class="box">Chronicle UI<span>Board / Today / Notes / Reports / Planner</span></div>
+          </div>
+          <div class="api-core">
+            <strong>Chronicle API Core</strong>
+            <p>任务、日志、计划、Notes、搜索、报表都通过同一套本地 API 暴露。</p>
+          </div>
+          <div class="stack">
+            <div class="box">本地 LLM 服务<span>OpenAI-compatible / Ollama / Custom endpoint</span></div>
+            <div class="box">外部 Agent / MCP<span>高级 prompt、自动化、跨工具工作流</span></div>
+          </div>
+        </div>
+        <div class="note">结论：常用动作做进 Chronicle；探索性自动化交给外部 agent。两者共享同一套 API。</div>
+        <div class="footer"><span>05 / 07</span><span>LLM 架构</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Mid Term Planner</div>
+        <h2>中期 Planner：先做可执行周计划，再谈 Gantt</h2>
+        <p class="sub">ETA、deadline、planned date 是基础。Gantt 是后续视图，不是第一步。</p>
+        <div class="timeline">
+          <div class="timeline-head">
+            <div>任务</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div><div>Risk</div>
+          </div>
+          <div class="timeline-row">
+            <div>Search index</div><div class="bar blue" style="grid-column: 2 / 4;">2h implementation</div><div></div><div></div><div></div><div></div><div></div><div>正常</div>
+          </div>
+          <div class="timeline-row">
+            <div>Notes MVP</div><div></div><div class="bar teal" style="grid-column: 3 / 6;">6h CRUD + links</div><div></div><div></div><div></div><div>正常</div>
+          </div>
+          <div class="timeline-row">
+            <div>Day Script</div><div class="bar green" style="grid-column: 2 / 5;">4h raw text + highlight</div><div></div><div></div><div></div><div></div><div>优先</div>
+          </div>
+          <div class="timeline-row">
+            <div>Release work</div><div></div><div></div><div></div><div class="bar amber" style="grid-column: 5 / 7;">deadline Friday</div><div></div><div>紧张</div>
+          </div>
+        </div>
+        <div class="note">Planner 的核心问题：今天和本周是否排得下？什么会延期？现在应该先做哪一个？</div>
+        <div class="footer"><span>06 / 07</span><span>Planner 概念图</span></div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <div class="inner">
+        <div class="kicker">Roadmap</div>
+        <h2>路线图：先恢复日常使用，再扩展成工作系统</h2>
+        <div class="roadmap">
+          <div class="road">
+            <span class="tagline bg-blue">眼下立刻落地</span>
+            <h3>近期</h3>
+            <div class="todo">
+              <div><span class="num">1</span><span>Day Script raw text，Today 页面直接编辑</span></div>
+              <div><span class="num">2</span><span>解析时间段，高亮当前 block 和倒计时</span></div>
+              <div><span class="num">3</span><span>完成、跳过、顺延、记录到日志</span></div>
+              <div><span class="num">4</span><span>LLM 生成今日工作纸条草稿</span></div>
+            </div>
+          </div>
+          <div class="road">
+            <span class="tagline bg-teal">1-3 个月</span>
+            <h3>中期</h3>
+            <div class="todo">
+              <div><span class="num">1</span><span>Notes CRUD、标签、任务和日志链接</span></div>
+              <div><span class="num">2</span><span>Task/log → Note 的 LLM 草稿工作流</span></div>
+              <div><span class="num">3</span><span>ETA、deadline、planned date</span></div>
+              <div><span class="num">4</span><span>周计划视图和重排剩余时间</span></div>
+            </div>
+          </div>
+          <div class="road">
+            <span class="tagline bg-amber">Think Big</span>
+            <h3>远期</h3>
+            <div class="todo">
+              <div><span class="num">1</span><span>个人工作操作系统：执行、知识、复盘闭环</span></div>
+              <div><span class="num">2</span><span>本地 LLM 助理和外部 Agent/MCP</span></div>
+              <div><span class="num">3</span><span>Timeline/Gantt、依赖、过载风险提示</span></div>
+              <div><span class="num">4</span><span>个人工作模式分析和长期召回</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="footer"><span>07 / 07</span><span>执行路线图</span></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

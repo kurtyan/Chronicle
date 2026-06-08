@@ -92,6 +92,22 @@
     border-radius: 2px;
     padding: 0 1px;
   }
+
+  .field-input {
+    @apply w-full rounded-md border border-border/70 bg-background px-2.5 py-1.5 text-sm outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/40;
+  }
+
+  .dialog-button {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition disabled:opacity-50;
+  }
+
+  .dialog-button-primary {
+    @apply dialog-button bg-primary text-primary-foreground hover:opacity-90;
+  }
+
+  .dialog-button-secondary {
+    @apply dialog-button border border-border/70 hover:bg-muted;
+  }
 }
 
 /* Custom scrollbar */

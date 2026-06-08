@@ -1,16 +1,36 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
-import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Languages, Info } from 'lucide-react'
+import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Languages, Info, Bot, FlaskConical, Save, FileText, RefreshCw } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { isTauriEnv, ensureApiReady, clientId } from '@/services/httpApi'
-import { fetchStartOfDayOffset, setStartOfDayOffset } from '@/services/api'
+import { fetchLlmSettings, fetchStartOfDayOffset, saveLlmSettings, setStartOfDayOffset, testLlmConnection } from '@/services/api'
+import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
+import type { LlmSettings } from '@/types'
 
 interface SettingsInfo {
   dbPath: string
   dbSize: number
   lastBackupAt: number | null
+}
+
+interface LlmCallLogSummary {
+  id: string
+  feature: string
+  promptVersion: string
+  model: string | null
+  baseUrl: string | null
+  requestInput: any
+  requestMessages: any
+  rawResponse: string | null
+  parsedOutput: any
+  status: string
+  errorMessage: string | null
+  latencyMs: number | null
+  createdAt: number
+  linkedTaskId: string | null
+  linkedEntryId: string | null
 }
 
 function formatBytes(bytes: number): string {
@@ -24,6 +44,47 @@ function formatBytes(bytes: number): string {
 function formatTimestamp(ts: number | null): string {
   if (!ts) return ''
   return new Date(ts).toLocaleString()
+}
+
+function LogJsonBlock({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <pre className="max-h-64 overflow-auto rounded-md bg-background/70 border border-border/60 p-2 text-[11px] leading-4 font-mono whitespace-pre-wrap">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </div>
+  )
+}
+
+function LogTextBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <pre className="max-h-64 overflow-auto rounded-md bg-background/70 border border-border/60 p-2 text-[11px] leading-4 font-mono whitespace-pre-wrap">
+        {value}
+      </pre>
+    </div>
+  )
+}
+
+function displayLlmSettings(settings: LlmSettings): LlmSettings {
+  return {
+    ...settings,
+    meetingExtractionPrompt: settings.meetingExtractionPrompt || settings.defaultMeetingExtractionPrompt,
+  }
+}
+
+function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
+  const prompt = settings.meetingExtractionPrompt.trim()
+  const defaultPrompt = settings.defaultMeetingExtractionPrompt.trim()
+  return {
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    apiKey: settings.apiKey,
+    timeoutMs: settings.timeoutMs,
+    meetingExtractionPrompt: prompt === defaultPrompt ? '' : settings.meetingExtractionPrompt,
+  }
 }
 
 // API base URL helper for Tauri vs non-Tauri
@@ -53,6 +114,20 @@ export function SettingsPage() {
   const [logLoading, setLogLoading] = useState(false)
   const [uiLanguage, setUiLanguage] = useState<string>('auto')
   const [serverVersion, setServerVersion] = useState('')
+  const [llmSettings, setLlmSettings] = useState<LlmSettings>({
+    baseUrl: '',
+    model: '',
+    apiKey: '',
+    timeoutMs: 30000,
+    meetingExtractionPrompt: '',
+    defaultMeetingExtractionPrompt: '',
+  })
+  const [llmSaving, setLlmSaving] = useState(false)
+  const [llmTesting, setLlmTesting] = useState(false)
+  const [showPromptTest, setShowPromptTest] = useState(false)
+  const [llmLogs, setLlmLogs] = useState<LlmCallLogSummary[]>([])
+  const [llmLogsLoading, setLlmLogsLoading] = useState(false)
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
 
   // Auto-AFK state
   const [autoAfkEnabled, setAutoAfkEnabled] = useState(false)
@@ -107,6 +182,57 @@ export function SettingsPage() {
   useEffect(() => {
     fetchStartOfDayOffset().then(setDayOffset).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    fetchLlmSettings().then((settings) => setLlmSettings(displayLlmSettings(settings))).catch(() => {})
+  }, [])
+
+  const updateLlmSettings = (patch: Partial<LlmSettings>) => {
+    setLlmSettings((current) => ({ ...current, ...patch }))
+  }
+
+  const handleSaveLlmSettings = async () => {
+    setLlmSaving(true)
+    setMessage(null)
+    try {
+      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
+      setLlmSettings(displayLlmSettings(saved))
+      setMessage({ type: 'success', text: 'LLM settings saved' })
+      setTimeout(() => setMessage(null), 3000)
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save LLM settings' })
+    } finally {
+      setLlmSaving(false)
+    }
+  }
+
+  const handleTestLlmConnection = async () => {
+    setLlmTesting(true)
+    setMessage(null)
+    try {
+      await saveLlmSettings(serializeLlmSettings(llmSettings))
+      const result = await testLlmConnection()
+      setMessage({ type: 'success', text: `LLM connection OK (${result.latencyMs ?? 0} ms)` })
+      setTimeout(() => setMessage(null), 3000)
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'LLM connection failed' })
+    } finally {
+      setLlmTesting(false)
+    }
+  }
+
+  const loadLlmLogs = async () => {
+    setLlmLogsLoading(true)
+    try {
+      const res = await apiFetch('/api/llm-call-logs?feature=meeting_extract&limit=50')
+      if (!res.ok) throw new Error('Failed to load LLM logs')
+      setLlmLogs(await res.json())
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
+    } finally {
+      setLlmLogsLoading(false)
+    }
+  }
 
   const handleSaveLanguage = async (lang: string) => {
     setUiLanguage(lang)
@@ -255,6 +381,165 @@ export function SettingsPage() {
         <p className="text-xs text-muted-foreground mt-2">
           {t('settings.startOfDayOffsetHint')}
         </p>
+      </div>
+
+      {/* LLM Settings */}
+      <div className="bg-card rounded-lg border p-4 mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Bot className="w-5 h-5 text-muted-foreground" />
+          <h2 className="text-lg font-medium">LLM Configuration</h2>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">Base URL</span>
+            <input
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              value={llmSettings.baseUrl}
+              onChange={(e) => updateLlmSettings({ baseUrl: e.target.value })}
+              placeholder="http://localhost:11434/v1"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">Model</span>
+            <input
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              value={llmSettings.model}
+              onChange={(e) => updateLlmSettings({ model: e.target.value })}
+              placeholder="qwen2.5:7b"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">API Key</span>
+            <input
+              type="password"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              value={llmSettings.apiKey}
+              onChange={(e) => updateLlmSettings({ apiKey: e.target.value })}
+              placeholder="Optional"
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-xs font-medium text-muted-foreground">Timeout</span>
+            <input
+              type="number"
+              min={1000}
+              step={1000}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+              value={llmSettings.timeoutMs}
+              onChange={(e) => updateLlmSettings({ timeoutMs: parseInt(e.target.value, 10) || 30000 })}
+            />
+          </label>
+        </div>
+        <label className="block space-y-1 mt-3">
+          <span className="text-xs font-medium text-muted-foreground">会议抽取 Prompt</span>
+          <textarea
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary resize-y min-h-[180px]"
+            value={llmSettings.meetingExtractionPrompt}
+            onChange={(e) => updateLlmSettings({ meetingExtractionPrompt: e.target.value })}
+            placeholder="Meeting extraction prompt"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            Default prompt is shown here when no custom prompt is saved. Editing it makes the prompt custom.
+          </span>
+        </label>
+        <div className="flex flex-wrap gap-2 mt-4">
+          <button
+            onClick={handleSaveLlmSettings}
+            disabled={llmSaving}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            {llmSaving ? 'Saving...' : 'Save LLM Settings'}
+          </button>
+          <button
+            onClick={handleTestLlmConnection}
+            disabled={llmTesting}
+            className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:opacity-90 disabled:opacity-50"
+          >
+            <FlaskConical className="w-4 h-4" />
+            {llmTesting ? 'Testing...' : 'Test Connection'}
+          </button>
+          <button
+            onClick={async () => {
+              await saveLlmSettings(serializeLlmSettings(llmSettings))
+              setShowPromptTest(true)
+            }}
+            className="flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-muted transition"
+          >
+            <Bot className="w-4 h-4" />
+            Test Meeting Extraction Prompt
+          </button>
+        </div>
+      </div>
+
+      {/* LLM Call Logs */}
+      <div className="bg-card rounded-lg border p-4 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-muted-foreground" />
+            <h2 className="text-lg font-medium">LLM Call Logs</h2>
+          </div>
+          <button
+            onClick={loadLlmLogs}
+            disabled={llmLogsLoading}
+            className="dialog-button-secondary"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${llmLogsLoading ? 'animate-spin' : ''}`} />
+            {llmLogs.length === 0 ? 'Load Logs' : 'Refresh'}
+          </button>
+        </div>
+        {llmLogs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No logs loaded. Click Load Logs to inspect recent meeting extraction calls.</p>
+        ) : (
+          <div className="space-y-2">
+            {llmLogs.map((log) => {
+              const mode = log.requestInput?.mode ?? 'unknown'
+              const expanded = expandedLogId === log.id
+              return (
+                <div key={log.id} className="rounded-md border border-border/70 bg-muted/10">
+                  <button
+                    className="w-full text-left px-3 py-2 hover:bg-muted/40 transition"
+                    onClick={() => setExpandedLogId(expanded ? null : log.id)}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                            log.status === 'success'
+                              ? 'bg-green-500/10 text-green-600'
+                              : log.status === 'parse_error'
+                                ? 'bg-amber-500/10 text-amber-600'
+                                : 'bg-red-500/10 text-red-600'
+                          }`}>
+                            {log.status}
+                          </span>
+                          <span className="text-xs text-muted-foreground">{mode}</span>
+                          <span className="text-xs text-muted-foreground truncate">{log.promptVersion}</span>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground font-mono truncate">
+                          {log.id}
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-muted-foreground shrink-0">
+                        <div>{formatTimestamp(log.createdAt)}</div>
+                        <div>{log.latencyMs ?? 0} ms{log.linkedTaskId ? ` · ${log.linkedTaskId}` : ''}</div>
+                      </div>
+                    </div>
+                  </button>
+                  {expanded && (
+                    <div className="border-t border-border/70 p-3 space-y-3">
+                      <LogJsonBlock label="Request Input" value={log.requestInput} />
+                      <LogJsonBlock label="Request Messages" value={log.requestMessages} />
+                      <LogJsonBlock label="Parsed Output" value={log.parsedOutput} />
+                      {log.rawResponse && <LogTextBlock label="Raw Response" value={log.rawResponse} />}
+                      {log.errorMessage && <LogTextBlock label="Error" value={log.errorMessage} />}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* Database Info */}
@@ -505,6 +790,11 @@ export function SettingsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <MeetingExtractionDialog
+        open={showPromptTest}
+        mode="test"
+        onOpenChange={setShowPromptTest}
+      />
     </div>
   )
 }

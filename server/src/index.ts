@@ -3,10 +3,19 @@ import { cors } from 'hono/cors'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { AppService } from './services/appService'
-import { initDb, closeDb } from './db'
+import { initDb, closeDb, getMetaValue, setMetaValue } from './db'
 import { getConfig } from './config'
 import { startBackupService } from './services/backupService'
 import { exportDatabase, importDatabase, getSettingsInfo } from './services/settingsService'
+import {
+  extractMeeting,
+  getLlmCallLog,
+  getLlmSettings,
+  listLlmCallLogs,
+  saveLlmSettings,
+  testLlmConnection,
+} from './services/llmService'
+import { createMeeting } from './services/meetingService'
 import { generatePlist, installLaunchd, uninstallLaunchd, isInstalled } from './services/launchdService'
 import { getLogger } from './logging'
 import { getVersion } from './version'
@@ -180,6 +189,31 @@ app.post('/api/tasks/:id/drop', async (c) => {
   saveConversationId(c, c.req.param('id'))
   emitTaskChange(c, task)
   return c.json(task)
+})
+
+// --- Meeting API ---
+app.post('/api/meetings/extract', async (c) => {
+  try {
+    const body = await c.req.json()
+    if (!body.rawContent || typeof body.rawContent !== 'string') {
+      return c.json({ error: 'rawContent is required' }, 400)
+    }
+    const mode = body.mode === 'test' ? 'test' : 'record'
+    return c.json(await extractMeeting(body.rawContent, mode))
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Meeting extraction failed' }, 400)
+  }
+})
+
+app.post('/api/meetings', async (c) => {
+  try {
+    const body = await c.req.json()
+    const task = createMeeting(body)
+    broadcastEvent('task_created', { id: task.id }, c.get('clientId'))
+    return c.json(task, 201)
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Meeting save failed' }, 400)
+  }
 })
 
 // --- Task Extra Info API ---
@@ -368,8 +402,36 @@ app.get('/api/settings/info', async (c) => {
   return c.json(getSettingsInfo())
 })
 
+app.get('/api/settings/llm', async (c) => {
+  return c.json(getLlmSettings())
+})
+
+app.put('/api/settings/llm', async (c) => {
+  const body = await c.req.json()
+  return c.json(saveLlmSettings(body))
+})
+
+app.post('/api/settings/llm/test-connection', async (c) => {
+  try {
+    return c.json(await testLlmConnection())
+  } catch (err: any) {
+    return c.json({ ok: false, error: err.message || 'LLM connection failed' }, 400)
+  }
+})
+
+app.get('/api/llm-call-logs', async (c) => {
+  const feature = c.req.query('feature')
+  const limit = parseInt(c.req.query('limit') || '50', 10)
+  return c.json(listLlmCallLogs(feature, limit))
+})
+
+app.get('/api/llm-call-logs/:id', async (c) => {
+  const log = getLlmCallLog(c.req.param('id'))
+  if (!log) return c.json({ error: 'Not found' }, 404)
+  return c.json(log)
+})
+
 // Start of day offset (global shift in hours, e.g. 5 = day starts at 5am)
-import { getMetaValue, setMetaValue } from './db'
 app.get('/api/settings/start-of-day-offset', async (c) => {
   const v = getMetaValue('start_of_day_offset')
   return c.json({ offset: v ? parseInt(v, 10) : 5 })
@@ -443,7 +505,6 @@ const port = cliPort ?? config.server.port
 const host = config.server.host
 
 initDb()
-import { getMetaValue, setMetaValue } from './db'
 
 // Auto-rebuild FTS index when tokenizer version changes
 const FTS_INDEX_VERSION_KEY = 'fts_tokenizer_version'

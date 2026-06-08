@@ -20,6 +20,13 @@ export interface ChronicleConfig {
   ui: {
     language: string
   }
+  llm: {
+    baseUrl: string
+    model: string
+    apiKey: string
+    timeoutMs: number
+    meetingExtractionPrompt: string
+  }
 }
 
 const defaultConfig: ChronicleConfig = {
@@ -39,6 +46,13 @@ const defaultConfig: ChronicleConfig = {
   ui: {
     language: 'auto',
   },
+  llm: {
+    baseUrl: 'http://localhost:11434/v1',
+    model: 'qwen2.5:7b',
+    apiKey: '',
+    timeoutMs: 30000,
+    meetingExtractionPrompt: '',
+  },
 }
 
 const configDir = path.join(os.homedir(), '.chronicle')
@@ -48,6 +62,10 @@ export function getConfig(): ChronicleConfig {
   // Environment variables override config file (for dev isolation)
   const envPort = process.env.CHRONICLE_SERVER_PORT
   const envMcpPort = process.env.CHRONICLE_MCP_PORT
+  const envLlmBaseUrl = process.env.CHRONICLE_LLM_BASE_URL
+  const envLlmModel = process.env.CHRONICLE_LLM_MODEL
+  const envLlmApiKey = process.env.CHRONICLE_LLM_API_KEY
+  const envLlmTimeoutMs = process.env.CHRONICLE_LLM_TIMEOUT_MS
 
   const fileConfig: Partial<ChronicleConfig> = (() => {
     try {
@@ -67,6 +85,7 @@ export function getConfig(): ChronicleConfig {
       host: fileConfig.server?.host ?? defaultConfig.server.host,
       port: serverPort,
       database: fileConfig.server?.database ?? defaultConfig.server.database,
+      logPath: fileConfig.server?.logPath,
     },
     mcp: {
       enabled: fileConfig.mcp?.enabled ?? defaultConfig.mcp.enabled,
@@ -79,7 +98,30 @@ export function getConfig(): ChronicleConfig {
     ui: {
       language: fileConfig.ui?.language ?? defaultConfig.ui.language,
     },
+    llm: {
+      baseUrl: envLlmBaseUrl ?? fileConfig.llm?.baseUrl ?? defaultConfig.llm.baseUrl,
+      model: envLlmModel ?? fileConfig.llm?.model ?? defaultConfig.llm.model,
+      apiKey: envLlmApiKey ?? fileConfig.llm?.apiKey ?? defaultConfig.llm.apiKey,
+      timeoutMs: envLlmTimeoutMs ? parseInt(envLlmTimeoutMs, 10) : (fileConfig.llm?.timeoutMs ?? defaultConfig.llm.timeoutMs),
+      meetingExtractionPrompt: fileConfig.llm?.meetingExtractionPrompt ?? defaultConfig.llm.meetingExtractionPrompt,
+    },
   }
+}
+
+export function updateConfig(patch: Partial<ChronicleConfig>): ChronicleConfig {
+  const current = getConfig()
+  const next: ChronicleConfig = {
+    ...current,
+    ...patch,
+    server: { ...current.server, ...patch.server },
+    mcp: { ...current.mcp, ...patch.mcp },
+    lauri: { ...current.lauri, ...patch.lauri },
+    ui: { ...current.ui, ...patch.ui },
+    llm: { ...current.llm, ...patch.llm },
+  }
+  if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true })
+  fs.writeFileSync(configPath, JSON.stringify(next, null, 2))
+  return getConfig()
 }
 
 export function getDbPath(): string {

@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -165,4 +165,19 @@ export async function fetchStartOfDayOffset(): Promise<number> {
 }
 export async function setStartOfDayOffset(offset: number): Promise<number> {
   return (await getApi()).setStartOfDayOffset(offset)
+}
+export async function fetchLlmSettings(): Promise<LlmSettings> {
+  return (await getApi()).fetchLlmSettings()
+}
+export async function saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings> {
+  return (await getApi()).saveLlmSettings(settings)
+}
+export async function testLlmConnection(): Promise<{ ok: boolean; latencyMs?: number; model?: string; error?: string }> {
+  return (await getApi()).testLlmConnection()
+}
+export async function extractMeeting(rawContent: string, mode?: 'record' | 'test'): Promise<MeetingExtractionResult> {
+  return (await getApi()).extractMeeting(rawContent, mode)
+}
+export async function createMeeting(req: CreateMeetingRequest): Promise<Task> {
+  return (await getApi()).createMeeting(req)
 }

@@ -105,6 +105,26 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS llm_call_logs (
+      id TEXT PRIMARY KEY,
+      feature TEXT NOT NULL,
+      prompt_version TEXT NOT NULL,
+      model TEXT,
+      base_url TEXT,
+      request_input TEXT NOT NULL,
+      request_messages TEXT NOT NULL,
+      raw_response TEXT,
+      parsed_output TEXT,
+      status TEXT NOT NULL,
+      error_message TEXT,
+      latency_ms INTEGER,
+      created_at INTEGER NOT NULL,
+      linked_task_id TEXT,
+      linked_entry_id TEXT
+    )
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS _meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

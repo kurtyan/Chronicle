@@ -138,3 +138,35 @@ export interface BatchCreatePlanItemsRequest {
   planDate: string
   items: BatchCreatePlanItem[]
 }
+
+export interface LlmSettings {
+  baseUrl: string
+  model: string
+  apiKey: string
+  timeoutMs: number
+  meetingExtractionPrompt: string
+  defaultMeetingExtractionPrompt: string
+}
+
+export interface MeetingExtractionResult {
+  llmCallLogId: string
+  title: string | null
+  startedAt: number | null
+  endedAt: number | null
+  content: string
+  participants: string[]
+  tags: string[]
+  rawContent: string
+  warnings: string[]
+}
+
+export interface CreateMeetingRequest {
+  title: string
+  startedAt: number
+  endedAt: number
+  content: string
+  participants: string[]
+  tags: string[]
+  rawContent: string
+  llmCallLogId?: string
+}

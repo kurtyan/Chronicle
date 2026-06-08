@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -67,4 +67,9 @@ export interface ApiInterface {
   reparentPlanItems(body: { detailIds: string[], newPlanDate: string }): Promise<void>
   fetchStartOfDayOffset(): Promise<number>
   setStartOfDayOffset(offset: number): Promise<number>
+  fetchLlmSettings(): Promise<LlmSettings>
+  saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings>
+  testLlmConnection(): Promise<{ ok: boolean; latencyMs?: number; model?: string; error?: string }>
+  extractMeeting(rawContent: string, mode?: 'record' | 'test'): Promise<MeetingExtractionResult>
+  createMeeting(req: CreateMeetingRequest): Promise<Task>
 }

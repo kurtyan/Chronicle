@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -633,6 +633,30 @@ export class EmbeddedApiProvider implements ApiInterface {
   }
   async reparentPlanItems(_body: { detailIds: string[], newPlanDate: string }): Promise<void> {
     // no-op in embedded mode
+  }
+  async fetchLlmSettings(): Promise<LlmSettings> {
+    return {
+      baseUrl: 'http://localhost:11434/v1',
+      model: 'qwen2.5:7b',
+      apiKey: '',
+      timeoutMs: 30000,
+      meetingExtractionPrompt: '',
+      defaultMeetingExtractionPrompt: `You extract meeting notes from raw user input.
+The user input may contain HTML rich text. Use both the HTML and plain-text versions when provided.
+Return only valid JSON matching the meeting extraction schema.`,
+    }
+  }
+  async saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings> {
+    return { ...(await this.fetchLlmSettings()), ...settings }
+  }
+  async testLlmConnection(): Promise<{ ok: boolean; error: string }> {
+    return { ok: false, error: 'Not supported in embedded mode' }
+  }
+  async extractMeeting(_rawContent: string, _mode?: 'record' | 'test'): Promise<MeetingExtractionResult> {
+    throw new Error('Not supported in embedded mode')
+  }
+  async createMeeting(_req: CreateMeetingRequest): Promise<Task> {
+    throw new Error('Not supported in embedded mode')
   }
 }
 
