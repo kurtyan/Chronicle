@@ -115,19 +115,22 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
         </DialogHeader>
 
         {step === 'input' ? (
-          <div className="space-y-3 min-h-0">
+          <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
             <RichEditor
               content={rawContent}
               onChange={setRawContent}
               minHeight="320px"
               placeholder="10:00-11:00 Project sync&#10;Participants: Alice, Bob&#10;Discussed..."
               autoFocus
+              onKeyDown={() => {
+                if (canExtract && !extracting) runExtraction()
+              }}
             />
             {error && <div className="text-sm text-destructive">{error}</div>}
           </div>
         ) : result ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 overflow-y-auto pr-1">
-            <div className="space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0 overflow-hidden">
+            <div className="space-y-3 overflow-y-auto pr-1">
               {result.warnings.length > 0 && (
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700">
                   {result.warnings.map((warning) => <div key={warning}>{warning}</div>)}
@@ -165,6 +168,12 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
                   />
                 </Field>
               </div>
+              <Field label="Participants">
+                <input className="field-input" value={result.participants.join(', ')} onChange={(e) => updateResult({ participants: splitList(e.target.value) })} />
+              </Field>
+              <Field label="Tags">
+                <input className="field-input" value={result.tags.join(', ')} onChange={(e) => updateResult({ tags: ensureMeetingTag(splitList(e.target.value)) })} />
+              </Field>
               <Field label="Content">
                 <div className="rounded-md border border-border/70 overflow-hidden">
                   <RichEditor
@@ -174,14 +183,8 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
                   />
                 </div>
               </Field>
-              <Field label="Participants">
-                <input className="field-input" value={result.participants.join(', ')} onChange={(e) => updateResult({ participants: splitList(e.target.value) })} />
-              </Field>
-              <Field label="Tags">
-                <input className="field-input" value={result.tags.join(', ')} onChange={(e) => updateResult({ tags: ensureMeetingTag(splitList(e.target.value)) })} />
-              </Field>
             </div>
-            <div className="space-y-2 min-w-0">
+            <div className="space-y-2 min-w-0 overflow-y-auto">
               <div className="text-xs font-medium text-muted-foreground">Raw Content</div>
               <div
                 className="prose prose-sm max-w-none rounded-md border border-border/70 bg-muted/20 p-3 text-xs leading-5 min-h-[360px] overflow-auto"

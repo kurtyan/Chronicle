@@ -6,7 +6,7 @@ export const DEFAULT_MEETING_EXTRACTION_PROMPT = `You extract meeting notes from
 The user input may contain HTML rich text. Use both the HTML and plain-text versions when provided.
 Return only valid JSON matching this shape:
 {
-  "title": "string | null",
+  "title": "string",
   "startedAt": "ISO 8601 string | null",
   "endedAt": "ISO 8601 string | null",
   "content": "HTML string",
@@ -15,6 +15,7 @@ Return only valid JSON matching this shape:
   "warnings": ["string"]
 }
 Rules:
+- title is required. If the input does not contain an explicit title, infer a short, descriptive title from the meeting topic or first key discussion point.
 - If the input only contains a time range such as 10:00-11:00, use today's local date.
 - If participants are missing, return an empty array.
 - The content field must be safe, simple HTML suitable for a rich-text editor. Prefer <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>, <h2>, and <h3>.

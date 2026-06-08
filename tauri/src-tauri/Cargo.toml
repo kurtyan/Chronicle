@@ -1,6 +1,6 @@
 [package]
 name = "chronicle-tauri"
-version = "1.5.0"
+version = "1.5.1-20260608184259"
 description = "Chronicle Desktop App"
 authors = ["you"]
 edition = "2021"

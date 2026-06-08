@@ -54,7 +54,7 @@ Actual work has multiple dimensions:
 - Is it KTLO?
 - Is it a requirement?
 - Is it a research task?
-- Is it a meeting?
+- [**Done**] Is it a meeting?
 - Does it need follow-up?
 - Is it a bug?
 
@@ -67,7 +67,7 @@ status: pending, doing, done, dropped, on_hold
 priority: low, medium, high
 ```
 
-`area` is a primary aggregation dimension. `tags` are flexible task attributes.
+`area` is a primary aggregation dimension. [**Done**] `tags` are flexible task attributes.
 
 ### 2.3 Capture Must Be Lightweight
 
@@ -75,7 +75,7 @@ Chronicle should fit the user's real work flow instead of forcing work to fit Ch
 
 High-frequency capture paths must be fast:
 
-- Record meeting.
+- [**Done**] Record meeting.
 - Quick capture KTLO task.
 - Create follow-up from a log.
 - Add a Day Script block.
@@ -95,6 +95,8 @@ The local LLM should be used for:
 - Efficiency analysis.
 
 It should not silently mutate critical data. Generated plans, notes, reminders, and tags should be drafts or suggestions unless explicitly confirmed.
+
+[**Done**] Meeting extraction now produces a draft that must be confirmed before creating a meeting task, work session, entry, and tags.
 
 ## 3. Core Domain Concepts
 
@@ -206,7 +208,7 @@ decision
 note-worthy
 ```
 
-Tags can be manually assigned or suggested by LLM.
+[**Done**] Tags can be manually assigned or suggested by LLM.
 
 ### 3.6 Reminder / Follow-up
 
@@ -271,34 +273,38 @@ The user may be pulled into a meeting for tens of minutes. During that time, the
 Product entry:
 
 ```text
-Record Meeting
+[**Done**] Record Meeting
 ```
 
 Inputs:
 
 ```text
-meeting title
-started_at
-ended_at
-meeting notes
+meeting title [**Done**]
+started_at [**Done**]
+ended_at [**Done**]
+meeting notes [**Done**]
 area optional
-tags optional
-participants optional later
+tags optional [**Done**]
+participants optional later [**Done**]
 ```
 
 Generated outputs:
 
 ```text
-task: [Meeting] {title}
-log entry: meeting notes
+task: [Meeting] {title} [**Done**]
+log entry: meeting notes [**Done**]
 work session: kind=meeting, started_at, ended_at
-tags: meeting
+tags: meeting [**Done**]
 area: selected or LLM-suggested
 ```
+
+[**Done**] Recorded meetings create bounded work session intervals using the existing `work_sessions` schema.
 
 Overlap handling:
 
 If the meeting session overlaps existing sessions, split existing sessions to preserve non-overlapping report intervals.
+
+[**Done**] This release preserves non-overlapping report intervals for recorded meetings by creating meeting work-session fragments only for time not already covered by existing work sessions.
 
 Example:
 
@@ -574,9 +580,9 @@ Configure behavior and LLM.
 
 Settings:
 
-- Local LLM endpoint.
-- Model.
-- Optional API key.
+- [**Done**] Local LLM endpoint.
+- [**Done**] Model.
+- [**Done**] Optional API key.
 - Work hours.
 - Default focus block length.
 - Follow-up detection on/off.
@@ -587,27 +593,27 @@ Settings:
 
 ### 6.1 Creation-Time Classification
 
-Used by Quick Capture and Meeting Record.
+Used by Quick Capture and Meeting Record. [**Done**] Meeting Record support is implemented.
 
 Inputs:
 
-- User text.
+- [**Done**] User text.
 - Existing areas.
 - Existing tags.
 - Optional current context.
 
 Outputs:
 
-- Suggested title.
+- [**Done**] Suggested title.
 - Suggested area.
-- Suggested tags.
+- [**Done**] Suggested tags.
 - Suggested priority.
 - Suggested estimated minutes.
 - Whether it is KTLO / meeting / research / requirement.
 
 ### 6.2 Record-Time Extraction
 
-Used after saving task logs or meeting notes.
+Used after saving task logs or meeting notes. [**Done**] Meeting note extraction is implemented.
 
 Outputs:
 
@@ -672,19 +678,19 @@ Make Chronicle capture real daily work more accurately.
 
 Scope:
 
-- Add record meeting API.
-- Add simple UI form.
-- Create meeting task.
-- Create task log.
-- Create meeting work session.
+- [**Done**] Add record meeting API.
+- [**Done**] Add simple UI form.
+- [**Done**] Create meeting task.
+- [**Done**] Create task log.
+- [**Done**] Create meeting work session.
 - Implement overlap split for work sessions.
 - Add tests for session splitting.
 
 Acceptance criteria:
 
-- A meeting can be recorded after it happened.
-- Report time does not double count overlapping sessions.
-- Meeting task and log are visible in normal task views.
+- [**Done**] A meeting can be recorded after it happened.
+- [**Done**] Report time does not double count overlapping sessions.
+- [**Done**] Meeting task and log are visible in normal task views.
 
 #### 2. Area + Tags Foundation
 
@@ -692,7 +698,7 @@ Scope:
 
 - Add areas table.
 - Add `area_id` to tasks.
-- Keep existing `tags`.
+- [**Done**] Keep existing `tags`.
 - Update task create/edit UI.
 - Add filters for area and tags.
 - De-emphasize legacy task type in UI.
@@ -702,6 +708,8 @@ Acceptance criteria:
 - User can assign task to an area.
 - User can filter board by area.
 - User can tag task as ktlo / requirement / research / meeting.
+
+[**Done**] Recorded meetings preserve multiple confirmed tags and always include the `meeting` tag.
 
 #### 3. Follow-up Reminder MVP
 
