@@ -239,9 +239,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         tasks: nextTasks,
         activeTaskId: nextActiveId,
         selectedTask: nextSelectedTask,
-        entries: state.activeTaskId === id ? [] : state.entries,
+        entries: state.activeTaskId === id && nextActiveId !== id ? [] : state.entries,
+        entryLoading: state.activeTaskId === id && nextActiveId !== null && nextActiveId !== id,
       }
     })
+    if (get().activeTaskId) {
+      await get().setActiveTask(get().activeTaskId)
+    }
     return updated
   },
 
@@ -274,9 +278,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         tasks: nextTasks,
         activeTaskId: nextActiveId,
         selectedTask: nextSelectedTask,
-        entries: state.activeTaskId === id ? [] : state.entries,
+        entries: state.activeTaskId === id && nextActiveId !== id ? [] : state.entries,
+        entryLoading: state.activeTaskId === id && nextActiveId !== null && nextActiveId !== id,
       }
     })
+    if (get().activeTaskId) {
+      await get().setActiveTask(get().activeTaskId)
+    }
     return updated
   },
 
