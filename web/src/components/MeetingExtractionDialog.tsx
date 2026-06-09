@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type React from 'react'
 import { CalendarClock, Check, Loader2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { createMeeting, extractMeeting } from '@/services/api'
 import type { MeetingExtractionResult, Task } from '@/types'
 import { RichEditor } from '@/components/RichEditor'
@@ -114,85 +114,87 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
           </DialogDescription>
         </DialogHeader>
 
-        {step === 'input' ? (
-          <div className="space-y-3 flex-1 min-h-0 overflow-y-auto">
-            <RichEditor
-              content={rawContent}
-              onChange={setRawContent}
-              minHeight="320px"
-              placeholder="10:00-11:00 Project sync&#10;Participants: Alice, Bob&#10;Discussed..."
-              autoFocus
-              onKeyDown={() => {
-                if (canExtract && !extracting) runExtraction()
-              }}
-            />
-            {error && <div className="text-sm text-destructive">{error}</div>}
-          </div>
-        ) : result ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0 overflow-hidden">
-            <div className="space-y-3 overflow-y-auto pr-1">
-              {result.warnings.length > 0 && (
-                <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700">
-                  {result.warnings.map((warning) => <div key={warning}>{warning}</div>)}
-                </div>
-              )}
+        <DialogBody className="min-h-0">
+          {step === 'input' ? (
+            <div className="space-y-3">
+              <RichEditor
+                content={rawContent}
+                onChange={setRawContent}
+                minHeight="320px"
+                placeholder="10:00-11:00 Project sync&#10;Participants: Alice, Bob&#10;Discussed..."
+                autoFocus
+                onKeyDown={() => {
+                  if (canExtract && !extracting) runExtraction()
+                }}
+              />
               {error && <div className="text-sm text-destructive">{error}</div>}
-              <Field label="Title">
-                <input className="field-input" value={result.title ?? ''} onChange={(e) => updateResult({ title: e.target.value })} />
-              </Field>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <Field label="Started At">
-                  <input
-                    className="field-input"
-                    value={startedAtInput}
-                    onChange={(e) => {
-                      const value = e.target.value
-                      setStartedAtInput(value)
-                      const parsed = parseDateTime(value)
-                      if (parsed) updateResult({ startedAt: parsed })
-                    }}
-                    placeholder="yyyy-MM-dd HH:mm"
-                  />
+            </div>
+          ) : result ? (
+            <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="space-y-3 overflow-y-auto pr-1">
+                {result.warnings.length > 0 && (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700">
+                    {result.warnings.map((warning) => <div key={warning}>{warning}</div>)}
+                  </div>
+                )}
+                {error && <div className="text-sm text-destructive">{error}</div>}
+                <Field label="Title">
+                  <input className="field-input" value={result.title ?? ''} onChange={(e) => updateResult({ title: e.target.value })} />
                 </Field>
-                <Field label="Ended At">
-                  <input
-                    className="field-input"
-                    value={endedAtInput}
-                    onChange={(e) => {
-                      const value = e.target.value
-                      setEndedAtInput(value)
-                      const parsed = parseDateTime(value)
-                      if (parsed) updateResult({ endedAt: parsed })
-                    }}
-                    placeholder="yyyy-MM-dd HH:mm"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <Field label="Started At">
+                    <input
+                      className="field-input"
+                      value={startedAtInput}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        setStartedAtInput(value)
+                        const parsed = parseDateTime(value)
+                        if (parsed) updateResult({ startedAt: parsed })
+                      }}
+                      placeholder="yyyy-MM-dd HH:mm"
+                    />
+                  </Field>
+                  <Field label="Ended At">
+                    <input
+                      className="field-input"
+                      value={endedAtInput}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        setEndedAtInput(value)
+                        const parsed = parseDateTime(value)
+                        if (parsed) updateResult({ endedAt: parsed })
+                      }}
+                      placeholder="yyyy-MM-dd HH:mm"
+                    />
+                  </Field>
+                </div>
+                <Field label="Participants">
+                  <input className="field-input" value={result.participants.join(', ')} onChange={(e) => updateResult({ participants: splitList(e.target.value) })} />
+                </Field>
+                <Field label="Tags">
+                  <input className="field-input" value={result.tags.join(', ')} onChange={(e) => updateResult({ tags: ensureMeetingTag(splitList(e.target.value)) })} />
+                </Field>
+                <Field label="Content">
+                  <div className="rounded-md border border-border/70 overflow-hidden">
+                    <RichEditor
+                      content={result.content}
+                      onChange={(content) => updateResult({ content })}
+                      minHeight="160px"
+                    />
+                  </div>
                 </Field>
               </div>
-              <Field label="Participants">
-                <input className="field-input" value={result.participants.join(', ')} onChange={(e) => updateResult({ participants: splitList(e.target.value) })} />
-              </Field>
-              <Field label="Tags">
-                <input className="field-input" value={result.tags.join(', ')} onChange={(e) => updateResult({ tags: ensureMeetingTag(splitList(e.target.value)) })} />
-              </Field>
-              <Field label="Content">
-                <div className="rounded-md border border-border/70 overflow-hidden">
-                  <RichEditor
-                    content={result.content}
-                    onChange={(content) => updateResult({ content })}
-                    minHeight="160px"
-                  />
-                </div>
-              </Field>
+              <div className="space-y-2 min-w-0 overflow-y-auto">
+                <div className="text-xs font-medium text-muted-foreground">Raw Content</div>
+                <div
+                  className="prose prose-sm max-w-none rounded-2xl border border-border/60 bg-muted/20 p-4 text-xs leading-5 min-h-[360px] overflow-auto"
+                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.rawContent, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
+                />
+              </div>
             </div>
-            <div className="space-y-2 min-w-0 overflow-y-auto">
-              <div className="text-xs font-medium text-muted-foreground">Raw Content</div>
-              <div
-                className="prose prose-sm max-w-none rounded-md border border-border/70 bg-muted/20 p-3 text-xs leading-5 min-h-[360px] overflow-auto"
-                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.rawContent, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
-              />
-            </div>
-          </div>
-        ) : null}
+          ) : null}
+        </DialogBody>
 
         <DialogFooter>
           {step === 'confirm' && (

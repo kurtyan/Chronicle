@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
 import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Languages, Info, Bot, FlaskConical, Save, FileText, RefreshCw } from 'lucide-react'
-import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { isTauriEnv, ensureApiReady, clientId } from '@/services/httpApi'
@@ -772,18 +772,20 @@ export function SettingsPage() {
               <AlertTriangle className="w-5 h-5" />
               <DialogTitle>{t('settings.importWarning')}</DialogTitle>
             </div>
-            <DialogDescription>{t('settings.importWarningDesc')}</DialogDescription>
           </DialogHeader>
+          <DialogBody className="pt-4">
+            <DialogDescription>{t('settings.importWarningDesc')}</DialogDescription>
+          </DialogBody>
           <DialogFooter>
             <button
               onClick={() => setShowConfirmDialog(false)}
-              className="px-4 py-2 rounded-md border hover:bg-muted transition"
+              className="dialog-button-secondary"
             >
               {t('common.cancel')}
             </button>
             <button
               onClick={confirmImport}
-              className="px-4 py-2 rounded-md bg-destructive text-destructive-foreground hover:opacity-90 transition"
+              className="dialog-button-danger"
             >
               {t('settings.importConfirm')}
             </button>

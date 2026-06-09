@@ -8,7 +8,7 @@ import { updatePlanItem, takeOverTask } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
 import { Copy, AlertTriangle } from 'lucide-react'
-import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
@@ -485,24 +485,26 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <div className="flex items-center gap-3">
-              <div className="flex items-center justify-center w-10 h-10 rounded-full bg-red-100 flex-shrink-0">
+              <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-destructive/10">
                 <AlertTriangle className="w-5 h-5 text-red-600" />
               </div>
               <div>
-                <DialogTitle className="text-lg">{t('workspace.dropConfirm')}</DialogTitle>
+                <DialogTitle>{t('workspace.dropConfirm')}</DialogTitle>
                 <p className="text-sm text-muted-foreground mt-0.5">
                   此操作将废弃任务「<span className="font-medium text-foreground">{dropTargetId ? tasks.find(t => t.id === dropTargetId)?.title : ''}</span>」，并终止当前工作记录
                 </p>
               </div>
             </div>
           </DialogHeader>
-          <DialogDescription className="text-sm text-muted-foreground">请说明废弃原因，以便后续追溯</DialogDescription>
-          <textarea className="w-full text-sm px-3 py-2.5 border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-primary resize-none min-h-[80px]" value={dropReason} onChange={(e) => setDropReason(e.target.value)} placeholder="请输入废弃原因..." rows={3} autoFocus />
+          <DialogBody className="space-y-3">
+            <DialogDescription>请说明废弃原因，以便后续追溯</DialogDescription>
+            <textarea className="dialog-textarea min-h-[100px]" value={dropReason} onChange={(e) => setDropReason(e.target.value)} placeholder="请输入废弃原因..." rows={3} autoFocus />
+          </DialogBody>
           <DialogFooter>
-            <button className="px-5 py-2 text-sm rounded-lg border border-border hover:bg-muted transition" onClick={() => { setShowDropDialog(false); setDropReason(''); setDropTargetId(null) }}>
+            <button className="dialog-button-secondary" onClick={() => { setShowDropDialog(false); setDropReason(''); setDropTargetId(null) }}>
               {t('task.cancel')}
             </button>
-            <button className="px-5 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed" disabled={!dropReason.trim()} onClick={handleDropConfirm}>
+            <button className="dialog-button-danger" disabled={!dropReason.trim()} onClick={handleDropConfirm}>
               {t('workspace.drop')}
             </button>
           </DialogFooter>

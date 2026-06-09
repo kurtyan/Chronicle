@@ -55,8 +55,13 @@ const defaultConfig: ChronicleConfig = {
   },
 }
 
-const configDir = path.join(os.homedir(), '.chronicle')
-const configPath = path.join(configDir, 'config.json')
+function getConfigDir(): string {
+  return process.env.CHRONICLE_CONFIG_DIR ?? path.join(os.homedir(), '.chronicle')
+}
+
+function getConfigPath(): string {
+  return process.env.CHRONICLE_CONFIG_PATH ?? path.join(getConfigDir(), 'config.json')
+}
 
 export function getConfig(): ChronicleConfig {
   // Environment variables override config file (for dev isolation)
@@ -66,6 +71,7 @@ export function getConfig(): ChronicleConfig {
   const envLlmModel = process.env.CHRONICLE_LLM_MODEL
   const envLlmApiKey = process.env.CHRONICLE_LLM_API_KEY
   const envLlmTimeoutMs = process.env.CHRONICLE_LLM_TIMEOUT_MS
+  const configPath = getConfigPath()
 
   const fileConfig: Partial<ChronicleConfig> = (() => {
     try {
@@ -110,6 +116,8 @@ export function getConfig(): ChronicleConfig {
 
 export function updateConfig(patch: Partial<ChronicleConfig>): ChronicleConfig {
   const current = getConfig()
+  const configDir = getConfigDir()
+  const configPath = getConfigPath()
   const next: ChronicleConfig = {
     ...current,
     ...patch,
@@ -129,7 +137,7 @@ export function getDbPath(): string {
   if (process.env.CHRONICLE_DB_PATH) return process.env.CHRONICLE_DB_PATH
   const config = getConfig()
   if (config.server.database) return config.server.database
-  return path.join(os.homedir(), '.chronicle', 'data', 'tasks.db')
+  return path.join(getConfigDir(), 'data', 'tasks.db')
 }
 
 export function ensureDataDir() {

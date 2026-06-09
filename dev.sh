@@ -8,6 +8,11 @@
 set -e
 cd "$(dirname "$0")"
 
+if [[ "${CHRONICLE_NODE_READY:-0}" != "1" ]]; then
+  export CHRONICLE_NODE_READY=1
+  exec "$PWD/scripts/with-node.sh" bash "$0" "$@"
+fi
+
 # Find an unused port starting from $1
 find_port() {
   local port=$1
@@ -26,7 +31,11 @@ DEV_DB_DIR="$PWD/.dev-data"
 mkdir -p "$DEV_DB_DIR"
 DEV_DB="$DEV_DB_DIR/tasks-dev.db"
 DEV_ATTACHMENT_DIR="$DEV_DB_DIR/attachments"
+DEV_CHRONICLE_HOME="$DEV_DB_DIR/chronicle-home"
+DEV_LOG_DIR="$DEV_CHRONICLE_HOME/logs"
 mkdir -p "$DEV_ATTACHMENT_DIR"
+mkdir -p "$DEV_CHRONICLE_HOME"
+mkdir -p "$DEV_LOG_DIR"
 
 # Generate unique dev version (per-session, no file written — avoids multi-session conflict)
 DEV_VERSION=$(node "$PWD/scripts/generate-version.js")
@@ -35,6 +44,10 @@ DEV_VERSION=$(node "$PWD/scripts/generate-version.js")
 export CHRONICLE_SERVER_PORT=$SERVER_PORT
 export CHRONICLE_DB_PATH=$DEV_DB
 export CHRONICLE_ATTACHMENT_DIR=$DEV_ATTACHMENT_DIR
+export CHRONICLE_CONFIG_DIR="$DEV_CHRONICLE_HOME"
+export CHRONICLE_CONFIG_PATH="$DEV_CHRONICLE_HOME/config.json"
+export CHRONICLE_LOG_DIR="$DEV_LOG_DIR"
+export CHRONICLE_LOG_PATH="$DEV_LOG_DIR/server.log"
 export CHRONICLE_LAURI_SERVER_PORT=$SERVER_PORT
 export CHRONICLE_VERSION=$DEV_VERSION
 export PORT=$TAURI_VITE_PORT
@@ -45,6 +58,7 @@ echo "Server port:     $SERVER_PORT"
 echo "Tauri dev URL:   http://localhost:$TAURI_VITE_PORT"
 echo "Database:        $DEV_DB"
 echo "Attachments:     $DEV_ATTACHMENT_DIR"
+echo "Config dir:      $DEV_CHRONICLE_HOME"
 echo "================================="
 echo ""
 

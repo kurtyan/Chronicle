@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Clock3, PauseCircle } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useI18n } from '@/i18n/context'
 
 interface AutoAfkDialogProps {
@@ -59,15 +60,17 @@ export function AutoAfkDialog({ open, reason, triggeredAt, onClose }: AutoAfkDia
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3">
-            <span className="text-amber-500">⏸</span>
+            <PauseCircle className="h-5 w-5 text-amber-500" />
             AutoAFK
           </DialogTitle>
+          <DialogDescription>
+            Chronicle detected inactivity. Review the reason, optionally add context, then save the AFK record.
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Timer */}
-          <div className="text-center">
-            <div className="text-4xl font-mono font-bold tabular-nums">
+        <DialogBody className="space-y-4">
+          <div className="dialog-section text-center">
+            <div className="text-4xl font-mono font-bold tabular-nums tracking-tight">
               {formatElapsed(elapsed)}
             </div>
             <div className="text-xs text-muted-foreground mt-1">
@@ -75,17 +78,16 @@ export function AutoAfkDialog({ open, reason, triggeredAt, onClose }: AutoAfkDia
             </div>
           </div>
 
-          {/* Reason */}
           <div className="flex items-center gap-2 text-sm">
+            <Clock3 className="h-4 w-4 text-muted-foreground" />
             <span className="text-muted-foreground">{t('afk.reason')}:</span>
-            <span className="font-medium px-2 py-0.5 bg-muted rounded">
+            <span className="dialog-badge">
               {reason === 'screen-lock' ? 'Screen Lock' : reason === 'idle' ? 'Idle' : reason}
             </span>
           </div>
 
-          {/* Note */}
           <textarea
-            className="w-full h-20 px-3 py-2 text-sm rounded-md border border-input bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-none"
+            className="dialog-textarea"
             placeholder={t('afk.notePlaceholder')}
             value={userNote}
             onChange={(e) => setUserNote(e.target.value)}
@@ -99,17 +101,17 @@ export function AutoAfkDialog({ open, reason, triggeredAt, onClose }: AutoAfkDia
           <div className="text-xs text-muted-foreground text-right">
             Ctrl+Enter {t('afk.submit')}
           </div>
-        </div>
+        </DialogBody>
 
         <DialogFooter>
           <button
-            className="px-4 py-2 text-sm border rounded-md hover:bg-muted transition"
+            className="dialog-button-secondary"
             onClick={onClose}
           >
             {t('afk.dismiss')}
           </button>
           <button
-            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90 transition disabled:opacity-50"
+            className="dialog-button-primary"
             onClick={handleSubmit}
             disabled={submitting}
           >

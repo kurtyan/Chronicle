@@ -7,6 +7,28 @@ use std::time::Duration;
 use tauri::{Manager, Emitter};
 use serde::{Deserialize, Serialize};
 
+fn chronicle_config_dir() -> Result<String, String> {
+    if let Ok(dir) = std::env::var("CHRONICLE_CONFIG_DIR") {
+        return Ok(dir);
+    }
+    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
+    Ok(format!("{}/.chronicle", home))
+}
+
+fn chronicle_config_path() -> Result<String, String> {
+    if let Ok(path) = std::env::var("CHRONICLE_CONFIG_PATH") {
+        return Ok(path);
+    }
+    Ok(format!("{}/config.json", chronicle_config_dir()?))
+}
+
+fn chronicle_log_dir() -> Result<String, String> {
+    if let Ok(dir) = std::env::var("CHRONICLE_LOG_DIR") {
+        return Ok(dir);
+    }
+    Ok(format!("{}/logs", chronicle_config_dir()?))
+}
+
 #[tauri::command]
 fn get_server_url() -> Result<String, String> {
     // Dev environment can override via CHRONICLE_LAURI_SERVER_PORT
@@ -15,8 +37,7 @@ fn get_server_url() -> Result<String, String> {
     }
 
     // Production: read from config file
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let config_path = format!("{}/.chronicle/config.json", home);
+    let config_path = chronicle_config_path()?;
     let content = std::fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read config: {}", e))?;
     let config: serde_json::Value = serde_json::from_str(&content)
@@ -28,16 +49,14 @@ fn get_server_url() -> Result<String, String> {
 
 #[tauri::command]
 fn get_client_log() -> Result<String, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let log_path = format!("{}/.chronicle/logs/client.log", home);
+    let log_path = format!("{}/client.log", chronicle_log_dir()?);
     std::fs::read_to_string(&log_path)
         .map_err(|e| format!("Failed to read log: {}", e))
 }
 
 fn init_client_log() {
     use chrono::Local;
-    if let Ok(home) = std::env::var("HOME") {
-        let log_dir = format!("{}/.chronicle/logs", home);
+    if let Ok(log_dir) = chronicle_log_dir() {
         let _ = create_dir_all(&log_dir);
         let log_path = format!("{}/client.log", log_dir);
         let ts = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
@@ -58,8 +77,7 @@ fn set_zoom(app_handle: tauri::AppHandle, scale: f64) -> Result<(), String> {
 #[tauri::command]
 fn write_client_log(message: String) -> Result<(), String> {
     use chrono::Local;
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let log_path = format!("{}/.chronicle/logs/client.log", home);
+    let log_path = format!("{}/client.log", chronicle_log_dir()?);
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
@@ -94,8 +112,7 @@ impl Default for AutoAfkConfig {
 static LAST_AUTO_AFK_EMIT: AtomicU64 = AtomicU64::new(0);
 
 fn read_auto_afk_config() -> AutoAfkConfig {
-    if let Ok(home) = std::env::var("HOME") {
-        let config_path = format!("{}/.chronicle/config.json", home);
+    if let Ok(config_path) = chronicle_config_path() {
         if let Ok(content) = std::fs::read_to_string(&config_path) {
             if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(afk) = config.get("auto_afk") {
@@ -110,8 +127,10 @@ fn read_auto_afk_config() -> AutoAfkConfig {
 }
 
 fn write_auto_afk_config(cfg: &AutoAfkConfig) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let config_path = format!("{}/.chronicle/config.json", home);
+    let config_path = chronicle_config_path()?;
+    if let Some(parent) = std::path::Path::new(&config_path).parent() {
+        create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    }
     let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
         serde_json::from_str(&content).unwrap_or(serde_json::Value::Object(Default::default()))
     } else {
@@ -158,8 +177,7 @@ fn set_auto_afk_config(app: tauri::AppHandle, config: AutoAfkConfig) -> Result<(
 
 #[tauri::command]
 fn get_ui_language() -> Result<String, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let config_path = format!("{}/.chronicle/config.json", home);
+    let config_path = chronicle_config_path()?;
     if let Ok(content) = std::fs::read_to_string(&config_path) {
         if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(ui) = config.get("ui").and_then(|u| u.get("language")) {
@@ -174,8 +192,10 @@ fn get_ui_language() -> Result<String, String> {
 
 #[tauri::command]
 fn set_ui_language(language: String) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set")?;
-    let config_path = format!("{}/.chronicle/config.json", home);
+    let config_path = chronicle_config_path()?;
+    if let Some(parent) = std::path::Path::new(&config_path).parent() {
+        create_dir_all(parent).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    }
     let mut config: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
         serde_json::from_str(&content).unwrap_or(serde_json::Value::Object(Default::default()))
     } else {
