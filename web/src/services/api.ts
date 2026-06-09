@@ -43,6 +43,9 @@ export async function fetchTaskEntries(taskId: string): Promise<TaskEntry[]> {
 export async function submitTaskEntry(taskId: string, content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry> {
   return (await getApi()).submitTaskEntry(taskId, content, type, silent)
 }
+export async function submitTaskEntries(taskIds: string[], content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry[]> {
+  return (await getApi()).submitTaskEntries(taskIds, content, type, silent)
+}
 export async function updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
   return (await getApi()).updateTaskEntry(taskId, entryId, content)
 }

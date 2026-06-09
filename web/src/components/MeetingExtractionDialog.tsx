@@ -3,9 +3,9 @@ import type React from 'react'
 import { CalendarClock, Check, Loader2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { createMeeting, extractMeeting } from '@/services/api'
+import { createMeeting, extractMeeting, fetchTodos, getTaskById, submitTaskEntries } from '@/services/api'
 import type { MeetingExtractionResult, Task } from '@/types'
-import { RichEditor } from '@/components/RichEditor'
+import { extractTaskMentionIdsFromHtml, RichEditor } from '@/components/RichEditor'
 
 type Mode = 'record' | 'test'
 const RECORD_DRAFT_KEY = 'chronicle_meeting_record_draft_html'
@@ -27,6 +27,23 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
   const [error, setError] = useState('')
   const [startedAtInput, setStartedAtInput] = useState('')
   const [endedAtInput, setEndedAtInput] = useState('')
+  const [mentionedTaskIds, setMentionedTaskIds] = useState<string[]>(() => extractTaskMentionIdsFromHtml(getStoredDraft(mode)))
+  const [mentionTasks, setMentionTasks] = useState<Task[]>([])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    fetchTodos(undefined, 'PENDING,DOING')
+      .then((nextTasks) => {
+        if (!cancelled) setMentionTasks(nextTasks)
+      })
+      .catch(() => {
+        if (!cancelled) setMentionTasks([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -38,6 +55,7 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
       setError('')
       setStartedAtInput('')
       setEndedAtInput('')
+      setMentionedTaskIds(extractTaskMentionIdsFromHtml(getStoredDraft(mode)))
     }
   }, [open, mode])
 
@@ -77,17 +95,24 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
     setSaving(true)
     setError('')
     try {
-      const task = await createMeeting({
-        title: result.title.trim(),
-        startedAt: result.startedAt,
-        endedAt: result.endedAt,
-        content: result.content,
-        participants: result.participants,
-        tags: result.tags,
-        rawContent: result.rawContent,
-        llmCallLogId: result.llmCallLogId,
-      })
-      onSaved?.(task)
+      if (mentionedTaskIds.length > 0) {
+        const logContent = buildMeetingLogContent(result)
+        await submitTaskEntries(mentionedTaskIds, logContent, 'log')
+        const firstTask = await getTaskById(mentionedTaskIds[0])
+        if (firstTask) onSaved?.(firstTask)
+      } else {
+        const task = await createMeeting({
+          title: result.title.trim(),
+          startedAt: result.startedAt,
+          endedAt: result.endedAt,
+          content: result.content,
+          participants: result.participants,
+          tags: result.tags,
+          rawContent: result.rawContent,
+          llmCallLogId: result.llmCallLogId,
+        })
+        onSaved?.(task)
+      }
       localStorage.removeItem(draftKey(mode))
       onOpenChange(false)
     } catch (err: any) {
@@ -103,7 +128,7 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-5xl max-h-[88vh] overflow-hidden flex flex-col">
+      <DialogContent className="sm:max-w-5xl max-h-[88vh] !overflow-visible flex flex-col">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <CalendarClock className="w-5 h-5 text-muted-foreground" />
@@ -120,6 +145,8 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
               <RichEditor
                 content={rawContent}
                 onChange={setRawContent}
+                taskMentionTasks={mentionTasks}
+                onTaskMentionIdsChange={setMentionedTaskIds}
                 minHeight="320px"
                 placeholder="10:00-11:00 Project sync&#10;Participants: Alice, Bob&#10;Discussed..."
                 autoFocus
@@ -227,13 +254,37 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
               className="dialog-button-primary"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Save Meeting
+              {mentionedTaskIds.length > 0 ? 'Append to Task Log' : 'Save Meeting'}
             </button>
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
+}
+
+function buildMeetingLogContent(result: MeetingExtractionResult): string {
+  const title = escapeHtml(result.title?.trim() || 'Meeting')
+  const time = result.startedAt && result.endedAt
+    ? `${formatDateTime(result.startedAt)}-${formatDateTime(result.endedAt).slice(11)}`
+    : ''
+  const participants = result.participants.length > 0
+    ? `<p><strong>Participants:</strong> ${escapeHtml(result.participants.join(', '))}</p>`
+    : ''
+  return [
+    `<p><strong>Meeting:</strong> ${title}${time ? ` · ${escapeHtml(time)}` : ''}</p>`,
+    participants,
+    result.content,
+  ].filter(Boolean).join('')
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

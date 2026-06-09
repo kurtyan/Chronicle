@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import DOMPurify from 'dompurify'
 import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats, fetchReportTasks, getAfkEvents, fetchStartOfDayOffset, setStartOfDayOffset } from '@/services/api'
 import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
@@ -28,6 +29,27 @@ interface ReportTask extends Task {
   body: string
   workMs: number
   rangeWorkMs: number
+}
+
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && !!(window as any).__TAURI__
+}
+
+function convertImageSrcs(html: string): string {
+  if (!isTauri()) return html
+  try {
+    const tauriCore = (window as any).__TAURI__.core
+    return html.replace(/(<img\b[^>]*?)data-fullpath="([^"]+)"([^>]*?)>/g, (_match: string, before: string, fullPath: string, after: string) => {
+      const cleaned = before.replace(/src=""\s*/, '')
+      return `${cleaned}src="${tauriCore.convertFileSrc(fullPath)}" data-fullpath="${fullPath}"${after}>`
+    })
+  } catch {
+    return html
+  }
+}
+
+function sanitizeProseHtml(html: string): string {
+  return DOMPurify.sanitize(convertImageSrcs(html), { ALLOW_UNKNOWN_PROTOCOLS: true })
 }
 
 function formatDuration(ms: number): string {
@@ -770,7 +792,7 @@ export function ReportPage() {
             {selectedTask.body && (
               <div>
                 <span className="text-xs text-muted-foreground">Body</span>
-                <div className="mt-1 prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: selectedTask.body }} />
+                <div className="mt-1 prose prose-sm max-w-none prose-mirror-display" dangerouslySetInnerHTML={{ __html: sanitizeProseHtml(selectedTask.body) }} />
               </div>
             )}
             {taskEntries.length > 0 && (
@@ -780,7 +802,7 @@ export function ReportPage() {
                   {taskEntries.filter(e => e.type === 'log').map(entry => (
                     <div key={entry.id} className="border-l-2 border-muted pl-3 py-1">
                       <div className="text-xs text-muted-foreground">{format(new Date(entry.createdAt), 'MM-dd HH:mm')}</div>
-                      <div className="text-sm" dangerouslySetInnerHTML={{ __html: entry.content }} />
+                      <div className="text-sm prose-mirror-display" dangerouslySetInnerHTML={{ __html: sanitizeProseHtml(entry.content) }} />
                     </div>
                   ))}
                 </div>

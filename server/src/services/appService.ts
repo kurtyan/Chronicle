@@ -1,6 +1,6 @@
 import {
   getAllTasks, getTaskById, createTask, updateTask, deleteTask,
-  getTaskEntries, createTaskEntry, updateTaskEntry, deleteTaskEntry as deleteTaskEntryImpl, markTaskDone,
+  getTaskEntries, createTaskEntry, createTaskEntries, updateTaskEntry, deleteTaskEntry as deleteTaskEntryImpl, markTaskDone,
   startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
   setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
   createAfkEvent, updateAfkEvent, getAfkEvents, getNextTaskId,
@@ -77,6 +77,10 @@ export class AppService {
 
   async submitTaskEntry(taskId: string, content: string, type: 'body' | 'log' = 'log'): Promise<TaskEntry> {
     return createTaskEntry(taskId, content, type)
+  }
+
+  async submitTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' = 'log'): Promise<TaskEntry[]> {
+    return createTaskEntries(taskIds, content, type)
   }
 
   async updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {

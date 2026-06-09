@@ -1,10 +1,13 @@
-import { EditorContent, useEditor } from '@tiptap/react'
+import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { DayScriptDocument, Task } from '@/types'
 import { findActiveBlock, parseDayScriptDocument } from '@/lib/dayScript'
+import { ChronicleImage, isTauri, resolveImageSrcsInEditor, uploadAndInsertImage } from '@/components/RichEditor'
 
 interface DayScriptEditorProps {
   value: DayScriptDocument['document']
@@ -39,6 +42,14 @@ type MentionState = {
   left: number
 } | null
 
+type LineMapping = {
+  from: number
+  to: number
+  topIndex: number
+}
+
+const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock'])
+
 function isTodayDate(date: string): boolean {
   const now = new Date()
   return date === [
@@ -48,23 +59,61 @@ function isTodayDate(date: string): boolean {
   ].join('-')
 }
 
+function isLineNode(node: ProseMirrorNode): boolean {
+  return LINE_NODE_TYPES.has(node.type.name)
+}
+
+function collectLineMappings(doc: ProseMirrorNode): LineMapping[] {
+  const mappings: LineMapping[] = []
+
+  doc.forEach((topNode, topOffset, topIndex) => {
+    const topFrom = topOffset + 1
+    if (isLineNode(topNode)) {
+      mappings.push({ from: topFrom, to: topFrom + topNode.nodeSize, topIndex })
+      return
+    }
+
+    topNode.descendants((node, pos) => {
+      if (!isLineNode(node)) return true
+      const from = topFrom + pos
+      mappings.push({ from, to: from + node.nodeSize, topIndex })
+      return false
+    })
+  })
+
+  return mappings
+}
+
+function getSelectionLineIndex(editor: Editor): number {
+  const mappings = collectLineMappings(editor.state.doc)
+  if (mappings.length === 0) return 0
+
+  const selectionPos = editor.state.selection.$anchor.pos
+  const containingIndex = mappings.findIndex((mapping) => selectionPos >= mapping.from && selectionPos <= mapping.to)
+  if (containingIndex >= 0) return containingIndex
+
+  for (let index = mappings.length - 1; index >= 0; index -= 1) {
+    if (selectionPos >= mappings[index].from) return index
+  }
+  return 0
+}
+
 export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
   const [mentionState, setMentionState] = useState<MentionState>(null)
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
   const suppressEditingNotificationRef = useRef(false)
   const currentValueRef = useRef(JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] }))
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        heading: false,
-        bulletList: false,
-        orderedList: false,
-        listItem: false,
-        codeBlock: false,
-        blockquote: false,
+        heading: { levels: [1, 2, 3, 4] },
         horizontalRule: false,
+      }),
+      ChronicleImage.configure({
+        inline: false,
       }),
       TaskLink.configure({
         openOnClick: false,
@@ -122,6 +171,46 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
         }
         return false
       },
+      handleDOMEvents: {
+        dragstart: (_view, event) => {
+          if (event.target instanceof HTMLImageElement) {
+            event.preventDefault()
+            return true
+          }
+          return false
+        },
+        dragover: (_view, event) => {
+          if (event.dataTransfer?.types.includes('Files')) {
+            event.preventDefault()
+            return true
+          }
+          return false
+        },
+        drop: (_view, event) => {
+          const files = event.dataTransfer?.files
+          if (!files?.length || !isTauri()) return false
+          event.preventDefault()
+          const activeEditor = editorRef.current
+          for (const file of Array.from(files)) {
+            if (file.type.startsWith('image/')) {
+              uploadAndInsertImage(activeEditor, getUploadTaskId(activeEditor), file)
+            }
+          }
+          return true
+        },
+      },
+      handlePaste: (_view, event) => {
+        if (!isTauri()) return false
+        const types = event.clipboardData?.types || []
+        const hasImageFile = types.includes('Files') && (event.clipboardData?.files?.length ?? 0) > 0
+        if (!hasImageFile) return false
+        const file = event.clipboardData!.files[0]
+        if (!file?.type.startsWith('image/')) return false
+        event.preventDefault()
+        const activeEditor = editorRef.current
+        uploadAndInsertImage(activeEditor, getUploadTaskId(activeEditor), file)
+        return true
+      },
     },
     onUpdate: ({ editor: nextEditor }) => {
       const json = nextEditor.getJSON()
@@ -136,6 +225,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
       applyBlockClasses(nextEditor)
     },
   })
+  editorRef.current = editor
 
   useEffect(() => {
     const nextSerialized = JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] })
@@ -154,6 +244,12 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     if (!editor) return
     applyBlockClasses(editor)
   }, [editor, scriptDate])
+
+  useEffect(() => {
+    if (!editor) return
+    const timer = window.setTimeout(resolveImageSrcsInEditor, 50)
+    return () => window.clearTimeout(timer)
+  }, [editor, value])
 
   const filteredTasks = useMemo(() => {
     const query = mentionState?.query.trim().toLowerCase() ?? ''
@@ -180,14 +276,13 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     const query = match[1] ?? ''
     const mentionFrom = from - query.length - 1
     const coords = view.coordsAtPos(from)
-    const containerRect = containerRef.current?.getBoundingClientRect()
     setMentionState({
       query,
       from: mentionFrom,
       to: from,
-      anchorTop: coords.top - (containerRect?.top ?? 0),
-      anchorBottom: coords.bottom - (containerRect?.top ?? 0),
-      left: coords.left - (containerRect?.left ?? 0),
+      anchorTop: coords.top,
+      anchorBottom: coords.bottom,
+      left: coords.left,
     })
   }
 
@@ -212,9 +307,17 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     setMentionState(null)
   }
 
+  function getUploadTaskId(nextEditor: Editor | null): string {
+    if (!nextEditor) return 'day-script'
+    const lineIndex = getSelectionLineIndex(nextEditor)
+    const blocks = parseDayScriptDocument(nextEditor.getJSON())
+    const activeLineBlock = blocks.find((block) => lineIndex >= block.lineStart && lineIndex <= block.lineEnd)
+    return activeLineBlock?.taskIds[0] ?? 'day-script'
+  }
+
   function notifyEditingTask(nextEditor: NonNullable<typeof editor>) {
     if (!onEditingTask) return
-    const lineIndex = nextEditor.state.selection.$anchor.index(0)
+    const lineIndex = getSelectionLineIndex(nextEditor)
     const blocks = parseDayScriptDocument(nextEditor.getJSON())
     const activeLineBlock = blocks.find((block) => lineIndex >= block.lineStart && lineIndex <= block.lineEnd)
     if (!activeLineBlock || lineIndex <= activeLineBlock.lineStart) return
@@ -226,6 +329,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     const root = containerRef.current?.querySelector('.ProseMirror')
     if (!root) return
     const children = Array.from(root.children)
+    const mappings = collectLineMappings(nextEditor.state.doc)
     const blocks = parseDayScriptDocument(nextEditor.getJSON())
     const currentIndex = isTodayDate(scriptDate) ? findActiveBlock(blocks, new Date()) : -1
 
@@ -235,13 +339,52 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
 
     blocks.forEach((block, index) => {
       for (let line = block.lineStart; line <= block.lineEnd; line++) {
-        const element = children[line]
+        const topIndex = mappings[line]?.topIndex
+        const element = typeof topIndex === 'number' ? children[topIndex] : undefined
         if (!element) continue
         if (block.completed) element.classList.add('day-script-line-complete')
         if (index === currentIndex) element.classList.add('day-script-line-active')
       }
     })
   }
+
+  const mentionPopup = mentionState && filteredTasks.length > 0 && typeof document !== 'undefined'
+    ? createPortal(
+      (() => {
+        const popupHeight = 288
+        const popupWidth = 320
+        const top = mentionState.anchorBottom + popupHeight > window.innerHeight
+          ? Math.max(8, mentionState.anchorTop - popupHeight - 10)
+          : mentionState.anchorBottom + 6
+        const left = Math.min(
+          Math.max(8, mentionState.left - 20),
+          Math.max(8, window.innerWidth - popupWidth - 8)
+        )
+
+        return (
+          <div
+            className="fixed max-h-72 w-80 overflow-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
+            style={{ top, left, zIndex: 2147483647 }}
+          >
+            {filteredTasks.map((task, index) => (
+              <button
+                key={task.id}
+                className={`flex w-full items-start justify-between rounded-lg px-3 py-2 text-left ${index === selectedMentionIndex ? 'bg-primary/10 text-foreground' : 'hover:bg-muted'}`}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  insertMention(task.id, task.title)
+                }}
+              >
+                <span className="pr-3">{task.title}</span>
+                <span className="text-xs text-muted-foreground">{task.status}</span>
+              </button>
+            ))}
+          </div>
+        )
+      })(),
+      document.body
+    )
+    : null
 
   return (
     <div ref={containerRef} className="relative flex h-full min-h-0 flex-1 flex-col">
@@ -251,42 +394,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
         </div>
       </div>
 
-      {mentionState && filteredTasks.length > 0 && (
-        (() => {
-          const popupHeight = 288
-          const popupWidth = 320
-          const containerHeight = containerRef.current?.clientHeight ?? 0
-          const containerWidth = containerRef.current?.clientWidth ?? 0
-          const top = containerHeight > 0 && mentionState.anchorBottom + popupHeight > containerHeight
-            ? Math.max(8, mentionState.anchorTop - popupHeight - 10)
-            : mentionState.anchorBottom + 6
-          const left = Math.min(
-            Math.max(0, mentionState.left - 20),
-            Math.max(0, containerWidth - popupWidth - 8)
-          )
-
-          return (
-            <div
-              className="absolute z-30 max-h-72 w-80 overflow-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
-              style={{ top, left }}
-            >
-          {filteredTasks.map((task, index) => (
-            <button
-              key={task.id}
-              className={`flex w-full items-start justify-between rounded-lg px-3 py-2 text-left ${index === selectedMentionIndex ? 'bg-primary/10 text-foreground' : 'hover:bg-muted'}`}
-              onMouseDown={(event) => {
-                event.preventDefault()
-                insertMention(task.id, task.title)
-              }}
-            >
-              <span className="pr-3">{task.title}</span>
-              <span className="text-xs text-muted-foreground">{task.status}</span>
-            </button>
-          ))}
-            </div>
-          )
-        })()
-      )}
+      {mentionPopup}
 
       <style>{`
         .day-script-editor {
@@ -341,6 +449,53 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           border-radius: 0.8rem;
           transition: background-color 120ms ease, color 120ms ease;
           white-space: pre-wrap;
+        }
+        .day-script-editor .ProseMirror ul {
+          list-style-type: disc;
+          padding-left: 1.75rem;
+          margin: 0.25rem 0;
+        }
+        .day-script-editor .ProseMirror ol {
+          list-style-type: decimal;
+          padding-left: 1.75rem;
+          margin: 0.25rem 0;
+        }
+        .day-script-editor .ProseMirror li {
+          padding-left: 0.15rem;
+        }
+        .day-script-editor .ProseMirror blockquote {
+          border-left: 3px solid hsl(var(--border));
+          padding-left: 1rem;
+          margin: 0.5rem 0;
+          color: hsl(var(--muted-foreground));
+        }
+        .day-script-editor .ProseMirror pre {
+          background: hsl(var(--muted));
+          border-radius: 0.5rem;
+          margin: 0.5rem 0;
+          overflow-x: auto;
+          padding: 0.75rem 1rem;
+        }
+        .day-script-editor .ProseMirror pre code {
+          display: block;
+          background: transparent;
+          padding: 0;
+          border-radius: 0;
+          font-size: 0.9rem;
+          line-height: 1.65;
+          white-space: pre;
+        }
+        .day-script-editor .ProseMirror code {
+          background: hsl(var(--muted));
+          border-radius: 0.25rem;
+          padding: 0.125rem 0.35rem;
+        }
+        .day-script-editor .ProseMirror img {
+          max-width: 100%;
+          border-radius: 0.5rem;
+          margin: 0.5rem 0;
+          -webkit-user-drag: none !important;
+          user-select: none;
         }
         .day-script-editor .ProseMirror p.is-editor-empty:first-child::before {
           content: attr(data-placeholder);

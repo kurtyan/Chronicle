@@ -10,6 +10,7 @@ export interface ApiInterface {
   markTaskDone(id: string): Promise<Task | null>
   fetchTaskEntries(taskId: string): Promise<TaskEntry[]>
   submitTaskEntry(taskId: string, content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry>
+  submitTaskEntries(taskIds: string[], content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry[]>
   updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null>
   deleteTaskEntry(taskId: string, entryId: string): Promise<void>
   takeOverTask(taskId: string): Promise<WorkSession>

@@ -8,14 +8,15 @@ import { Bold, Italic, List, ListOrdered, Code, Link2, Image as ImageIcon, Strik
 import { useEffect, useRef, useMemo, useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
+import type { Task } from '@/types'
 
 /** Detect Tauri environment */
-function isTauri(): boolean {
+export function isTauri(): boolean {
   return typeof window !== 'undefined' && !!(window as any).__TAURI__
 }
 
 /** Insert image with a default width */
-function insertImageWithAttrs(ed: Editor, filePath: string, filename?: string) {
+export function insertImageWithAttrs(ed: Editor, filePath: string, filename?: string) {
   const src = isTauri()
     ? (window as any).__TAURI__.core.convertFileSrc(filePath)
     : `file://${filePath}`
@@ -33,7 +34,7 @@ function insertImageWithAttrs(ed: Editor, filePath: string, filename?: string) {
 }
 
 /** Upload image via Tauri invoke and insert into editor */
-async function uploadAndInsertImage(ed: Editor | null, taskId: string, file: File) {
+export async function uploadAndInsertImage(ed: Editor | null, taskId: string, file: File) {
   if (!ed || !isTauri()) return
   try {
     const arrayBuffer = await file.arrayBuffer()
@@ -64,6 +65,41 @@ interface RichEditorProps {
   variant?: 'full' | 'minimal'
   onNavigateUp?: () => void
   taskId?: string
+  taskMentionTasks?: Task[]
+  onTaskMentionIdsChange?: (taskIds: string[]) => void
+}
+
+const ChronicleLink = Link.extend({
+  inclusive: false,
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      taskId: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-task-id'),
+        renderHTML: (attributes) => attributes.taskId ? { 'data-task-id': attributes.taskId } : {},
+      },
+    }
+  },
+})
+
+type MentionState = {
+  query: string
+  from: number
+  to: number
+  anchorTop: number
+  top: number
+  left: number
+} | null
+
+export function extractTaskMentionIdsFromHtml(html: string): string[] {
+  const ids = new Set<string>()
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  doc.querySelectorAll('[data-task-id]').forEach((element) => {
+    const taskId = element.getAttribute('data-task-id')
+    if (taskId) ids.add(taskId)
+  })
+  return [...ids]
 }
 
 const ToolbarButton = ({
@@ -91,7 +127,7 @@ const ToolbarButton = ({
 )
 
 // Custom Image extension with data-fullpath and data-filename support, extending ImageResize for resize capability
-const ChronicleImage = ImageResize.extend({
+export const ChronicleImage = ImageResize.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -145,7 +181,7 @@ const ChronicleImage = ImageResize.extend({
 })
 
 /** Resolve data-fullpath to Tauri asset URL for images already in the DOM (fallback for re-renders) */
-function resolveImageSrcsInEditor() {
+export function resolveImageSrcsInEditor() {
   if (!isTauri()) return
   try {
     const tauriCore = (window as any).__TAURI__.core
@@ -171,13 +207,23 @@ function RichEditorInner({
   variant = 'full',
   onNavigateUp,
   taskId,
+  taskMentionTasks = [],
+  onTaskMentionIdsChange,
 }: RichEditorProps) {
   const { t } = useI18n()
   const contentRef = useRef(content)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  const taskMentionTasksRef = useRef(taskMentionTasks)
+  taskMentionTasksRef.current = taskMentionTasks
+  const onTaskMentionIdsChangeRef = useRef(onTaskMentionIdsChange)
+  onTaskMentionIdsChangeRef.current = onTaskMentionIdsChange
+  const filteredMentionTasksRef = useRef<Task[]>([])
   const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
+  const mentionPopupRef = useRef<HTMLDivElement | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [mentionState, setMentionState] = useState<MentionState>(null)
+  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
 
   const canSaveImage = isTauri() && !!taskId
 
@@ -188,7 +234,7 @@ function RichEditorInner({
     ChronicleImage.configure({
       inline: false,
     }),
-    Link.configure({
+    ChronicleLink.configure({
       openOnClick: false,
       protocols: ['file'],
     }),
@@ -203,6 +249,8 @@ function RichEditorInner({
     onUpdate: ({ editor }) => {
       contentRef.current = editor.getHTML()
       onChangeRef.current(editor.getHTML())
+      onTaskMentionIdsChangeRef.current?.(extractTaskMentionIdsFromHtml(editor.getHTML()))
+      updateMentionState(editor)
     },
     editorProps: {
       attributes: {
@@ -282,6 +330,30 @@ function RichEditorInner({
           },
         },
       handleKeyDown: (view, event) => {
+        if (mentionState) {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            setSelectedMentionIndex((index) => Math.min(index + 1, filteredMentionTasksRef.current.length - 1))
+            return true
+          }
+          if (event.key === 'ArrowUp') {
+            event.preventDefault()
+            setSelectedMentionIndex((index) => Math.max(index - 1, 0))
+            return true
+          }
+          if (event.key === 'Enter' || event.key === 'Tab') {
+            const task = filteredMentionTasksRef.current[selectedMentionIndex]
+            if (task) {
+              event.preventDefault()
+              insertTaskMention(task)
+              return true
+            }
+          }
+          if (event.key === 'Escape') {
+            setMentionState(null)
+            return true
+          }
+        }
         if (event.key === 'ArrowUp' && onNavigateUp) {
           const { state } = view
           const { selection } = state
@@ -349,6 +421,98 @@ function RichEditorInner({
   }, [editor, content])
 
   const containerRef = useRef<HTMLDivElement>(null)
+
+  const filteredMentionTasks = useMemo(() => {
+    const query = mentionState?.query.trim().toLowerCase() ?? ''
+    const pool = taskMentionTasks.filter((task) => task.status === 'PENDING' || task.status === 'DOING')
+    if (!query) return pool.slice(0, 8)
+    return pool.filter((task) =>
+      task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)
+    ).slice(0, 8)
+  }, [mentionState?.query, taskMentionTasks])
+  filteredMentionTasksRef.current = filteredMentionTasks
+
+  useEffect(() => {
+    setSelectedMentionIndex(0)
+  }, [mentionState?.query])
+
+  useEffect(() => {
+    if (!mentionState) return
+    const handlePointerDown = (event: PointerEvent) => {
+      const popup = mentionPopupRef.current
+      if (!popup) return
+      const rect = popup.getBoundingClientRect()
+      if (
+        event.clientX < rect.left ||
+        event.clientX > rect.right ||
+        event.clientY < rect.top ||
+        event.clientY > rect.bottom
+      ) return
+
+      const buttons = Array.from(popup.querySelectorAll<HTMLButtonElement>('button'))
+      const index = buttons.findIndex((button) => {
+        const buttonRect = button.getBoundingClientRect()
+        return (
+          event.clientX >= buttonRect.left &&
+          event.clientX <= buttonRect.right &&
+          event.clientY >= buttonRect.top &&
+          event.clientY <= buttonRect.bottom
+        )
+      })
+      const task = filteredMentionTasksRef.current[index]
+      if (!task) return
+      event.preventDefault()
+      event.stopPropagation()
+      insertTaskMention(task)
+    }
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    return () => document.removeEventListener('pointerdown', handlePointerDown, true)
+  }, [mentionState])
+
+  function updateMentionState(ed: Editor) {
+    if (taskMentionTasksRef.current.length === 0) {
+      setMentionState(null)
+      return
+    }
+    const { state, view } = ed
+    const { from } = state.selection
+    const textBefore = state.doc.textBetween(Math.max(0, from - 80), from, '\n', '\n')
+    const match = textBefore.match(/(?:^|\s)@([^\s@]*)$/)
+    if (!match) {
+      setMentionState(null)
+      return
+    }
+    const query = match[1] ?? ''
+    const mentionFrom = from - query.length - 1
+    const coords = view.coordsAtPos(from)
+    setMentionState({
+      query,
+      from: mentionFrom,
+      to: from,
+      anchorTop: coords.top,
+      top: coords.bottom + 6,
+      left: coords.left,
+    })
+  }
+
+  function insertTaskMention(task: Task) {
+    if (!editor || !mentionState) return
+    editor.chain().focus().insertContentAt(
+      { from: mentionState.from, to: mentionState.to },
+      {
+        type: 'text',
+        text: `@${task.title}`,
+        marks: [{
+          type: 'link',
+          attrs: {
+            href: `/?task=${encodeURIComponent(task.id)}`,
+            taskId: task.id,
+          },
+        }],
+      }
+    ).insertContent(' ').run()
+    setMentionState(null)
+  }
 
   // Sync external content changes back to editor (e.g. clearing after submit)
   useEffect(() => {
@@ -447,215 +611,289 @@ function RichEditorInner({
 
   if (!editor) return null
 
-  return (
-    <div ref={containerRef} data-rich-editor="true" className={cn('border rounded-lg overflow-hidden transition-colors', variant === 'minimal' && 'border-none rounded-none', isDragOver && 'border-primary bg-primary/5')}>
-      {variant === 'full' && (
-        <div className="flex items-center gap-0.5 p-2 border-b bg-muted/30 flex-wrap">
-          <ToolbarButton
-            active={editor.isActive('bold')}
-            onClick={() => editor.chain().focus().toggleBold().run()}
-            title={t('editor.bold')}
-          >
-            <Bold className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive('italic')}
-            onClick={() => editor.chain().focus().toggleItalic().run()}
-            title={t('editor.italic')}
-          >
-            <Italic className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive('strike')}
-            onClick={() => editor.chain().focus().toggleStrike().run()}
-            title={t('editor.strikethrough')}
-          >
-            <Strikethrough className="w-4 h-4" />
-          </ToolbarButton>
-          <div className="w-px h-5 bg-border mx-1" />
-          <ToolbarButton
-            active={editor.isActive('heading', { level: 1 })}
-            onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-            title={t('editor.heading1')}
-          >
-            <Heading1 className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive('heading', { level: 2 })}
-            onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-            title={t('editor.heading2')}
-          >
-            <Heading2 className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive('heading', { level: 3 })}
-            onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-            title={t('editor.heading3')}
-          >
-            <Heading3 className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive('heading', { level: 4 })}
-            onClick={() => editor.chain().focus().toggleHeading({ level: 4 }).run()}
-            title={t('editor.heading4')}
-          >
-            <Heading4 className="w-4 h-4" />
-          </ToolbarButton>
-          <div className="w-px h-5 bg-border mx-1" />
-          <ToolbarButton
-            active={editor.isActive('bulletList')}
-            onClick={() => editor.chain().focus().toggleBulletList().run()}
-            title={t('editor.bulletList')}
-          >
-            <List className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive('orderedList')}
-            onClick={() => editor.chain().focus().toggleOrderedList().run()}
-            title={t('editor.orderedList')}
-          >
-            <ListOrdered className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            onClick={() => editor.chain().focus().sinkListItem('listItem').run()}
-            title={t('editor.indent')}
-          >
-            <Indent className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            onClick={() => editor.chain().focus().liftListItem('listItem').run()}
-            title={t('editor.outdent')}
-          >
-            <Outdent className="w-4 h-4" />
-          </ToolbarButton>
-          <div className="w-px h-5 bg-border mx-1" />
-          <ToolbarButton
-            active={editor.isActive('blockquote')}
-            onClick={() => editor.chain().focus().toggleBlockquote().run()}
-            title={t('editor.blockquote')}
-          >
-            <Quote className="w-4 h-4" />
-          </ToolbarButton>
-          <ToolbarButton
-            active={editor.isActive('codeBlock')}
-            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-            title={t('editor.codeBlock')}
-          >
-            <Code className="w-4 h-4" />
-          </ToolbarButton>
-          <div className="w-px h-5 bg-border mx-1" />
-          <ToolbarButton
-            active={editor.isActive('link')}
-            onClick={() => {
-              const url = prompt(t('editor.linkPrompt'))
-              if (url && !url.startsWith('javascript:') && !url.startsWith('vbscript:')) {
-                editor.chain().focus().setLink({ href: url }).run()
-              }
-            }}
-            title={t('editor.link')}
-          >
-            <Link2 className="w-4 h-4" />
-          </ToolbarButton>
-          {canSaveImage && (
-            <ToolbarButton
-              onClick={() => {
-                const input = document.createElement('input')
-                input.type = 'file'
-                input.accept = 'image/*'
-                input.onchange = () => {
-                  const file = input.files?.[0]
-                  if (file) {
-                    const ed = editorRef.current
-                    if (ed) uploadAndInsertImage(ed, taskId!, file)
-                  }
-                }
-                input.click()
+  const mentionPopup = mentionState && filteredMentionTasks.length > 0
+    ? (() => {
+      const popupHeight = 288
+      const popupWidth = 320
+      const containerRect = containerRef.current?.getBoundingClientRect()
+      const containerWidth = containerRef.current?.clientWidth ?? popupWidth
+      const bottomRelativeToContainer = mentionState.top - (containerRect?.top ?? 0)
+      const anchorTopRelativeToContainer = mentionState.anchorTop - (containerRect?.top ?? 0)
+      const top = mentionState.top + popupHeight > window.innerHeight
+        ? Math.max(8, anchorTopRelativeToContainer - popupHeight - 10)
+        : bottomRelativeToContainer
+      const left = Math.min(
+        Math.max(8, mentionState.left - (containerRect?.left ?? 0) - 20),
+        Math.max(8, containerWidth - popupWidth - 8)
+      )
+
+      return (
+        <div
+          ref={mentionPopupRef}
+          className="absolute max-h-72 w-80 overflow-auto rounded-md border border-border bg-popover p-1 shadow-xl"
+          style={{ top, left, zIndex: 2147483647, pointerEvents: 'auto' }}
+        >
+          {filteredMentionTasks.map((task, index) => (
+            <button
+              key={task.id}
+              type="button"
+              className={cn('flex w-full items-start justify-between rounded px-3 py-2 text-left text-sm', index === selectedMentionIndex ? 'bg-primary/10 text-foreground' : 'hover:bg-muted')}
+              onMouseDown={(event) => {
+                event.preventDefault()
+                insertTaskMention(task)
               }}
-              title={t('editor.image')}
+              onClick={(event) => {
+                event.preventDefault()
+                insertTaskMention(task)
+              }}
             >
-              <ImageIcon className="w-4 h-4" />
-            </ToolbarButton>
-          )}
+              <span className="min-w-0 truncate pr-3">{task.title}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{task.status}</span>
+            </button>
+          ))}
         </div>
+      )
+    })()
+    : null
+
+  return (
+    <>
+    <div
+      ref={containerRef}
+      data-rich-editor="true"
+      className={cn(
+        'relative isolate border rounded-lg overflow-visible transition-colors',
+        variant === 'minimal' && 'border-none rounded-none',
+        isDragOver && 'border-primary bg-primary/5'
       )}
-      <EditorContent editor={editor} className="min-h-[200px]" />
-      <style>{`
-        .ProseMirror {
-          min-height: ${minHeight};
-          padding: 1rem;
-          outline: none;
-        }
-        .ProseMirror p.is-editor-empty:first-child::before {
-          content: attr(data-placeholder);
-          float: left;
-          color: hsl(var(--muted-foreground));
-          pointer-events: none;
-          height: 0;
-        }
-        .ProseMirror img {
-          max-width: 100%;
-          border-radius: 0.375rem;
-          margin: 0.5rem 0;
-          -webkit-user-drag: none !important;
-          -khtml-user-drag: none !important;
-          -moz-user-drag: none !important;
-          -o-user-drag: none !important;
-          user-drag: none !important;
-          user-select: none;
-          pointer-events: auto;
-        }
-        .ProseMirror img[draggable="true"] {
-          -webkit-user-drag: none !important;
-        }
-        .ProseMirror a {
-          color: hsl(var(--primary));
-          text-decoration: underline;
-        }
-        .ProseMirror a.chronicle-attachment {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.25rem;
-          padding: 0.125rem 0.5rem;
-          background: hsl(var(--muted));
-          border: 1px solid hsl(var(--border));
-          border-radius: 0.25rem;
-          font-size: 0.8125rem;
-          text-decoration: none;
-          color: hsl(var(--foreground));
-          cursor: pointer;
-        }
-        .ProseMirror blockquote {
-          border-left: 3px solid hsl(var(--border));
-          padding-left: 1rem;
-          margin: 0.5rem 0;
-          color: hsl(var(--muted-foreground));
-        }
-        .ProseMirror pre {
-          background: hsl(var(--muted));
-          padding: 0.75rem;
-          border-radius: 0.375rem;
-          overflow-x: auto;
-          font-size: 0.875rem;
-        }
-        .ProseMirror code {
-          background: hsl(var(--muted));
-          padding: 0.125rem 0.375rem;
-          border-radius: 0.25rem;
-          font-size: 0.875rem;
-        }
-        .ProseMirror ul { list-style-type: disc; padding-left: 1.5rem; }
-        .ProseMirror ol { list-style-type: decimal; padding-left: 1.5rem; }
-        .ProseMirror h1 { font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0; }
-        .ProseMirror h2 { font-size: 1.25rem; font-weight: 600; margin: 0.5rem 0; }
-        .ProseMirror h3 { font-size: 1.1rem; font-weight: 600; margin: 0.5rem 0; }
-        .ProseMirror h4 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0; }
-        .ProseMirror > div > div[style*="border: 1px dashed"] {
-          border-radius: 0.375rem;
-        }
-      `}</style>
-    </div>
+    >
+        {variant === 'full' && (
+          <div className="flex items-center gap-0.5 p-2 border-b bg-muted/30 flex-wrap">
+            <ToolbarButton
+              active={editor.isActive('bold')}
+              onClick={() => editor.chain().focus().toggleBold().run()}
+              title={t('editor.bold')}
+            >
+              <Bold className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              active={editor.isActive('italic')}
+              onClick={() => editor.chain().focus().toggleItalic().run()}
+              title={t('editor.italic')}
+            >
+              <Italic className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              active={editor.isActive('strike')}
+              onClick={() => editor.chain().focus().toggleStrike().run()}
+              title={t('editor.strikethrough')}
+            >
+              <Strikethrough className="w-4 h-4" />
+            </ToolbarButton>
+            <div className="w-px h-5 bg-border mx-1" />
+            <ToolbarButton
+              active={editor.isActive('heading', { level: 1 })}
+              onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+              title={t('editor.heading1')}
+            >
+              <Heading1 className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              active={editor.isActive('heading', { level: 2 })}
+              onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+              title={t('editor.heading2')}
+            >
+              <Heading2 className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              active={editor.isActive('heading', { level: 3 })}
+              onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+              title={t('editor.heading3')}
+            >
+              <Heading3 className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              active={editor.isActive('heading', { level: 4 })}
+              onClick={() => editor.chain().focus().toggleHeading({ level: 4 }).run()}
+              title={t('editor.heading4')}
+            >
+              <Heading4 className="w-4 h-4" />
+            </ToolbarButton>
+            <div className="w-px h-5 bg-border mx-1" />
+            <ToolbarButton
+              active={editor.isActive('bulletList')}
+              onClick={() => editor.chain().focus().toggleBulletList().run()}
+              title={t('editor.bulletList')}
+            >
+              <List className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              active={editor.isActive('orderedList')}
+              onClick={() => editor.chain().focus().toggleOrderedList().run()}
+              title={t('editor.orderedList')}
+            >
+              <ListOrdered className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              onClick={() => editor.chain().focus().sinkListItem('listItem').run()}
+              title={t('editor.indent')}
+            >
+              <Indent className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              onClick={() => editor.chain().focus().liftListItem('listItem').run()}
+              title={t('editor.outdent')}
+            >
+              <Outdent className="w-4 h-4" />
+            </ToolbarButton>
+            <div className="w-px h-5 bg-border mx-1" />
+            <ToolbarButton
+              active={editor.isActive('blockquote')}
+              onClick={() => editor.chain().focus().toggleBlockquote().run()}
+              title={t('editor.blockquote')}
+            >
+              <Quote className="w-4 h-4" />
+            </ToolbarButton>
+            <ToolbarButton
+              active={editor.isActive('codeBlock')}
+              onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+              title={t('editor.codeBlock')}
+            >
+              <Code className="w-4 h-4" />
+            </ToolbarButton>
+            <div className="w-px h-5 bg-border mx-1" />
+            <ToolbarButton
+              active={editor.isActive('link')}
+              onClick={() => {
+                const url = prompt(t('editor.linkPrompt'))
+                if (url && !url.startsWith('javascript:') && !url.startsWith('vbscript:')) {
+                  editor.chain().focus().setLink({ href: url }).run()
+                }
+              }}
+              title={t('editor.link')}
+            >
+              <Link2 className="w-4 h-4" />
+            </ToolbarButton>
+            {canSaveImage && (
+              <ToolbarButton
+                onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = 'image/*'
+                  input.onchange = () => {
+                    const file = input.files?.[0]
+                    if (file) {
+                      const ed = editorRef.current
+                      if (ed) uploadAndInsertImage(ed, taskId!, file)
+                    }
+                  }
+                  input.click()
+                }}
+                title={t('editor.image')}
+              >
+                <ImageIcon className="w-4 h-4" />
+              </ToolbarButton>
+            )}
+          </div>
+        )}
+        <EditorContent editor={editor} className="relative z-0 min-h-[200px]" />
+        {mentionPopup}
+        <style>{`
+          .ProseMirror {
+            min-height: ${minHeight};
+            padding: 1rem;
+            outline: none;
+          }
+          .ProseMirror p.is-editor-empty:first-child::before {
+            content: attr(data-placeholder);
+            color: hsl(var(--muted-foreground));
+            pointer-events: none;
+            float: left;
+            height: 0;
+          }
+          .ProseMirror h1 { font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0; }
+          .ProseMirror h2 { font-size: 1.25rem; font-weight: 700; margin: 0.5rem 0; }
+          .ProseMirror h3 { font-size: 1.125rem; font-weight: 600; margin: 0.5rem 0; }
+          .ProseMirror h4 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0; }
+          .ProseMirror ul { list-style-type: disc; padding-left: 1.5rem; }
+          .ProseMirror ol { list-style-type: decimal; padding-left: 1.5rem; }
+          .ProseMirror li { margin: 0.25rem 0; }
+          .ProseMirror blockquote {
+            border-left: 3px solid hsl(var(--border));
+            padding-left: 1rem;
+            margin: 0.5rem 0;
+            color: hsl(var(--muted-foreground));
+          }
+          .ProseMirror img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 0.5rem;
+            margin: 0.5rem 0;
+            cursor: pointer;
+            -webkit-user-drag: none !important;
+            -khtml-user-drag: none !important;
+            -moz-user-drag: none !important;
+            -o-user-drag: none !important;
+            user-drag: none !important;
+            user-select: none;
+            pointer-events: auto;
+          }
+          .ProseMirror img[draggable="true"] {
+            -webkit-user-drag: none !important;
+          }
+          .ProseMirror .resize-image-wrapper img {
+            max-width: none;
+            margin: 0;
+          }
+          .ProseMirror .resize-image-wrapper {
+            display: inline-block;
+            position: relative;
+            vertical-align: top;
+          }
+          .ProseMirror pre {
+            background: hsl(var(--muted));
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            overflow-x: auto;
+            font-size: 0.875rem;
+          }
+          .ProseMirror pre code {
+            display: block;
+            background: transparent;
+            padding: 0;
+            border-radius: 0;
+            font-size: inherit;
+            white-space: pre;
+          }
+          .ProseMirror code {
+            background: hsl(var(--muted));
+            padding: 0.125rem 0.375rem;
+            border-radius: 0.25rem;
+            font-size: 0.875em;
+          }
+          .ProseMirror a {
+            color: hsl(var(--primary));
+            text-decoration: underline;
+          }
+          .ProseMirror a.chronicle-attachment {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.125rem 0.5rem;
+            background: hsl(var(--muted));
+            border: 1px solid hsl(var(--border));
+            border-radius: 0.25rem;
+            font-size: 0.8125rem;
+            text-decoration: none;
+            color: hsl(var(--foreground));
+            cursor: pointer;
+          }
+        `}</style>
+      </div>
+    </>
   )
 }
 
-// Let RichEditor re-render when content prop changes (e.g. cleared after submit)
-export const RichEditor = RichEditorInner
+export function RichEditor(props: RichEditorProps) {
+  return <RichEditorInner {...props} />
+}

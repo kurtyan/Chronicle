@@ -111,6 +111,11 @@ export const httpApi: ApiInterface = {
     return data
   },
 
+  async submitTaskEntries(taskIds: string[], content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry[]> {
+    const { data } = await (await withClientId()).post<TaskEntry[]>('/api/tasks/logs/batch', { taskIds, content, type, silent })
+    return data
+  },
+
   async updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
     const { data } = await (await withClientId()).put<TaskEntry>(`/api/tasks/${taskId}/logs/${entryId}`, { content })
     return data

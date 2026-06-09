@@ -9,6 +9,7 @@ export default defineConfig({
   testDir: './tests',
   testMatch: '**/*.ts',
   timeout: 30000,
+  workers: 1,
   webServer: {
     command: 'mkdir -p /private/tmp/chronicle-playwright-data && rm -f /private/tmp/chronicle-playwright-data/tasks.db /private/tmp/chronicle-playwright-data/tasks.db-shm /private/tmp/chronicle-playwright-data/tasks.db-wal && cd server && PATH=$HOME/.nvm/versions/node/v25.5.0/bin:$PATH npm run build && PATH=$HOME/.nvm/versions/node/v25.5.0/bin:$PATH CHRONICLE_SERVER_PORT=18182 CHRONICLE_MCP_PORT=18183 CHRONICLE_DB_PATH=/private/tmp/chronicle-playwright-data/tasks.db CHRONICLE_ATTACHMENT_DIR=/private/tmp/chronicle-playwright-data/attachments node dist/index.js --port 18182',
     url: 'http://127.0.0.1:18182',

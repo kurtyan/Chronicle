@@ -260,6 +260,41 @@ export function createTaskEntry(taskId: string, content: string, type: 'body' | 
   return { id, taskId, content, type, createdAt: now }
 }
 
+export function createTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' | 'plan' = 'log'): TaskEntry[] {
+  const uniqueTaskIds = [...new Set(taskIds.filter(Boolean))]
+  if (uniqueTaskIds.length === 0) return []
+
+  for (const taskId of uniqueTaskIds) {
+    if (!getTaskById(taskId)) throw new Error(`Task not found: ${taskId}`)
+  }
+
+  const db = getDb()
+  const now = Date.now()
+  const entries = uniqueTaskIds.map((taskId) => ({
+    id: crypto.randomUUID(),
+    taskId,
+    content,
+    type,
+    createdAt: now,
+  }))
+
+  const insertEntry = db.prepare(
+    'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)'
+  )
+  const updateTask = db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?')
+
+  const transaction = db.transaction(() => {
+    for (const entry of entries) {
+      insertEntry.run(entry.id, entry.taskId, entry.content, entry.type, entry.createdAt)
+      updateTask.run(now, entry.taskId)
+      indexEntry(entry.taskId, entry.id, entry.content, entry.type)
+    }
+  })
+
+  transaction()
+  return entries
+}
+
 export function updateTaskEntry(taskId: string, entryId: string, content: string): TaskEntry | null {
   const existing = queryOne('SELECT * FROM task_entries WHERE id = ? AND task_id = ?', [entryId, taskId])
   if (!existing) return null

@@ -322,20 +322,20 @@ export function TodayPage() {
       </div>
 
       <Dialog open={conflicts.length > 0} onOpenChange={(open) => { if (!open) setConflicts([]) }}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Progress sync confirmation</DialogTitle>
           </DialogHeader>
-          <DialogBody>
+          <DialogBody className="min-h-0 overflow-y-auto">
             <div className="space-y-3 text-sm">
               <p className="text-muted-foreground">Some completed blocks edited previously synced progress. Confirm to append the current block progress as a new task log snapshot.</p>
               {conflicts.map((conflict) => (
                 <div key={`${conflict.blockId}:${conflict.taskId}`} className="rounded-lg border border-border bg-muted/30 p-3">
                   <div className="font-medium">{conflict.taskTitle} · {conflict.startTime}-{conflict.endTime}</div>
                   <div className="mt-2 text-xs text-muted-foreground">Previously synced</div>
-                  <div className="whitespace-pre-wrap rounded bg-background px-2 py-1">{conflict.existingProgress || '(empty)'}</div>
+                  <div className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded bg-background px-2 py-1" style={{ scrollbarGutter: 'stable' }}>{conflict.existingProgress || '(empty)'}</div>
                   <div className="mt-2 text-xs text-muted-foreground">Current block progress</div>
-                  <div className="whitespace-pre-wrap rounded bg-background px-2 py-1">{conflict.currentProgress || '(empty)'}</div>
+                  <div className="max-h-56 overflow-y-auto whitespace-pre-wrap rounded bg-background px-2 py-1" style={{ scrollbarGutter: 'stable' }}>{conflict.currentProgress || '(empty)'}</div>
                 </div>
               ))}
             </div>

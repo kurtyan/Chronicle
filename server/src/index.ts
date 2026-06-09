@@ -132,6 +132,29 @@ app.post('/api/tasks/:id/logs', async (c) => {
   return c.json(entry, 201)
 })
 
+app.post('/api/tasks/logs/batch', async (c) => {
+  const body = await c.req.json()
+  const taskIds = Array.isArray(body.taskIds) ? body.taskIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0) : []
+  if (taskIds.length === 0 || typeof body.content !== 'string' || body.content.trim().length === 0) {
+    return c.json({ error: 'taskIds and content are required' }, 400)
+  }
+
+  try {
+    const entries = await service.submitTaskEntries(taskIds, body.content, body.type ?? 'log')
+    for (const entry of entries) {
+      saveConversationId(c, entry.taskId)
+      if (!body.silent) {
+        broadcastEvent('entry_created', { taskId: entry.taskId, entryId: entry.id, type: entry.type }, c.get('clientId'))
+      }
+    }
+    return c.json(entries, 201)
+  } catch (err: any) {
+    const message = err?.message || 'Failed to create entries'
+    const status = message.includes('Task not found') ? 404 : 400
+    return c.json({ error: message }, status)
+  }
+})
+
 app.put('/api/tasks/:id/logs/:entryId', async (c) => {
   const body = await c.req.json()
   const entry = await service.updateTaskEntry(c.req.param('id'), c.req.param('entryId'), body.content)

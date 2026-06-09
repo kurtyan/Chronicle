@@ -106,7 +106,7 @@ function extractTaskIdFromMark(mark?: { type?: string; attrs?: Record<string, an
 function collectBlockLines(node: JsonNode, lines: ParsedLine[]): void {
   const type = node.type ?? ''
 
-  if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem') {
+  if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem' || type === 'codeBlock') {
     const line = collectInlineText(node.content ?? [])
     lines.push(line)
     return

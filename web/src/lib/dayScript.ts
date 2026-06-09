@@ -56,7 +56,7 @@ export function extractDayScriptLines(document: JsonNode | null | undefined): Pa
   const lines: ParsedDayScriptLine[] = []
   const visit = (node: JsonNode) => {
     const type = node.type ?? ''
-    if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem') {
+    if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem' || type === 'codeBlock') {
       lines.push(collectInline(node.content ?? []))
       return
     }

@@ -286,6 +286,41 @@ export class EmbeddedApiProvider implements ApiInterface {
     return { id, taskId, content, type, createdAt: now }
   }
 
+  async submitTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' = 'log', _silent?: boolean): Promise<TaskEntry[]> {
+    await this.ensureDb()
+    const uniqueTaskIds = [...new Set(taskIds.filter(Boolean))]
+    for (const taskId of uniqueTaskIds) {
+      const task = await this.getTaskById(taskId)
+      if (!task) throw new Error(`Task not found: ${taskId}`)
+    }
+
+    const now = Date.now()
+    const entries = uniqueTaskIds.map((taskId) => ({
+      id: crypto.randomUUID(),
+      taskId,
+      content,
+      type,
+      createdAt: now,
+    }))
+
+    try {
+      this.run('BEGIN TRANSACTION')
+      for (const entry of entries) {
+        this.run(
+          'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
+          [entry.id, entry.taskId, entry.content, entry.type, entry.createdAt]
+        )
+        this.run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, entry.taskId])
+      }
+      this.run('COMMIT')
+    } catch (err) {
+      this.run('ROLLBACK')
+      throw err
+    }
+    await this.persist()
+    return entries
+  }
+
   async updateTaskEntry(_taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
     await this.ensureDb()
     const existing = this.queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])

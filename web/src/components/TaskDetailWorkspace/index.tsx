@@ -210,7 +210,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     setEditingEntryId(null)
   }
 
-  // Save new entry draft silently — persist to server but don't show in entry list.
+  // Save new entry draft silently and refresh entries without broadcasting SSE noise.
   // Entry ID is tracked in localStorage so subsequent saves update the same entry.
   // Uses a per-taskId lock to serialize saves and prevent race conditions.
   const handleSilentSave = useCallback(async (content: string) => {
@@ -235,6 +235,8 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
           // New entry creation updated task.updated_at — refresh list so task re-sorts to top
           await useTaskStore.getState().loadTodos()
         }
+        const freshEntries = await (await import('@/services/api')).fetchTaskEntries(activeTaskId)
+        useTaskStore.setState({ entries: freshEntries })
       } catch (err) {
         console.error('Silent save failed:', err)
       }
