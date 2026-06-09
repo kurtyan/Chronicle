@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -633,6 +633,38 @@ export class EmbeddedApiProvider implements ApiInterface {
   }
   async reparentPlanItems(_body: { detailIds: string[], newPlanDate: string }): Promise<void> {
     // no-op in embedded mode
+  }
+  async getDayScript(date: string): Promise<DayScriptDocument> {
+    return {
+      scriptDate: date,
+      revision: 0,
+      document: { type: 'doc', content: [{ type: 'paragraph' }] },
+      blocks: [],
+      updatedAt: 0,
+    }
+  }
+  async saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any> }): Promise<SaveDayScriptResult> {
+    return {
+      script: {
+        scriptDate: date,
+        revision: body.expectedRevision,
+        document: body.document,
+        blocks: [],
+        updatedAt: Date.now(),
+      },
+      createdLogs: [],
+      validationErrors: [],
+      conflicts: [],
+    }
+  }
+  async confirmDayScriptProgressSync(): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
+    return { createdLogs: [] }
+  }
+  async getTaskContexts(): Promise<TaskProgressContext[]> {
+    return []
+  }
+  async refreshTaskContexts(): Promise<TaskProgressContext[]> {
+    return []
   }
   async fetchLlmSettings(): Promise<LlmSettings> {
     return {

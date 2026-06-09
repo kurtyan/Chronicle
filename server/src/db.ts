@@ -125,6 +125,68 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS day_scripts (
+      script_date TEXT PRIMARY KEY,
+      document_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS day_script_blocks (
+      id TEXT PRIMARY KEY,
+      script_date TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT NOT NULL,
+      header_text TEXT NOT NULL,
+      progress_text TEXT NOT NULL DEFAULT '',
+      completed INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (script_date) REFERENCES day_scripts(script_date) ON DELETE CASCADE
+    )
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS day_script_block_tasks (
+      block_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      PRIMARY KEY (block_id, task_id),
+      FOREIGN KEY (block_id) REFERENCES day_script_blocks(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    )
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS day_script_progress_syncs (
+      block_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      synced_progress TEXT NOT NULL,
+      last_entry_id TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (block_id, task_id),
+      FOREIGN KEY (block_id) REFERENCES day_script_blocks(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (last_entry_id) REFERENCES task_entries(id) ON DELETE CASCADE
+    )
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_progress_summaries (
+      task_id TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL,
+      latest_progress TEXT NOT NULL,
+      next_step TEXT NOT NULL,
+      summary_updated_at INTEGER NOT NULL,
+      error_message TEXT,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    )
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS _meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -150,6 +212,21 @@ function cleanupOrphans(): void {
     WHERE task_id NOT IN (SELECT id FROM tasks);
 
     DELETE FROM task_extra_info
+    WHERE task_id NOT IN (SELECT id FROM tasks);
+
+    DELETE FROM day_script_block_tasks
+    WHERE block_id NOT IN (SELECT id FROM day_script_blocks)
+       OR task_id NOT IN (SELECT id FROM tasks);
+
+    DELETE FROM day_script_progress_syncs
+    WHERE block_id NOT IN (SELECT id FROM day_script_blocks)
+       OR task_id NOT IN (SELECT id FROM tasks)
+       OR last_entry_id NOT IN (SELECT id FROM task_entries);
+
+    DELETE FROM day_script_blocks
+    WHERE script_date NOT IN (SELECT script_date FROM day_scripts);
+
+    DELETE FROM task_progress_summaries
     WHERE task_id NOT IN (SELECT id FROM tasks);
   `)
 }

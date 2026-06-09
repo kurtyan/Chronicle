@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -288,6 +288,32 @@ export const httpApi: ApiInterface = {
 
   async reparentPlanItems(body: { detailIds: string[], newPlanDate: string }): Promise<void> {
     await (await withClientId()).post('/api/plans/reparent', body)
+  },
+
+  async getDayScript(date: string): Promise<DayScriptDocument> {
+    const { data } = await (await withClientId()).get<DayScriptDocument>(`/api/day-scripts/${encodeURIComponent(date)}`)
+    return data
+  },
+
+  async saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any> }): Promise<SaveDayScriptResult> {
+    const { data } = await (await withClientId()).put<SaveDayScriptResult>(`/api/day-scripts/${encodeURIComponent(date)}`, body)
+    return data
+  },
+
+  async confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
+    const { data } = await (await withClientId()).post(`/api/day-scripts/${encodeURIComponent(date)}/confirm-progress-sync`, { items })
+    return data
+  },
+
+  async getTaskContexts(status?: string): Promise<TaskProgressContext[]> {
+    const params = status ? { status } : undefined
+    const { data } = await (await withClientId()).get<TaskProgressContext[]>('/api/task-context', { params })
+    return data
+  },
+
+  async refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]> {
+    const { data } = await (await withClientId()).post<TaskProgressContext[]>('/api/task-context/summarize', { taskIds })
+    return data
   },
 
   async fetchStartOfDayOffset(): Promise<number> {

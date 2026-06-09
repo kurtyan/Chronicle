@@ -18,9 +18,10 @@ function isHtmlEmpty(html: string): boolean {
 
 interface TaskDetailWorkspaceProps {
   highlightEntryId?: string
+  showTrackingStatus?: boolean
 }
 
-export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspaceProps) {
+export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true }: TaskDetailWorkspaceProps) {
   const { t } = useI18n()
   const {
     selectedTask, entries, entryLoading, activeTaskId, tasks,
@@ -423,17 +424,19 @@ export function TaskDetailWorkspace({ highlightEntryId }: TaskDetailWorkspacePro
             )}
           </div>
           <div className="flex items-center gap-2">
-            {currentSession ? (
-              <TrackingStatusIndicator
-                currentSession={currentSession}
-                tasks={tasks}
-                onNavigate={() => {
-                  if (currentSession.taskId) setActiveTask(currentSession.taskId)
-                }}
-              />
-            ) : (
-              <IdleTimeIndicator />
-            )}
+            {showTrackingStatus ? (
+              currentSession ? (
+                <TrackingStatusIndicator
+                  currentSession={currentSession}
+                  tasks={tasks}
+                  onNavigate={() => {
+                    if (currentSession.taskId) setActiveTask(currentSession.taskId)
+                  }}
+                />
+              ) : (
+                <IdleTimeIndicator />
+              )
+            ) : null}
             {currentSession && activeTaskId && activeTaskId !== DRAFT_ID && currentSession.taskId !== activeTaskId && (
               <button className="flex items-center gap-1 text-xs px-3 py-1 rounded bg-blue-500 text-white hover:bg-blue-600 transition" onClick={handleTakeOver}>
                 {t('workspace.takeOver')}

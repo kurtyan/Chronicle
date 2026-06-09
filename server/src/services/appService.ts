@@ -11,6 +11,14 @@ import {
   deletePlanItem, clearPlanForDate, getUnfinishedPlans, reparentPlanItem, reparentPlanItems,
   type BatchCreatePlanItem, type PlanItem, type PlanItemDetail,
 } from './planService'
+import {
+  getDayScript, saveDayScript, confirmDayScriptProgressSync,
+  type DayScriptDocument, type SaveDayScriptResult,
+} from './dayScriptService'
+import {
+  getTaskContexts, refreshTaskContexts,
+  type TaskProgressContext,
+} from './taskContextService'
 import { getDb } from '../db'
 
 export class AppService {
@@ -356,5 +364,29 @@ export class AppService {
 
   async reparentPlanItems(detailIds: string[], newPlanDate: string): Promise<void> {
     return reparentPlanItems(detailIds, newPlanDate)
+  }
+
+  // --- Day Script ---
+
+  async getDayScript(scriptDate: string): Promise<DayScriptDocument> {
+    return getDayScript(scriptDate)
+  }
+
+  async saveDayScript(scriptDate: string, document: any, expectedRevision: number): Promise<SaveDayScriptResult> {
+    return saveDayScript(scriptDate, document, expectedRevision)
+  }
+
+  async confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Promise<Array<{ taskId: string; entryId: string; blockId: string }>> {
+    return confirmDayScriptProgressSync(scriptDate, items)
+  }
+
+  // --- Task Context ---
+
+  async getTaskContexts(statuses: string[]): Promise<TaskProgressContext[]> {
+    return getTaskContexts(statuses)
+  }
+
+  async refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]> {
+    return refreshTaskContexts(taskIds)
   }
 }

@@ -370,6 +370,54 @@ app.post('/api/plans/reparent', async (c) => {
   return c.json({ success: true })
 })
 
+// --- Day Script API ---
+app.get('/api/day-scripts/:date', async (c) => {
+  return c.json(await service.getDayScript(c.req.param('date')))
+})
+
+app.put('/api/day-scripts/:date', async (c) => {
+  try {
+    const body = await c.req.json()
+    const expectedRevision = Number(body.expectedRevision ?? 0)
+    const result = await service.saveDayScript(c.req.param('date'), body.document, expectedRevision)
+    for (const log of result.createdLogs) {
+      broadcastEvent('entry_created', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
+      const changedTask = await service.getTaskById(log.taskId)
+      emitTaskChange(c, changedTask)
+    }
+    return c.json(result)
+  } catch (err: any) {
+    if (err?.message === 'REVISION_CONFLICT') {
+      return c.json({ error: 'Revision conflict' }, 409)
+    }
+    return c.json({ error: err?.message || 'Save failed' }, 400)
+  }
+})
+
+app.post('/api/day-scripts/:date/confirm-progress-sync', async (c) => {
+  const body = await c.req.json()
+  const items = Array.isArray(body.items) ? body.items : []
+  const createdLogs = await service.confirmDayScriptProgressSync(c.req.param('date'), items)
+  for (const log of createdLogs) {
+    broadcastEvent('entry_created', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
+    const changedTask = await service.getTaskById(log.taskId)
+    emitTaskChange(c, changedTask)
+  }
+  return c.json({ createdLogs })
+})
+
+// --- Task Context API ---
+app.get('/api/task-context', async (c) => {
+  const statuses = (c.req.query('status') || 'PENDING,DOING').split(',').map((value) => value.trim()).filter(Boolean)
+  return c.json(await service.getTaskContexts(statuses))
+})
+
+app.post('/api/task-context/summarize', async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  const taskIds = Array.isArray(body.taskIds) ? body.taskIds.filter((id: unknown) => typeof id === 'string') : undefined
+  return c.json(await service.refreshTaskContexts(taskIds))
+})
+
 // --- Settings API ---
 app.get('/api/settings/export', async (c) => {
   const { data, path: dbPath } = exportDatabase()

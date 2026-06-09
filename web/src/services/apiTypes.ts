@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -65,6 +65,11 @@ export interface ApiInterface {
   clearPlanForDate(date: string): Promise<number>
   fetchUnfinishedPlans(qs: string): Promise<PlanItem[]>
   reparentPlanItems(body: { detailIds: string[], newPlanDate: string }): Promise<void>
+  getDayScript(date: string): Promise<DayScriptDocument>
+  saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any> }): Promise<SaveDayScriptResult>
+  confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }>
+  getTaskContexts(status?: string): Promise<TaskProgressContext[]>
+  refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]>
   fetchStartOfDayOffset(): Promise<number>
   setStartOfDayOffset(offset: number): Promise<number>
   fetchLlmSettings(): Promise<LlmSettings>

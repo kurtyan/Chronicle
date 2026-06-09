@@ -170,3 +170,62 @@ export interface CreateMeetingRequest {
   rawContent: string
   llmCallLogId?: string
 }
+
+export interface DayScriptBlock {
+  id: string
+  sortOrder: number
+  startTime: string
+  endTime: string
+  headerText: string
+  progressText: string
+  completed: boolean
+  taskIds: string[]
+}
+
+export interface DayScriptDocument {
+  scriptDate: string
+  revision: number
+  document: Record<string, any>
+  blocks: DayScriptBlock[]
+  updatedAt: number
+}
+
+export interface DayScriptValidationError {
+  lineIndex: number
+  message: string
+}
+
+export interface ProgressSyncConflict {
+  blockId: string
+  taskId: string
+  taskTitle: string
+  startTime: string
+  endTime: string
+  existingProgress: string
+  currentProgress: string
+}
+
+export interface SaveDayScriptResult {
+  script: DayScriptDocument
+  createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  validationErrors: DayScriptValidationError[]
+  conflicts: ProgressSyncConflict[]
+}
+
+export interface TaskProgressSummary {
+  taskId: string
+  latestProgress: string
+  nextStep: string
+  summaryUpdatedAt: number | null
+  stale: boolean
+  errorMessage: string | null
+}
+
+export interface TaskProgressContext {
+  taskId: string
+  taskTitle: string
+  status: TaskStatus
+  totalWorkMs: number
+  lastActivityAt: number | null
+  summary: TaskProgressSummary
+}
