@@ -12,8 +12,8 @@ import {
   type BatchCreatePlanItem, type PlanItem, type PlanItemDetail,
 } from './planService'
 import {
-  getDayScript, saveDayScript, confirmDayScriptProgressSync,
-  type DayScriptDocument, type SaveDayScriptResult,
+  getDayScript, saveDayScript, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
+  type DayScriptDocument, type SaveDayScriptResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
 } from './dayScriptService'
 import {
   getTaskContexts, refreshTaskContexts,
@@ -376,12 +376,16 @@ export class AppService {
     return getDayScript(scriptDate)
   }
 
-  async saveDayScript(scriptDate: string, document: any, expectedRevision: number): Promise<SaveDayScriptResult> {
-    return saveDayScript(scriptDate, document, expectedRevision)
+  async saveDayScript(scriptDate: string, document: any, expectedRevision: number, focusActivities?: DayScriptFocusActivity[]): Promise<SaveDayScriptResult> {
+    return saveDayScript(scriptDate, document, expectedRevision, focusActivities)
   }
 
   async confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Promise<Array<{ taskId: string; entryId: string; blockId: string }>> {
     return confirmDayScriptProgressSync(scriptDate, items)
+  }
+
+  async getDayScriptExecutionRecords(scriptDate: string, filters?: { taskId?: string; start?: number; end?: number }): Promise<DayScriptExecutionRecord[]> {
+    return getDayScriptExecutionRecords(scriptDate, filters)
   }
 
   // --- Task Context ---

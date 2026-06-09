@@ -16,6 +16,7 @@ export interface DayScriptBlock {
   endTime: string
   headerText: string
   progressText: string
+  progressHtml?: string
   completed: boolean
   taskIds: string[]
 }
@@ -46,13 +47,39 @@ export interface ProgressSyncConflict {
 export interface SaveDayScriptResult {
   script: DayScriptDocument
   createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  executionRecords: DayScriptExecutionRecord[]
   validationErrors: DayScriptValidationError[]
   conflicts: ProgressSyncConflict[]
+}
+
+export interface DayScriptFocusActivity {
+  blockKey: string
+  taskId: string
+  firstEditedAt: number
+}
+
+export interface DayScriptExecutionRecord {
+  id: string
+  scriptDate: string
+  blockId: string
+  taskId: string
+  progressEntryId: string
+  workSessionId: string | null
+  plannedStartAt: number
+  plannedEndAt: number
+  actualStartedAt: number
+  actualCompletedAt: number
+  plannedMinutes: number
+  actualMinutes: number
+  startDelayMinutes: number
+  overrunMinutes: number
+  createdAt: number
 }
 
 interface ParsedLine {
   text: string
   taskIds: string[]
+  html: string
 }
 
 interface ParsedBlock {
@@ -61,15 +88,21 @@ interface ParsedBlock {
   endTime: string
   headerText: string
   progressText: string
+  progressHtml: string
+  progressLines: ParsedLine[]
   completed: boolean
   taskIds: string[]
 }
+
+type RichDayScriptBlock = DayScriptBlock & { progressLines?: ParsedLine[] }
 
 interface ExistingSync {
   blockId: string
   taskId: string
   syncedProgress: string
 }
+
+type ActivityMap = Map<string, DayScriptFocusActivity>
 
 const TIME_HEADER_RE = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s+|$)(.*)$/
 const TIME_LIKE_RE = /^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/
@@ -108,6 +141,7 @@ function collectBlockLines(node: JsonNode, lines: ParsedLine[]): void {
 
   if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem' || type === 'codeBlock') {
     const line = collectInlineText(node.content ?? [])
+    line.html = renderProgressLineHtml(node)
     lines.push(line)
     return
   }
@@ -145,7 +179,7 @@ function collectInlineText(nodes: JsonNode[]): ParsedLine {
   }
 
   for (const node of nodes) visit(node)
-  return { text: text.replace(/\u00a0/g, ' '), taskIds: [...taskIds] }
+  return { text: text.replace(/\u00a0/g, ' '), taskIds: [...taskIds], html: '' }
 }
 
 function timeToMinutes(value: string): number | null {
@@ -170,6 +204,119 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;')
 }
 
+function escapeAttribute(text: string): string {
+  return escapeHtml(text).replace(/`/g, '&#96;')
+}
+
+function renderMarks(html: string, marks?: Array<{ type?: string; attrs?: Record<string, any> }>): string {
+  return [...(marks ?? [])].reverse().reduce((value, mark) => {
+    switch (mark.type) {
+      case 'bold':
+        return `<strong>${value}</strong>`
+      case 'italic':
+        return `<em>${value}</em>`
+      case 'strike':
+        return `<s>${value}</s>`
+      case 'code':
+        return `<code>${value}</code>`
+      case 'link': {
+        const href = typeof mark.attrs?.href === 'string' ? mark.attrs.href : ''
+        const taskId = typeof mark.attrs?.taskId === 'string' ? mark.attrs.taskId : ''
+        const attrs = [
+          href ? `href="${escapeAttribute(href)}"` : '',
+          taskId ? `data-task-id="${escapeAttribute(taskId)}"` : '',
+        ].filter(Boolean).join(' ')
+        return `<a ${attrs}>${value}</a>`
+      }
+      default:
+        return value
+    }
+  }, html)
+}
+
+function renderInlineContent(nodes: JsonNode[] = []): string {
+  return nodes.map((node) => renderNodeHtml(node)).join('')
+}
+
+function renderNodeHtml(node: JsonNode): string {
+  const type = node.type ?? ''
+  switch (type) {
+    case 'text':
+      return renderMarks(escapeHtml(node.text ?? ''), node.marks)
+    case 'hardBreak':
+      return '<br>'
+    case 'paragraph':
+      return `<p>${renderInlineContent(node.content)}</p>`
+    case 'heading': {
+      const level = Math.min(6, Math.max(1, Number(node.attrs?.level ?? 1)))
+      return `<h${level}>${renderInlineContent(node.content)}</h${level}>`
+    }
+    case 'blockquote':
+      return `<blockquote>${renderInlineContent(node.content)}</blockquote>`
+    case 'bulletList':
+      return `<ul>${(node.content ?? []).map(renderNodeHtml).join('')}</ul>`
+    case 'orderedList':
+      return `<ol>${(node.content ?? []).map(renderNodeHtml).join('')}</ol>`
+    case 'listItem':
+      return `<li>${renderInlineContent(node.content)}</li>`
+    case 'codeBlock':
+      return `<pre><code>${escapeHtml(collectInlineText(node.content ?? []).text)}</code></pre>`
+    case 'image':
+    case 'imageResize': {
+      const attrs = node.attrs ?? {}
+      const src = typeof attrs.src === 'string' ? attrs.src : ''
+      const fullpath = typeof attrs.fullpath === 'string' ? attrs.fullpath : ''
+      const filename = typeof attrs.filename === 'string' ? attrs.filename : ''
+      const width = typeof attrs.width === 'string' || typeof attrs.width === 'number' ? String(attrs.width) : ''
+      const htmlAttrs = [
+        `src="${escapeAttribute(src)}"`,
+        fullpath ? `data-fullpath="${escapeAttribute(fullpath)}"` : '',
+        filename ? `data-filename="${escapeAttribute(filename)}"` : '',
+        width ? `width="${escapeAttribute(width)}"` : '',
+      ].filter(Boolean).join(' ')
+      return `<p><img ${htmlAttrs}></p>`
+    }
+    default:
+      return renderInlineContent(node.content)
+  }
+}
+
+function renderProgressLineHtml(node: JsonNode): string {
+  const rendered = renderNodeHtml(node)
+  if (node.type === 'listItem') return `<ul>${rendered}</ul>`
+  return rendered
+}
+
+function progressLinesToHtml(lines: ParsedLine[]): string {
+  return lines.map((line) => line.html).join('')
+}
+
+function progressDeltaHtml(lines: ParsedLine[], existingProgress: string): string {
+  const existing = normalizeProgress(existingProgress)
+  if (!existing) return progressLinesToHtml(lines)
+
+  let consumed = ''
+  const remaining: ParsedLine[] = []
+  for (const line of lines) {
+    const next = consumed ? `${consumed}\n${line.text}` : line.text
+    const normalizedNext = normalizeProgress(next)
+    if (normalizedNext && existing.startsWith(normalizedNext) && normalizedNext.length <= existing.length) {
+      consumed = next
+      continue
+    }
+
+    if (normalizeProgress(consumed) === existing) {
+      remaining.push(line)
+      continue
+    }
+
+    const deltaText = normalizeProgress(normalizeProgress(next).slice(existing.length))
+    if (deltaText) remaining.push({ text: deltaText, taskIds: [], html: progressToHtml(deltaText) })
+    consumed = next
+  }
+  return progressLinesToHtml(remaining)
+}
+
 function progressToHtml(text: string): string {
   if (!text.trim()) return ''
   return text
@@ -178,10 +325,135 @@ function progressToHtml(text: string): string {
     .join('')
 }
 
-function buildLogHtml(scriptDate: string, block: { startTime: string; endTime: string }, progress: string): string {
+function buildLogHtml(scriptDate: string, block: { startTime: string; endTime: string }, progress: string, progressHtml?: string): string {
   const header = `<p>Day Script progress · ${escapeHtml(scriptDate)} · ${escapeHtml(block.startTime)}-${escapeHtml(block.endTime)}</p>`
-  const body = progressToHtml(progress)
+  const body = progressHtml || progressToHtml(progress)
   return body ? `${header}${body}` : header
+}
+
+function buildActivityKey(block: Pick<DayScriptBlock, 'sortOrder' | 'startTime' | 'endTime' | 'headerText'>, taskId: string): string {
+  return [
+    block.sortOrder,
+    block.startTime,
+    block.endTime,
+    block.headerText.replace(/\s+/g, ' ').trim(),
+    taskId,
+  ].join('|')
+}
+
+function activityMapKey(blockKey: string, taskId: string): string {
+  return `${blockKey}::${taskId}`
+}
+
+function plannedTimestamp(scriptDate: string, time: string): number {
+  const [year, month, day] = scriptDate.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
+}
+
+function minutesBetween(start: number, end: number): number {
+  return Math.round((end - start) / 60_000)
+}
+
+function rowToExecutionRecord(row: any): DayScriptExecutionRecord {
+  return {
+    id: row.id,
+    scriptDate: row.script_date,
+    blockId: row.block_id,
+    taskId: row.task_id,
+    progressEntryId: row.progress_entry_id,
+    workSessionId: row.work_session_id ?? null,
+    plannedStartAt: row.planned_start_at,
+    plannedEndAt: row.planned_end_at,
+    actualStartedAt: row.actual_started_at,
+    actualCompletedAt: row.actual_completed_at,
+    plannedMinutes: row.planned_minutes,
+    actualMinutes: row.actual_minutes,
+    startDelayMinutes: row.start_delay_minutes,
+    overrunMinutes: row.overrun_minutes,
+    createdAt: row.created_at,
+  }
+}
+
+function findMatchingWorkSessionId(taskId: string, actualStartedAt: number, actualCompletedAt: number): string | null {
+  const row = queryOne(
+    `SELECT id
+     FROM work_sessions
+     WHERE task_id = ?
+       AND started_at <= ?
+       AND (ended_at IS NULL OR ended_at >= ?)
+     ORDER BY started_at DESC
+     LIMIT 1`,
+    [taskId, actualCompletedAt, actualStartedAt]
+  ) as { id: string } | null
+  return row?.id ?? null
+}
+
+function createExecutionRecord(scriptDate: string, block: DayScriptBlock, taskId: string, entryId: string, activityMap: ActivityMap, completedAt: number): DayScriptExecutionRecord | null {
+  const blockKey = buildActivityKey(block, taskId)
+  const activity = activityMap.get(activityMapKey(blockKey, taskId))
+  if (!activity || !Number.isFinite(activity.firstEditedAt) || activity.firstEditedAt <= 0) return null
+
+  const plannedStartAt = plannedTimestamp(scriptDate, block.startTime)
+  const plannedEndAt = plannedTimestamp(scriptDate, block.endTime)
+  const actualStartedAt = Math.min(activity.firstEditedAt, completedAt)
+  const actualCompletedAt = completedAt
+  const id = crypto.randomUUID()
+  const record: DayScriptExecutionRecord = {
+    id,
+    scriptDate,
+    blockId: block.id,
+    taskId,
+    progressEntryId: entryId,
+    workSessionId: findMatchingWorkSessionId(taskId, actualStartedAt, actualCompletedAt),
+    plannedStartAt,
+    plannedEndAt,
+    actualStartedAt,
+    actualCompletedAt,
+    plannedMinutes: minutesBetween(plannedStartAt, plannedEndAt),
+    actualMinutes: minutesBetween(actualStartedAt, actualCompletedAt),
+    startDelayMinutes: minutesBetween(plannedStartAt, actualStartedAt),
+    overrunMinutes: minutesBetween(plannedEndAt, actualCompletedAt),
+    createdAt: completedAt,
+  }
+
+  run(
+    `INSERT INTO day_script_execution_records (
+      id, script_date, block_id, task_id, progress_entry_id, work_session_id,
+      planned_start_at, planned_end_at, actual_started_at, actual_completed_at,
+      planned_minutes, actual_minutes, start_delay_minutes, overrun_minutes, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.id,
+      record.scriptDate,
+      record.blockId,
+      record.taskId,
+      record.progressEntryId,
+      record.workSessionId,
+      record.plannedStartAt,
+      record.plannedEndAt,
+      record.actualStartedAt,
+      record.actualCompletedAt,
+      record.plannedMinutes,
+      record.actualMinutes,
+      record.startDelayMinutes,
+      record.overrunMinutes,
+      record.createdAt,
+    ]
+  )
+  return record
+}
+
+function normalizeFocusActivities(items?: DayScriptFocusActivity[]): ActivityMap {
+  const map: ActivityMap = new Map()
+  for (const item of items ?? []) {
+    if (!item || typeof item.blockKey !== 'string' || typeof item.taskId !== 'string') continue
+    if (!Number.isFinite(item.firstEditedAt) || item.firstEditedAt <= 0) continue
+    const key = activityMapKey(item.blockKey, item.taskId)
+    const existing = map.get(key)
+    if (!existing || item.firstEditedAt < existing.firstEditedAt) map.set(key, item)
+  }
+  return map
 }
 
 function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationErrors: DayScriptValidationError[] } {
@@ -214,6 +486,8 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
         endTime,
         headerText: bodyText.replace(/\s*✅\s*/g, ' ').trim(),
         progressText: '',
+        progressHtml: '',
+        progressLines: [],
         completed: bodyText.includes('✅'),
         taskIds: line.taskIds.filter((taskId) => Boolean(getTaskById(taskId))),
       }
@@ -234,12 +508,14 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
     current.progressText = current.progressText
       ? `${current.progressText}\n${line.text}`
       : line.text
+    current.progressLines.push(line)
   })
 
   return {
     blocks: blocks.map((block) => ({
       ...block,
       progressText: normalizeProgress(block.progressText),
+      progressHtml: progressLinesToHtml(block.progressLines),
       headerText: block.headerText.trim(),
     })),
     validationErrors,
@@ -293,7 +569,7 @@ function getExistingScript(scriptDate: string): DayScriptDocument | null {
   }
 }
 
-function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBlock[]): DayScriptBlock[] {
+function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBlock[]): RichDayScriptBlock[] {
   const unusedExisting = [...existingBlocks]
 
   return parsedBlocks.map((block, index) => {
@@ -311,6 +587,8 @@ function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBl
       endTime: block.endTime,
       headerText: block.headerText,
       progressText: block.progressText,
+      progressHtml: block.progressHtml,
+      progressLines: block.progressLines,
       completed: block.completed,
       taskIds: block.taskIds,
     }
@@ -382,14 +660,19 @@ function upsertBlocks(scriptDate: string, blocks: DayScriptBlock[], now: number)
   }
 }
 
-function syncBlockProgress(scriptDate: string, block: DayScriptBlock, existingSyncs: Map<string, ExistingSync>): { createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>; conflicts: ProgressSyncConflict[] } {
+function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existingSyncs: Map<string, ExistingSync>, activityMap: ActivityMap, completedAt: number): {
+  createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  executionRecords: DayScriptExecutionRecord[]
+  conflicts: ProgressSyncConflict[]
+} {
   const createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> = []
+  const executionRecords: DayScriptExecutionRecord[] = []
   const conflicts: ProgressSyncConflict[] = []
 
-  if (!block.completed) return { createdLogs, conflicts }
+  if (!block.completed) return { createdLogs, executionRecords, conflicts }
 
   const progress = normalizeProgress(block.progressText)
-  if (!progress) return { createdLogs, conflicts }
+  if (!progress) return { createdLogs, executionRecords, conflicts }
 
   for (const taskId of block.taskIds) {
     const syncKey = `${block.id}:${taskId}`
@@ -398,11 +681,13 @@ function syncBlockProgress(scriptDate: string, block: DayScriptBlock, existingSy
     if (!task) continue
 
     if (!existing) {
-      const entry = createTaskEntry(taskId, buildLogHtml(scriptDate, block, progress), 'log')
+      const entry = createTaskEntry(taskId, buildLogHtml(scriptDate, block, progress, block.progressHtml), 'log')
       run(
         'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?)',
-        [block.id, taskId, progress, entry.id, Date.now()]
+        [block.id, taskId, progress, entry.id, completedAt]
       )
+      const executionRecord = createExecutionRecord(scriptDate, block, taskId, entry.id, activityMap, completedAt)
+      if (executionRecord) executionRecords.push(executionRecord)
       createdLogs.push({ taskId, entryId: entry.id, blockId: block.id })
       continue
     }
@@ -412,11 +697,14 @@ function syncBlockProgress(scriptDate: string, block: DayScriptBlock, existingSy
     if (progress.startsWith(existing.syncedProgress)) {
       const delta = normalizeProgress(progress.slice(existing.syncedProgress.length))
       if (!delta) continue
-      const entry = createTaskEntry(taskId, buildLogHtml(scriptDate, block, delta), 'log')
+      const deltaHtml = progressDeltaHtml(block.progressLines ?? [], existing.syncedProgress)
+      const entry = createTaskEntry(taskId, buildLogHtml(scriptDate, block, delta, deltaHtml), 'log')
       run(
         'UPDATE day_script_progress_syncs SET synced_progress = ?, last_entry_id = ?, updated_at = ? WHERE block_id = ? AND task_id = ?',
-        [progress, entry.id, Date.now(), block.id, taskId]
+        [progress, entry.id, completedAt, block.id, taskId]
       )
+      const executionRecord = createExecutionRecord(scriptDate, block, taskId, entry.id, activityMap, completedAt)
+      if (executionRecord) executionRecords.push(executionRecord)
       createdLogs.push({ taskId, entryId: entry.id, blockId: block.id })
       continue
     }
@@ -432,7 +720,7 @@ function syncBlockProgress(scriptDate: string, block: DayScriptBlock, existingSy
     })
   }
 
-  return { createdLogs, conflicts }
+  return { createdLogs, executionRecords, conflicts }
 }
 
 export function getDayScript(scriptDate: string): DayScriptDocument {
@@ -445,7 +733,7 @@ export function getDayScript(scriptDate: string): DayScriptDocument {
   }
 }
 
-export function saveDayScript(scriptDate: string, document: JsonNode, expectedRevision: number): SaveDayScriptResult {
+export function saveDayScript(scriptDate: string, document: JsonNode, expectedRevision: number, focusActivities?: DayScriptFocusActivity[]): SaveDayScriptResult {
   const normalizedDocument = normalizeDoc(document)
   const existing = getExistingScript(scriptDate)
   if ((existing?.revision ?? 0) !== expectedRevision) {
@@ -463,6 +751,7 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
         updatedAt: Date.now(),
       },
       createdLogs: [],
+      executionRecords: [],
       validationErrors,
       conflicts: [],
     }
@@ -471,7 +760,9 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   const nextBlocks = assignBlockIds(parsedBlocks, existing?.blocks ?? [])
   const now = Date.now()
   const createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> = []
+  const executionRecords: DayScriptExecutionRecord[] = []
   const conflicts: ProgressSyncConflict[] = []
+  const activityMap = normalizeFocusActivities(focusActivities)
 
   const transaction = getDb().transaction(() => {
     if (existing) {
@@ -494,8 +785,9 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
     }
 
     for (const block of nextBlocks) {
-      const result = syncBlockProgress(scriptDate, block, syncMap)
+      const result = syncBlockProgress(scriptDate, block, syncMap, activityMap, now)
       createdLogs.push(...result.createdLogs)
+      executionRecords.push(...result.executionRecords)
       conflicts.push(...result.conflicts)
     }
   })
@@ -505,16 +797,45 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   return {
     script: getDayScript(scriptDate),
     createdLogs,
+    executionRecords,
     validationErrors: [],
     conflicts,
   }
+}
+
+export function getDayScriptExecutionRecords(scriptDate: string, filters?: { taskId?: string; start?: number; end?: number }): DayScriptExecutionRecord[] {
+  const conditions = ['script_date = ?']
+  const params: any[] = [scriptDate]
+  if (filters?.taskId) {
+    conditions.push('task_id = ?')
+    params.push(filters.taskId)
+  }
+  if (filters?.start !== undefined) {
+    conditions.push('actual_completed_at >= ?')
+    params.push(filters.start)
+  }
+  if (filters?.end !== undefined) {
+    conditions.push('actual_started_at <= ?')
+    params.push(filters.end)
+  }
+  return queryAll(
+    `SELECT *
+     FROM day_script_execution_records
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY actual_started_at ASC, created_at ASC`,
+    params
+  ).map(rowToExecutionRecord)
 }
 
 export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Array<{ taskId: string; entryId: string; blockId: string }> {
   const existing = getExistingScript(scriptDate)
   if (!existing) return []
 
-  const blockMap = new Map(existing.blocks.map((block) => [block.id, block]))
+  const parsed = parseDocument(existing.document)
+  const richBlocks = parsed.validationErrors.length === 0
+    ? assignBlockIds(parsed.blocks, existing.blocks)
+    : existing.blocks
+  const blockMap = new Map(richBlocks.map((block) => [block.id, block]))
   const created: Array<{ taskId: string; entryId: string; blockId: string }> = []
   const now = Date.now()
 
@@ -538,7 +859,10 @@ export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ 
         : progress
       if (!logProgress) continue
 
-      const entry = createTaskEntry(item.taskId, buildLogHtml(scriptDate, block, logProgress), 'log')
+      const logHtml = existingProgress && progress.startsWith(existingProgress)
+        ? progressDeltaHtml((block as RichDayScriptBlock).progressLines ?? [], existingProgress)
+        : (block as RichDayScriptBlock).progressHtml
+      const entry = createTaskEntry(item.taskId, buildLogHtml(scriptDate, block, logProgress, logHtml), 'log')
       run(
         'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?)',
         [item.blockId, item.taskId, progress, entry.id, now]

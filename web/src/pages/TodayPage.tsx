@@ -5,9 +5,9 @@ import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
 import { confirmDayScriptProgressSync, getDayScript, saveDayScript } from '@/services/api'
-import type { DayScriptBlock, DayScriptDocument, ProgressSyncConflict, Task } from '@/types'
+import type { DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, ProgressSyncConflict, Task } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { findActiveBlock } from '@/lib/dayScript'
+import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 
 function dateOffset(date: string, offset: number): string {
   const [year, month, day] = date.split('-').map(Number)
@@ -36,6 +36,40 @@ function todayDate(): string {
     String(now.getMonth() + 1).padStart(2, '0'),
     String(now.getDate()).padStart(2, '0'),
   ].join('-')
+}
+
+function activityStorageKey(date: string): string {
+  return `chronicle_day_script_focus_activity:${date}`
+}
+
+function activityMapKey(blockKey: string, taskId: string): string {
+  return `${blockKey}::${taskId}`
+}
+
+function loadStoredFocusActivity(date: string): Map<string, DayScriptFocusActivity> {
+  try {
+    const raw = localStorage.getItem(activityStorageKey(date))
+    const items = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(items)) return new Map()
+    return new Map(items
+      .filter((item): item is DayScriptFocusActivity => (
+        typeof item?.blockKey === 'string'
+        && typeof item?.taskId === 'string'
+        && Number.isFinite(item?.firstEditedAt)
+      ))
+      .map((item) => [activityMapKey(item.blockKey, item.taskId), item]))
+  } catch {
+    return new Map()
+  }
+}
+
+function saveStoredFocusActivity(date: string, activity: Map<string, DayScriptFocusActivity>): void {
+  const items = [...activity.values()]
+  if (items.length === 0) {
+    localStorage.removeItem(activityStorageKey(date))
+    return
+  }
+  localStorage.setItem(activityStorageKey(date), JSON.stringify(items))
 }
 
 function getBlockTitle(block: DayScriptBlock, tasksById: Map<string, Task>): string {
@@ -100,6 +134,7 @@ export function TodayPage() {
   const autoTakeOver = useTaskStore((s) => s.autoTakeOver)
   const doAfk = useTaskStore((s) => s.doAfk)
   const autoTakeOverInFlightRef = useRef<string | null>(null)
+  const focusActivityRef = useRef<Map<string, DayScriptFocusActivity>>(loadStoredFocusActivity(displayDate))
 
   useEffect(() => {
     loadTodos()
@@ -128,6 +163,7 @@ export function TodayPage() {
 
   useEffect(() => {
     let cancelled = false
+    focusActivityRef.current = loadStoredFocusActivity(displayDate)
     setLoadingScript(true)
     setLoadError(null)
     setSaveError(null)
@@ -157,9 +193,11 @@ export function TodayPage() {
     try {
       setSaveError(null)
       const previousBlocks = script.blocks
+      const focusActivity = [...focusActivityRef.current.values()]
       const result = await saveDayScript(displayDate, {
         expectedRevision: script.revision,
         document: script.document,
+        focusActivity,
       })
       if (result.validationErrors.length > 0) {
         const first = result.validationErrors[0]
@@ -170,6 +208,15 @@ export function TodayPage() {
       setConflicts(result.conflicts)
       await loadTodos()
       if (activeTaskId) await setActiveTask(activeTaskId)
+      if (result.executionRecords.length > 0) {
+        for (const record of result.executionRecords) {
+          const block = result.script.blocks.find((item) => item.id === record.blockId)
+          if (!block) continue
+          const blockKey = buildDayScriptActivityKey(block, record.taskId)
+          focusActivityRef.current.delete(activityMapKey(blockKey, record.taskId))
+        }
+        saveStoredFocusActivity(displayDate, focusActivityRef.current)
+      }
       const previouslyCompletedIds = new Set(previousBlocks.filter((block) => block.completed).map((block) => block.id))
       const newlyCompletedIds = new Set(
         result.script.blocks
@@ -270,7 +317,12 @@ export function TodayPage() {
                   }}
                   onSave={handleSave}
                   onNavigateTask={(taskId) => setActiveTask(taskId)}
-                  onEditingTask={(taskId) => {
+                  onEditingTask={({ taskId, blockKey }) => {
+                    const key = activityMapKey(blockKey, taskId)
+                    if (!focusActivityRef.current.has(key)) {
+                      focusActivityRef.current.set(key, { blockKey, taskId, firstEditedAt: Date.now() })
+                      saveStoredFocusActivity(displayDate, focusActivityRef.current)
+                    }
                     if (activeTaskId !== taskId) {
                       setActiveTask(taskId).catch((error) => console.error('Failed to focus task from Day Script:', error))
                     }

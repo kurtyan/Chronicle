@@ -14,6 +14,13 @@ async function openTask(page: import('@playwright/test').Page, title: string) {
   await expect(page.getByTestId('workspace-info-bar')).toBeVisible()
 }
 
+async function expectIdle(page: import('@playwright/test').Page) {
+  await expect.poll(async () => {
+    const res = await page.request.get('/api/sessions/current')
+    return res.ok() ? await res.json() : null
+  }).toBeNull()
+}
+
 test.describe('Auto takeover on actual edit', () => {
   test.beforeEach(async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
@@ -51,6 +58,7 @@ test.describe('Auto takeover on actual edit', () => {
 
     await page.getByRole('button', { name: '取消' }).click()
     await page.getByRole('button', { name: 'AFK' }).click()
+    await expectIdle(page)
 
     await page.getByTestId('task-entry-block').first().click()
     await page.locator('[data-rich-editor="true"] .ProseMirror').fill('Second edit session')
@@ -92,6 +100,7 @@ test.describe('Auto takeover on actual edit', () => {
     await page.getByRole('button', { name: '提交记录' }).click()
     await expect(page.locator('[data-rich-editor="true"] .ProseMirror')).toBeEmpty()
     await page.getByRole('button', { name: 'AFK' }).click()
+    await expectIdle(page)
 
     await page.locator('[data-rich-editor="true"] .ProseMirror').fill('Second new entry')
     await expect.poll(() => takeoverCount).toBe(2)

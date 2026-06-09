@@ -161,6 +161,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     }
     return initialContent ?? entry?.content ?? ''
   })
+  const [newEntryVersion, setNewEntryVersion] = useState(0)
   const [imageViewerSrc, setImageViewerSrc] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [planConfirmDelete, setPlanConfirmDelete] = useState(false)
@@ -174,6 +175,12 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     hasFiredFirstMeaningfulEditRef.current = false
     originalContentRef.current = entry?.content ?? ''
   }, [taskId, entry?.id, isNewEntry])
+
+  useEffect(() => {
+    if (isNewEntry && isHtmlEmpty(draftContent)) {
+      hasFiredFirstMeaningfulEditRef.current = false
+    }
+  }, [draftContent, isNewEntry])
 
   // When not editing, sync draft content from entry (external updates) or clear localStorage
   useEffect(() => {
@@ -266,6 +273,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     hasFiredFirstMeaningfulEditRef.current = false
     if (draftKey) localStorage.removeItem(draftKey)
     setDraftContent('')
+    setNewEntryVersion((version) => version + 1)
   }
 
   // Auto-save to DB every 30s when editing an existing entry
@@ -306,6 +314,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     return (
       <>
         <RichEditor
+          key={`${taskId ?? 'new'}:${newEntryVersion}`}
           content={draftContent}
           onChange={handleDraftChange}
           placeholder={t('task.logPlaceholder')}

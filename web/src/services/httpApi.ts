@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -300,13 +300,18 @@ export const httpApi: ApiInterface = {
     return data
   },
 
-  async saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any> }): Promise<SaveDayScriptResult> {
+  async saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult> {
     const { data } = await (await withClientId()).put<SaveDayScriptResult>(`/api/day-scripts/${encodeURIComponent(date)}`, body)
     return data
   },
 
   async confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
     const { data } = await (await withClientId()).post(`/api/day-scripts/${encodeURIComponent(date)}/confirm-progress-sync`, { items })
+    return data
+  },
+
+  async getDayScriptExecutionRecords(date: string, filters?: { taskId?: string; start?: number; end?: number }): Promise<DayScriptExecutionRecord[]> {
+    const { data } = await (await withClientId()).get<DayScriptExecutionRecord[]>(`/api/day-scripts/${encodeURIComponent(date)}/execution-records`, { params: filters })
     return data
   },
 

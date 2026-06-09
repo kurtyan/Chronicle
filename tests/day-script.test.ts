@@ -157,6 +157,140 @@ test.describe('Day Script progress sync', () => {
     expect(entries).toHaveLength(2)
   })
 
+  test('completed focus line stores planned and actual execution record', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Execution-${Date.now()}`)
+    const date = uniqueScriptDate(3)
+    const firstEditedAt = Date.now() - 120_000
+
+    const takeover = await page.request.post(`/api/tasks/${task.id}/takeover`)
+    expect(takeover.ok()).toBeTruthy()
+    const session = await takeover.json()
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Execution progress' },
+        ]),
+        focusActivity: [{
+          blockKey: `0|10:00|10:30|@${task.title}|${task.id}`,
+          taskId: task.id,
+          firstEditedAt,
+        }],
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdLogs).toHaveLength(1)
+    expect(saved.executionRecords).toHaveLength(1)
+    expect(saved.executionRecords[0]).toMatchObject({
+      scriptDate: date,
+      taskId: task.id,
+      progressEntryId: saved.createdLogs[0].entryId,
+      workSessionId: session.id,
+      plannedMinutes: 30,
+    })
+    expect(saved.executionRecords[0].actualStartedAt).toBe(firstEditedAt)
+    expect(saved.executionRecords[0].actualCompletedAt).toBeGreaterThanOrEqual(firstEditedAt)
+    expect(saved.executionRecords[0].actualMinutes).toBeGreaterThanOrEqual(0)
+
+    const recordsRes = await page.request.get(`/api/day-scripts/${date}/execution-records?taskId=${encodeURIComponent(task.id)}`)
+    expect(recordsRes.ok()).toBeTruthy()
+    const records = await recordsRes.json()
+    expect(records).toHaveLength(1)
+    expect(records[0].id).toBe(saved.executionRecords[0].id)
+
+    const repeat = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: saved.script.revision,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Execution progress' },
+        ]),
+        focusActivity: [{
+          blockKey: `0|10:00|10:30|@${task.title}|${task.id}`,
+          taskId: task.id,
+          firstEditedAt,
+        }],
+      },
+    })
+    expect(repeat.ok()).toBeTruthy()
+    const repeated = await repeat.json()
+    expect(repeated.createdLogs).toHaveLength(0)
+    expect(repeated.executionRecords).toHaveLength(0)
+
+    const secondEditedAt = Date.now() - 60_000
+    const append = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: repeated.script.revision,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Execution progress' },
+          { text: 'Second progress slice' },
+        ]),
+        focusActivity: [{
+          blockKey: `0|10:00|10:30|@${task.title}|${task.id}`,
+          taskId: task.id,
+          firstEditedAt: secondEditedAt,
+        }],
+      },
+    })
+    expect(append.ok()).toBeTruthy()
+    const appended = await append.json()
+    expect(appended.createdLogs).toHaveLength(1)
+    expect(appended.executionRecords).toHaveLength(1)
+    expect(appended.executionRecords[0].actualStartedAt).toBe(secondEditedAt)
+
+    const appendedRecordsRes = await page.request.get(`/api/day-scripts/${date}/execution-records?taskId=${encodeURIComponent(task.id)}`)
+    expect(appendedRecordsRes.ok()).toBeTruthy()
+    expect(await appendedRecordsRes.json()).toHaveLength(2)
+  })
+
+  test('completed focus line preserves rich progress formatting in task log', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Rich-${Date.now()}`)
+    const date = uniqueScriptDate(4)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'Bold progress', marks: [{ type: 'bold' }] },
+              ],
+            },
+            {
+              type: 'bulletList',
+              content: [{
+                type: 'listItem',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'List progress' }] }],
+              }],
+            },
+            {
+              type: 'codeBlock',
+              content: [{ type: 'text', text: 'const value = 1' }],
+            },
+          ],
+        },
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdLogs).toHaveLength(1)
+
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].content).toContain('<strong>Bold progress</strong>')
+    expect(entries[0].content).toContain('<ul>')
+    expect(entries[0].content).toContain('List progress')
+    expect(entries[0].content).toContain('<pre><code>const value = 1</code></pre>')
+  })
+
   test('Day Script editor only takes over after actual progress editing', async ({ page }) => {
     const task = await createTask(page, `DayScript-Takeover-${Date.now()}`)
     const now = new Date()

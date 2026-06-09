@@ -175,6 +175,30 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS day_script_execution_records (
+      id TEXT PRIMARY KEY,
+      script_date TEXT NOT NULL,
+      block_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      progress_entry_id TEXT NOT NULL,
+      work_session_id TEXT,
+      planned_start_at INTEGER NOT NULL,
+      planned_end_at INTEGER NOT NULL,
+      actual_started_at INTEGER NOT NULL,
+      actual_completed_at INTEGER NOT NULL,
+      planned_minutes INTEGER NOT NULL,
+      actual_minutes INTEGER NOT NULL,
+      start_delay_minutes INTEGER NOT NULL,
+      overrun_minutes INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (block_id) REFERENCES day_script_blocks(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (progress_entry_id) REFERENCES task_entries(id) ON DELETE CASCADE,
+      FOREIGN KEY (work_session_id) REFERENCES work_sessions(id) ON DELETE SET NULL
+    )
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS task_progress_summaries (
       task_id TEXT PRIMARY KEY,
       fingerprint TEXT NOT NULL,
@@ -223,8 +247,23 @@ function cleanupOrphans(): void {
        OR task_id NOT IN (SELECT id FROM tasks)
        OR last_entry_id NOT IN (SELECT id FROM task_entries);
 
+    UPDATE day_script_execution_records
+    SET work_session_id = NULL
+    WHERE work_session_id IS NOT NULL
+      AND work_session_id NOT IN (SELECT id FROM work_sessions);
+
+    DELETE FROM day_script_execution_records
+    WHERE block_id NOT IN (SELECT id FROM day_script_blocks)
+       OR task_id NOT IN (SELECT id FROM tasks)
+       OR progress_entry_id NOT IN (SELECT id FROM task_entries);
+
     DELETE FROM day_script_blocks
     WHERE script_date NOT IN (SELECT script_date FROM day_scripts);
+
+    DELETE FROM day_script_execution_records
+    WHERE block_id NOT IN (SELECT id FROM day_script_blocks)
+       OR task_id NOT IN (SELECT id FROM tasks)
+       OR progress_entry_id NOT IN (SELECT id FROM task_entries);
 
     DELETE FROM task_progress_summaries
     WHERE task_id NOT IN (SELECT id FROM tasks);

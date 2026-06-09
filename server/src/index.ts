@@ -398,11 +398,25 @@ app.get('/api/day-scripts/:date', async (c) => {
   return c.json(await service.getDayScript(c.req.param('date')))
 })
 
+app.get('/api/day-scripts/:date/execution-records', async (c) => {
+  const taskId = c.req.query('taskId') || undefined
+  const startParam = c.req.query('start')
+  const endParam = c.req.query('end')
+  const start = startParam !== undefined ? Number(startParam) : undefined
+  const end = endParam !== undefined ? Number(endParam) : undefined
+  return c.json(await service.getDayScriptExecutionRecords(c.req.param('date'), {
+    taskId,
+    start: Number.isFinite(start) ? start : undefined,
+    end: Number.isFinite(end) ? end : undefined,
+  }))
+})
+
 app.put('/api/day-scripts/:date', async (c) => {
   try {
     const body = await c.req.json()
     const expectedRevision = Number(body.expectedRevision ?? 0)
-    const result = await service.saveDayScript(c.req.param('date'), body.document, expectedRevision)
+    const focusActivities = Array.isArray(body.focusActivity) ? body.focusActivity : undefined
+    const result = await service.saveDayScript(c.req.param('date'), body.document, expectedRevision, focusActivities)
     for (const log of result.createdLogs) {
       broadcastEvent('entry_created', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
       const changedTask = await service.getTaskById(log.taskId)

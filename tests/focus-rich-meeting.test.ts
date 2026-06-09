@@ -44,6 +44,29 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('pre code')).toContainText('const value = 1')
   })
 
+  test('selecting a focus task mention opens that task detail immediately', async ({ page }) => {
+    const task = await createTask(page, `MentionOpensDetail-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 60)
+
+    await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: { type: 'doc', content: [{ type: 'paragraph' }] },
+      },
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    await editor.click()
+    await page.keyboard.type(`10:00-11:00 @${task.title.slice(0, 12)}`)
+    await expect(page.getByRole('button', { name: new RegExp(task.title) }).first()).toBeVisible()
+    await page.keyboard.press('Enter')
+
+    await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
+  })
+
   test('focus editor maps nested list progress edits to the owning task', async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
     const task = await createTask(page, `NestedProgress-${Date.now()}`)

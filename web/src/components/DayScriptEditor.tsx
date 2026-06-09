@@ -6,7 +6,7 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DayScriptDocument, Task } from '@/types'
-import { findActiveBlock, parseDayScriptDocument } from '@/lib/dayScript'
+import { buildDayScriptActivityKey, findActiveBlock, parseDayScriptDocument } from '@/lib/dayScript'
 import { ChronicleImage, isTauri, resolveImageSrcsInEditor, uploadAndInsertImage } from '@/components/RichEditor'
 
 interface DayScriptEditorProps {
@@ -16,7 +16,7 @@ interface DayScriptEditorProps {
   onChange: (document: Record<string, any>) => void
   onSave: () => void
   onNavigateTask: (taskId: string) => void
-  onEditingTask?: (taskId: string) => void
+  onEditingTask?: (activity: { taskId: string; blockKey: string }) => void
 }
 
 const TaskLink = Link.extend({
@@ -305,6 +305,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
       }
     ).insertContent(' ').run()
     setMentionState(null)
+    onNavigateTask(taskId)
   }
 
   function getUploadTaskId(nextEditor: Editor | null): string {
@@ -322,7 +323,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     const activeLineBlock = blocks.find((block) => lineIndex >= block.lineStart && lineIndex <= block.lineEnd)
     if (!activeLineBlock || lineIndex <= activeLineBlock.lineStart) return
     const taskId = activeLineBlock?.taskIds[0]
-    if (taskId) onEditingTask(taskId)
+    if (taskId) onEditingTask({ taskId, blockKey: buildDayScriptActivityKey(activeLineBlock, taskId) })
   }
 
   function applyBlockClasses(nextEditor: NonNullable<typeof editor>) {

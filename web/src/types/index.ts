@@ -205,9 +205,34 @@ export interface ProgressSyncConflict {
   currentProgress: string
 }
 
+export interface DayScriptFocusActivity {
+  blockKey: string
+  taskId: string
+  firstEditedAt: number
+}
+
+export interface DayScriptExecutionRecord {
+  id: string
+  scriptDate: string
+  blockId: string
+  taskId: string
+  progressEntryId: string
+  workSessionId: string | null
+  plannedStartAt: number
+  plannedEndAt: number
+  actualStartedAt: number
+  actualCompletedAt: number
+  plannedMinutes: number
+  actualMinutes: number
+  startDelayMinutes: number
+  overrunMinutes: number
+  createdAt: number
+}
+
 export interface SaveDayScriptResult {
   script: DayScriptDocument
   createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  executionRecords: DayScriptExecutionRecord[]
   validationErrors: DayScriptValidationError[]
   conflicts: ProgressSyncConflict[]
 }

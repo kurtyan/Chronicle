@@ -20,6 +20,16 @@ export interface ParsedDayScriptBlock extends Omit<DayScriptBlock, 'id'> {
 
 const TIME_HEADER_RE = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s+|$)(.*)$/
 
+export function buildDayScriptActivityKey(block: Pick<DayScriptBlock, 'sortOrder' | 'startTime' | 'endTime' | 'headerText'>, taskId: string): string {
+  return [
+    block.sortOrder,
+    block.startTime,
+    block.endTime,
+    block.headerText.replace(/\s+/g, ' ').trim(),
+    taskId,
+  ].join('|')
+}
+
 function extractTaskId(mark?: { type?: string; attrs?: Record<string, any> }): string | null {
   if (!mark || mark.type !== 'link') return null
   if (typeof mark.attrs?.taskId === 'string' && mark.attrs.taskId) return mark.attrs.taskId

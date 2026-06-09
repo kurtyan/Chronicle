@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -99,6 +99,25 @@ export class EmbeddedApiProvider implements ApiInterface {
             started_at INTEGER NOT NULL,
             ended_at INTEGER,
             FOREIGN KEY (task_id) REFERENCES tasks(id)
+          )
+        `)
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS day_script_execution_records (
+            id TEXT PRIMARY KEY,
+            script_date TEXT NOT NULL,
+            block_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            progress_entry_id TEXT NOT NULL,
+            work_session_id TEXT,
+            planned_start_at INTEGER NOT NULL,
+            planned_end_at INTEGER NOT NULL,
+            actual_started_at INTEGER NOT NULL,
+            actual_completed_at INTEGER NOT NULL,
+            planned_minutes INTEGER NOT NULL,
+            actual_minutes INTEGER NOT NULL,
+            start_delay_minutes INTEGER NOT NULL,
+            overrun_minutes INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
           )
         `)
         await this.persist()
@@ -678,7 +697,7 @@ export class EmbeddedApiProvider implements ApiInterface {
       updatedAt: 0,
     }
   }
-  async saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any> }): Promise<SaveDayScriptResult> {
+  async saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult> {
     return {
       script: {
         scriptDate: date,
@@ -688,12 +707,16 @@ export class EmbeddedApiProvider implements ApiInterface {
         updatedAt: Date.now(),
       },
       createdLogs: [],
+      executionRecords: [],
       validationErrors: [],
       conflicts: [],
     }
   }
   async confirmDayScriptProgressSync(): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
     return { createdLogs: [] }
+  }
+  async getDayScriptExecutionRecords(): Promise<DayScriptExecutionRecord[]> {
+    return []
   }
   async getTaskContexts(): Promise<TaskProgressContext[]> {
     return []
