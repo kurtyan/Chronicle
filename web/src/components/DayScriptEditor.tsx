@@ -1,7 +1,10 @@
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
+import { Extension } from '@tiptap/core'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
+import { Plugin, PluginKey } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -49,6 +52,34 @@ type LineMapping = {
 }
 
 const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock'])
+const LINE_ELEMENT_SELECTOR = 'p, h1, h2, h3, h4, blockquote, li, pre'
+const TIME_HEADER_RE = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s+|$)/
+
+const FocusLineDecorations = Extension.create({
+  name: 'focusLineDecorations',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey('focusLineDecorations'),
+        props: {
+          decorations(state) {
+            const decorations: Decoration[] = []
+            state.doc.descendants((node, pos) => {
+              if (!LINE_NODE_TYPES.has(node.type.name)) return true
+              const text = node.textBetween(0, node.content.size, '\n', '\n').replace(/\u00a0/g, ' ').trimEnd()
+              if (!TIME_HEADER_RE.test(text)) return true
+              const classes = ['day-script-line-header']
+              if (text.includes('✅')) classes.push('day-script-line-complete')
+              decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: classes.join(' ') }))
+              return false
+            })
+            return DecorationSet.create(state.doc, decorations)
+          },
+        },
+      }),
+    ]
+  },
+})
 
 function isTodayDate(date: string): boolean {
   const now = new Date()
@@ -63,13 +94,34 @@ function isLineNode(node: ProseMirrorNode): boolean {
   return LINE_NODE_TYPES.has(node.type.name)
 }
 
+function isLineElement(element: Element): boolean {
+  return element.matches(LINE_ELEMENT_SELECTOR)
+}
+
+function collectLineElements(root: Element): Element[] {
+  const elements: Element[] = []
+
+  const visit = (element: Element) => {
+    if (isLineElement(element)) {
+      elements.push(element)
+      return
+    }
+    for (const child of Array.from(element.children)) visit(child)
+  }
+
+  for (const child of Array.from(root.children)) visit(child)
+  return elements
+}
+
 function collectLineMappings(doc: ProseMirrorNode): LineMapping[] {
   const mappings: LineMapping[] = []
 
-  doc.forEach((topNode, topOffset, topIndex) => {
+  let topIndex = 0
+  doc.forEach((topNode, topOffset) => {
     const topFrom = topOffset + 1
     if (isLineNode(topNode)) {
       mappings.push({ from: topFrom, to: topFrom + topNode.nodeSize, topIndex })
+      topIndex += 1
       return
     }
 
@@ -79,6 +131,7 @@ function collectLineMappings(doc: ProseMirrorNode): LineMapping[] {
       mappings.push({ from, to: from + node.nodeSize, topIndex })
       return false
     })
+    topIndex += 1
   })
 
   return mappings
@@ -104,6 +157,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
   const suppressEditingNotificationRef = useRef(false)
+  const lastCursorTaskIdRef = useRef<string | null>(null)
   const currentValueRef = useRef(JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] }))
 
   const editor = useEditor({
@@ -115,6 +169,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
       ChronicleImage.configure({
         inline: false,
       }),
+      FocusLineDecorations,
       TaskLink.configure({
         openOnClick: false,
       }),
@@ -212,6 +267,9 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
         return true
       },
     },
+    onCreate: ({ editor: nextEditor }) => {
+      scheduleApplyBlockClasses(nextEditor)
+    },
     onUpdate: ({ editor: nextEditor }) => {
       const json = nextEditor.getJSON()
       currentValueRef.current = JSON.stringify(json)
@@ -222,6 +280,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     },
     onSelectionUpdate: ({ editor: nextEditor }) => {
       updateMentionState(nextEditor)
+      notifyCursorTask(nextEditor)
       applyBlockClasses(nextEditor)
     },
   })
@@ -234,7 +293,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     try {
       editor.commands.setContent(value)
       currentValueRef.current = nextSerialized
-      applyBlockClasses(editor)
+      scheduleApplyBlockClasses(editor)
     } finally {
       suppressEditingNotificationRef.current = false
     }
@@ -242,7 +301,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
 
   useEffect(() => {
     if (!editor) return
-    applyBlockClasses(editor)
+    scheduleApplyBlockClasses(editor)
   }, [editor, scriptDate])
 
   useEffect(() => {
@@ -326,27 +385,45 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     if (taskId) onEditingTask({ taskId, blockKey: buildDayScriptActivityKey(activeLineBlock, taskId) })
   }
 
+  function notifyCursorTask(nextEditor: NonNullable<typeof editor>) {
+    const lineIndex = getSelectionLineIndex(nextEditor)
+    const blocks = parseDayScriptDocument(nextEditor.getJSON())
+    const activeLineBlock = blocks.find((block) => lineIndex >= block.lineStart && lineIndex <= block.lineEnd)
+    const taskId = activeLineBlock?.taskIds[0] ?? null
+    if (!taskId || lastCursorTaskIdRef.current === taskId) return
+    lastCursorTaskIdRef.current = taskId
+    onNavigateTask(taskId)
+  }
+
   function applyBlockClasses(nextEditor: NonNullable<typeof editor>) {
     const root = containerRef.current?.querySelector('.ProseMirror')
     if (!root) return
-    const children = Array.from(root.children)
-    const mappings = collectLineMappings(nextEditor.state.doc)
+    const lineElements = collectLineElements(root)
     const blocks = parseDayScriptDocument(nextEditor.getJSON())
     const currentIndex = isTodayDate(scriptDate) ? findActiveBlock(blocks, new Date()) : -1
 
-    children.forEach((child) => {
-      child.classList.remove('day-script-line-active', 'day-script-line-complete')
+    lineElements.forEach((child) => {
+      child.classList.remove('day-script-line-header', 'day-script-line-active', 'day-script-line-complete')
+      if (TIME_HEADER_RE.test((child.textContent ?? '').replace(/\u00a0/g, ' ').trimEnd())) {
+        child.classList.add('day-script-line-header')
+      }
     })
 
     blocks.forEach((block, index) => {
       for (let line = block.lineStart; line <= block.lineEnd; line++) {
-        const topIndex = mappings[line]?.topIndex
-        const element = typeof topIndex === 'number' ? children[topIndex] : undefined
+        const element = lineElements[line]
         if (!element) continue
+        if (line === block.lineStart) element.classList.add('day-script-line-header')
         if (block.completed) element.classList.add('day-script-line-complete')
         if (index === currentIndex) element.classList.add('day-script-line-active')
       }
     })
+  }
+
+  function scheduleApplyBlockClasses(nextEditor: NonNullable<typeof editor>) {
+    applyBlockClasses(nextEditor)
+    window.requestAnimationFrame(() => applyBlockClasses(nextEditor))
+    window.setTimeout(() => applyBlockClasses(nextEditor), 50)
   }
 
   const mentionPopup = mentionState && filteredTasks.length > 0 && typeof document !== 'undefined'
@@ -436,7 +513,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           height: 100%;
           width: 100%;
         }
-        .day-script-editor .tiptap.ProseMirror {
+        .day-script-editor.tiptap.ProseMirror {
           min-height: 100%;
           overflow: visible;
           padding: 1.5rem 1.25rem 4rem;
@@ -444,40 +521,40 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           line-height: 1.9;
           outline: none;
         }
-        .day-script-editor .ProseMirror p {
+        .day-script-editor.ProseMirror p {
           margin: 0;
           padding: 0.18rem 0.55rem;
           border-radius: 0.8rem;
           transition: background-color 120ms ease, color 120ms ease;
           white-space: pre-wrap;
         }
-        .day-script-editor .ProseMirror ul {
+        .day-script-editor.ProseMirror ul {
           list-style-type: disc;
           padding-left: 1.75rem;
           margin: 0.25rem 0;
         }
-        .day-script-editor .ProseMirror ol {
+        .day-script-editor.ProseMirror ol {
           list-style-type: decimal;
           padding-left: 1.75rem;
           margin: 0.25rem 0;
         }
-        .day-script-editor .ProseMirror li {
+        .day-script-editor.ProseMirror li {
           padding-left: 0.15rem;
         }
-        .day-script-editor .ProseMirror blockquote {
+        .day-script-editor.ProseMirror blockquote {
           border-left: 3px solid hsl(var(--border));
           padding-left: 1rem;
           margin: 0.5rem 0;
           color: hsl(var(--muted-foreground));
         }
-        .day-script-editor .ProseMirror pre {
+        .day-script-editor.ProseMirror pre {
           background: hsl(var(--muted));
           border-radius: 0.5rem;
           margin: 0.5rem 0;
           overflow-x: auto;
           padding: 0.75rem 1rem;
         }
-        .day-script-editor .ProseMirror pre code {
+        .day-script-editor.ProseMirror pre code {
           display: block;
           background: transparent;
           padding: 0;
@@ -486,37 +563,47 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           line-height: 1.65;
           white-space: pre;
         }
-        .day-script-editor .ProseMirror code {
+        .day-script-editor.ProseMirror code {
           background: hsl(var(--muted));
           border-radius: 0.25rem;
           padding: 0.125rem 0.35rem;
         }
-        .day-script-editor .ProseMirror img {
+        .day-script-editor.ProseMirror img {
           max-width: 100%;
           border-radius: 0.5rem;
           margin: 0.5rem 0;
           -webkit-user-drag: none !important;
           user-select: none;
         }
-        .day-script-editor .ProseMirror p.is-editor-empty:first-child::before {
+        .day-script-editor.ProseMirror p.is-editor-empty:first-child::before {
           content: attr(data-placeholder);
           color: hsl(var(--muted-foreground));
           pointer-events: none;
           float: left;
           height: 0;
         }
-        .day-script-editor .ProseMirror a[data-task-id] {
+        .day-script-editor.ProseMirror a[data-task-id] {
           color: hsl(var(--primary));
           text-decoration: underline;
           text-underline-offset: 3px;
           cursor: pointer;
         }
-        .day-script-editor .ProseMirror .day-script-line-active {
-          background: color-mix(in srgb, hsl(var(--primary)) 10%, transparent);
+        .day-script-editor.ProseMirror .day-script-line-header {
+          border-left: 3px solid hsl(var(--primary));
+          border-radius: 0;
+          background: color-mix(in srgb, hsl(var(--primary)) 8%, transparent);
+          font-weight: 600;
         }
-        .day-script-editor .ProseMirror .day-script-line-complete {
+        .day-script-editor.ProseMirror .day-script-line-active {
+          background: color-mix(in srgb, hsl(var(--primary)) 14%, transparent);
+        }
+        .day-script-editor.ProseMirror .day-script-line-complete {
           color: hsl(var(--muted-foreground));
           background: color-mix(in srgb, hsl(var(--muted)) 70%, transparent);
+        }
+        .day-script-editor.ProseMirror .day-script-line-complete.day-script-line-header {
+          border-left-color: hsl(var(--muted-foreground));
+          background: color-mix(in srgb, hsl(var(--muted)) 82%, transparent);
         }
       `}</style>
     </div>

@@ -207,7 +207,12 @@ export function TodayPage() {
       setScript(result.script)
       setConflicts(result.conflicts)
       await loadTodos()
-      if (activeTaskId) await setActiveTask(activeTaskId)
+      const createdTaskId = result.createdTasks[0]?.id
+      if (createdTaskId) {
+        await setActiveTask(createdTaskId)
+      } else if (activeTaskId) {
+        await setActiveTask(activeTaskId)
+      }
       if (result.executionRecords.length > 0) {
         for (const record of result.executionRecords) {
           const block = result.script.blocks.find((item) => item.id === record.blockId)

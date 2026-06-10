@@ -19,6 +19,7 @@ export interface ParsedDayScriptBlock extends Omit<DayScriptBlock, 'id'> {
 }
 
 const TIME_HEADER_RE = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s+|$)(.*)$/
+const SEPARATOR_RE = /^-{4,}$/
 
 export function buildDayScriptActivityKey(block: Pick<DayScriptBlock, 'sortOrder' | 'startTime' | 'endTime' | 'headerText'>, taskId: string): string {
   return [
@@ -85,6 +86,11 @@ export function parseDayScriptDocument(document: JsonNode | null | undefined): P
 
   lines.forEach((line, index) => {
     const visible = line.text.trimEnd()
+    if (SEPARATOR_RE.test(visible.trim())) {
+      current = null
+      return
+    }
+
     const match = visible.match(TIME_HEADER_RE)
     if (match) {
       current = {

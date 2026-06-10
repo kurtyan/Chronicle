@@ -231,6 +231,7 @@ export interface DayScriptExecutionRecord {
 
 export interface SaveDayScriptResult {
   script: DayScriptDocument
+  createdTasks: Task[]
   createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
   executionRecords: DayScriptExecutionRecord[]
   validationErrors: DayScriptValidationError[]

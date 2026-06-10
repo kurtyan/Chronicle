@@ -291,6 +291,92 @@ test.describe('Day Script progress sync', () => {
     expect(entries[0].content).toContain('<pre><code>const value = 1</code></pre>')
   })
 
+  test('new task focus line creates ktlo task and rewrites the header mention', async ({ page }) => {
+    const date = uniqueScriptDate(5)
+    const title = `Inline KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 new task ${title} ✅` },
+          { text: 'Investigated production incident' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdTasks).toHaveLength(1)
+    expect(saved.createdTasks[0]).toMatchObject({
+      title,
+      type: 'TODO',
+      priority: 'MEDIUM',
+      tags: ['ktlo'],
+      status: 'PENDING',
+    })
+    expect(saved.script.blocks[0].taskIds).toEqual([saved.createdTasks[0].id])
+
+    const header = saved.script.document.content[0].content
+    expect(header[1]).toMatchObject({
+      type: 'text',
+      text: `@${title}`,
+      marks: [{ type: 'link', attrs: { taskId: saved.createdTasks[0].id } }],
+    })
+
+    const entries = await getEntries(page, saved.createdTasks[0].id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].content).toContain('Investigated production incident')
+
+    const repeat = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: saved.script.revision,
+        document: saved.script.document,
+      },
+    })
+    expect(repeat.ok()).toBeTruthy()
+    expect((await repeat.json()).createdTasks).toHaveLength(0)
+  })
+
+  test('strict separator stops loose notes from becoming previous task progress', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Separator-${Date.now()}`)
+    const date = uniqueScriptDate(6)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Synced progress' },
+          { text: '----' },
+          { text: 'Detached daily note' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toHaveLength(0)
+    expect(saved.script.blocks[0].progressText).toBe('Synced progress')
+
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].content).toContain('Synced progress')
+    expect(entries[0].content).not.toContain('Detached daily note')
+
+    const invalidSeparator = await page.request.put(`/api/day-scripts/${uniqueScriptDate(7)}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title}`, taskId: task.id },
+          { text: '---' },
+          { text: 'Still progress' },
+        ]),
+      },
+    })
+    expect(invalidSeparator.ok()).toBeTruthy()
+    const invalidSaved = await invalidSeparator.json()
+    expect(invalidSaved.script.blocks[0].progressText).toBe('---\nStill progress')
+  })
+
   test('Day Script editor only takes over after actual progress editing', async ({ page }) => {
     const task = await createTask(page, `DayScript-Takeover-${Date.now()}`)
     const now = new Date()

@@ -1,6 +1,6 @@
 {
   "productName": "Chronicle",
-  "version": "1.6.0-20260609091340",
+  "version": "1.7.0-20260610052820",
   "identifier": "com.chronicle.app",
   "build": {
     "beforeDevCommand": "npm run dev",

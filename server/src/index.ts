@@ -417,6 +417,9 @@ app.put('/api/day-scripts/:date', async (c) => {
     const expectedRevision = Number(body.expectedRevision ?? 0)
     const focusActivities = Array.isArray(body.focusActivity) ? body.focusActivity : undefined
     const result = await service.saveDayScript(c.req.param('date'), body.document, expectedRevision, focusActivities)
+    for (const task of result.createdTasks) {
+      broadcastEvent('task_created', { id: task.id }, c.get('clientId'))
+    }
     for (const log of result.createdLogs) {
       broadcastEvent('entry_created', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
       const changedTask = await service.getTaskById(log.taskId)

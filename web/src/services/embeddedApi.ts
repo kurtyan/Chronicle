@@ -706,6 +706,7 @@ export class EmbeddedApiProvider implements ApiInterface {
         blocks: [],
         updatedAt: Date.now(),
       },
+      createdTasks: [],
       createdLogs: [],
       executionRecords: [],
       validationErrors: [],

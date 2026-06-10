@@ -1,6 +1,22 @@
-import { useState, useEffect } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
-import { Database, Download, Upload, AlertCircle, CheckCircle, AlertTriangle, Terminal, Clock, Languages, Info, Bot, FlaskConical, Save, FileText, RefreshCw } from 'lucide-react'
+import {
+  AlertCircle,
+  AlertTriangle,
+  Bot,
+  CheckCircle,
+  Clock,
+  Database,
+  Download,
+  FileText,
+  FlaskConical,
+  Info,
+  Languages,
+  RefreshCw,
+  Save,
+  Terminal,
+  Upload,
+} from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
@@ -31,6 +47,29 @@ interface LlmCallLogSummary {
   createdAt: number
   linkedTaskId: string | null
   linkedEntryId: string | null
+}
+
+type SettingsMessage = { type: 'success' | 'error'; text: string } | null
+
+type SettingsSectionId =
+  | 'general.language'
+  | 'general.workday'
+  | 'automation.autoAfk'
+  | 'ai.provider'
+  | 'ai.meetingExtraction'
+  | 'data.database'
+  | 'data.importExport'
+  | 'diagnostics.clientLog'
+  | 'diagnostics.version'
+
+interface SettingsTreeGroup {
+  id: string
+  label: string
+  items: Array<{
+    id: SettingsSectionId
+    label: string
+    description: string
+  }>
 }
 
 function formatBytes(bytes: number): string {
@@ -100,13 +139,588 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   })
 }
 
+function SettingsMessageBanner({ message }: { message: SettingsMessage }) {
+  if (!message) return null
+  return (
+    <div className={`flex items-center gap-2 rounded-md p-3 text-sm ${
+      message.type === 'success'
+        ? 'bg-green-500/10 text-green-500'
+        : 'bg-red-500/10 text-red-500'
+    }`}>
+      {message.type === 'success' ? (
+        <CheckCircle className="h-4 w-4 shrink-0" />
+      ) : (
+        <AlertCircle className="h-4 w-4 shrink-0" />
+      )}
+      {message.text}
+    </div>
+  )
+}
+
+function SectionPanel({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-lg border border-border/70 bg-card p-4">
+      <div className="mb-4 flex items-center gap-2">
+        {icon}
+        <h2 className="text-lg font-medium">{title}</h2>
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function SettingsTree({
+  groups,
+  activeSection,
+  onSelect,
+}: {
+  groups: SettingsTreeGroup[]
+  activeSection: SettingsSectionId
+  onSelect: (id: SettingsSectionId) => void
+}) {
+  return (
+    <aside className="w-full shrink-0 border-b border-border/70 bg-card/40 p-3 md:h-full md:w-56 md:border-b-0 md:border-r">
+      <div className="md:hidden">
+        <select
+          value={activeSection}
+          onChange={(e) => onSelect(e.target.value as SettingsSectionId)}
+          className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+        >
+          {groups.map((group) => (
+            <optgroup key={group.id} label={group.label}>
+              {group.items.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+      <nav className="hidden space-y-5 md:block">
+        {groups.map((group) => (
+          <div key={group.id}>
+            <div className="mb-1 px-2 text-sm font-semibold text-foreground">
+              {group.label}
+            </div>
+            <div className="space-y-0.5 pl-3">
+              {group.items.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => onSelect(item.id)}
+                  className={`w-full rounded-md px-2 py-1.5 text-left text-xs transition ${
+                    activeSection === item.id
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </nav>
+    </aside>
+  )
+}
+
+function WorkdaySettingsSection({
+  dayOffset,
+  setDayOffset,
+}: {
+  dayOffset: number
+  setDayOffset: (offset: number) => void
+}) {
+  const saveOffset = () => setStartOfDayOffset(dayOffset).catch(() => {})
+  return (
+    <SectionPanel icon={<Clock className="h-5 w-5 text-muted-foreground" />} title="Workday">
+      <div className="flex items-center gap-3">
+        <input
+          type="range"
+          min={0}
+          max={23}
+          value={dayOffset}
+          onChange={(e) => setDayOffset(parseInt(e.target.value, 10))}
+          onMouseUp={saveOffset}
+          onTouchEnd={saveOffset}
+          className="flex-1"
+        />
+        <span className="w-16 text-right font-mono text-sm">+{dayOffset}h</span>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Hours to shift the day boundary. Times before this hour count as the previous day in Today and Report.
+      </p>
+    </SectionPanel>
+  )
+}
+
+function LanguageSettingsSection({
+  t,
+  uiLanguage,
+  onSaveLanguage,
+}: {
+  t: (key: string) => string
+  uiLanguage: string
+  onSaveLanguage: (lang: string) => void
+}) {
+  return (
+    <SectionPanel icon={<Languages className="h-5 w-5 text-muted-foreground" />} title={t('settings.language')}>
+      <div className="flex flex-wrap gap-2">
+        {[
+          { value: 'auto', label: t('settings.languageAuto') },
+          { value: 'zh-CN', label: t('settings.languageZh') },
+          { value: 'en', label: t('settings.languageEn') },
+        ].map(({ value, label }) => (
+          <button
+            key={value}
+            className={`rounded-md border px-4 py-2 text-sm transition ${
+              uiLanguage === value
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-border hover:bg-muted'
+            }`}
+            onClick={() => onSaveLanguage(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">{t('settings.languageDesc')}</p>
+    </SectionPanel>
+  )
+}
+
+function AutoAfkSettingsSection({
+  t,
+  autoAfkEnabled,
+  screenLockEnabled,
+  idleEnabled,
+  idleTimeoutMinutes,
+  setAutoAfkEnabled,
+  setScreenLockEnabled,
+  setIdleEnabled,
+  setIdleTimeoutMinutes,
+  onSave,
+}: {
+  t: (key: string) => string
+  autoAfkEnabled: boolean
+  screenLockEnabled: boolean
+  idleEnabled: boolean
+  idleTimeoutMinutes: number
+  setAutoAfkEnabled: (value: boolean) => void
+  setScreenLockEnabled: (value: boolean) => void
+  setIdleEnabled: (value: boolean) => void
+  setIdleTimeoutMinutes: (value: number) => void
+  onSave: () => void
+}) {
+  return (
+    <SectionPanel icon={<Clock className="h-5 w-5 text-muted-foreground" />} title={t('settings.autoAfkTitle')}>
+      <div className="space-y-4">
+        <label className="flex cursor-pointer items-center gap-3">
+          <input
+            type="checkbox"
+            checked={autoAfkEnabled}
+            onChange={(e) => setAutoAfkEnabled(e.target.checked)}
+            className="h-4 w-4 rounded"
+          />
+          <span className="text-sm font-medium">{t('settings.autoAfkEnabled')}</span>
+        </label>
+
+        {autoAfkEnabled && (
+          <div className="space-y-4 border-l-2 border-muted pb-2 pl-4">
+            <div>
+              <label className="flex cursor-pointer items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={screenLockEnabled}
+                  onChange={(e) => setScreenLockEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded"
+                />
+                <span className="text-sm font-medium">{t('settings.screenLockAfk')}</span>
+              </label>
+              <p className="ml-7 mt-1 text-xs text-muted-foreground">{t('settings.screenLockAfkDesc')}</p>
+            </div>
+
+            <div>
+              <label className="flex cursor-pointer items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={idleEnabled}
+                  onChange={(e) => setIdleEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded"
+                />
+                <span className="text-sm font-medium">{t('settings.idleAfk')}</span>
+              </label>
+              <p className="ml-7 mt-1 text-xs text-muted-foreground">{t('settings.idleAfkDesc')}</p>
+
+              {idleEnabled && (
+                <div className="ml-7 mt-2 flex items-center gap-2">
+                  <label className="text-sm text-muted-foreground">{t('settings.idleTimeout')}:</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={idleTimeoutMinutes}
+                    onChange={(e) => setIdleTimeoutMinutes(Math.max(1, Math.min(60, parseInt(e.target.value, 10) || 1)))}
+                    className="w-16 rounded border bg-background px-2 py-1 text-sm"
+                  />
+                  <span className="text-sm text-muted-foreground">{t('settings.idleTimeoutMinutes')}</span>
+                </div>
+              )}
+            </div>
+
+            <button onClick={onSave} className="dialog-button-primary">
+              {t('settings.saveAutoAfk')}
+            </button>
+          </div>
+        )}
+      </div>
+    </SectionPanel>
+  )
+}
+
+function LlmProviderSettingsSection({
+  settings,
+  saving,
+  testing,
+  onUpdate,
+  onSave,
+  onTest,
+}: {
+  settings: LlmSettings
+  saving: boolean
+  testing: boolean
+  onUpdate: (patch: Partial<LlmSettings>) => void
+  onSave: () => void
+  onTest: () => void
+}) {
+  return (
+    <SectionPanel icon={<Bot className="h-5 w-5 text-muted-foreground" />} title="Provider">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Base URL</span>
+          <input
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={settings.baseUrl}
+            onChange={(e) => onUpdate({ baseUrl: e.target.value })}
+            placeholder="http://localhost:11434/v1"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Model</span>
+          <input
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={settings.model}
+            onChange={(e) => onUpdate({ model: e.target.value })}
+            placeholder="qwen2.5:7b"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">API Key</span>
+          <input
+            type="password"
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={settings.apiKey}
+            onChange={(e) => onUpdate({ apiKey: e.target.value })}
+            placeholder="Optional"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Timeout</span>
+          <input
+            type="number"
+            min={1000}
+            step={1000}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={settings.timeoutMs}
+            onChange={(e) => onUpdate({ timeoutMs: parseInt(e.target.value, 10) || 30000 })}
+          />
+        </label>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button onClick={onSave} disabled={saving} className="dialog-button-primary">
+          <Save className="h-4 w-4" />
+          {saving ? 'Saving...' : 'Save Provider'}
+        </button>
+        <button onClick={onTest} disabled={testing} className="dialog-button-secondary">
+          <FlaskConical className="h-4 w-4" />
+          {testing ? 'Testing...' : 'Test Connection'}
+        </button>
+      </div>
+    </SectionPanel>
+  )
+}
+
+function LlmCallLogsSection({
+  featureLabel,
+  logs,
+  loading,
+  expandedLogId,
+  onLoad,
+  onToggleExpanded,
+}: {
+  featureLabel: string
+  logs: LlmCallLogSummary[]
+  loading: boolean
+  expandedLogId: string | null
+  onLoad: () => void
+  onToggleExpanded: (id: string | null) => void
+}) {
+  return (
+    <section className="rounded-lg border border-border/70 bg-card p-4">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <FileText className="h-5 w-5 text-muted-foreground" />
+          <h2 className="text-lg font-medium">Call Logs</h2>
+        </div>
+        <button onClick={onLoad} disabled={loading} className="dialog-button-secondary">
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          {logs.length === 0 ? 'Load Logs' : 'Refresh'}
+        </button>
+      </div>
+      {logs.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No logs loaded. Click Load Logs to inspect recent {featureLabel} calls.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {logs.map((log) => {
+            const mode = log.requestInput?.mode ?? 'unknown'
+            const expanded = expandedLogId === log.id
+            return (
+              <div key={log.id} className="rounded-md border border-border/70 bg-muted/10">
+                <button
+                  className="w-full px-3 py-2 text-left transition hover:bg-muted/40"
+                  onClick={() => onToggleExpanded(expanded ? null : log.id)}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`rounded px-1.5 py-0.5 text-xs ${
+                          log.status === 'success'
+                            ? 'bg-green-500/10 text-green-600'
+                            : log.status === 'parse_error'
+                              ? 'bg-amber-500/10 text-amber-600'
+                              : 'bg-red-500/10 text-red-600'
+                        }`}>
+                          {log.status}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{mode}</span>
+                        <span className="truncate text-xs text-muted-foreground">{log.promptVersion}</span>
+                      </div>
+                      <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
+                        {log.id}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right text-xs text-muted-foreground">
+                      <div>{formatTimestamp(log.createdAt)}</div>
+                      <div>{log.latencyMs ?? 0} ms{log.linkedTaskId ? ` · ${log.linkedTaskId}` : ''}</div>
+                    </div>
+                  </div>
+                </button>
+                {expanded && (
+                  <div className="space-y-3 border-t border-border/70 p-3">
+                    <LogJsonBlock label="Request Input" value={log.requestInput} />
+                    <LogJsonBlock label="Request Messages" value={log.requestMessages} />
+                    <LogJsonBlock label="Parsed Output" value={log.parsedOutput} />
+                    {log.rawResponse && <LogTextBlock label="Raw Response" value={log.rawResponse} />}
+                    {log.errorMessage && <LogTextBlock label="Error" value={log.errorMessage} />}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function MeetingExtractionSettingsSection({
+  settings,
+  saving,
+  logs,
+  logsLoading,
+  expandedLogId,
+  onUpdate,
+  onSave,
+  onTestPrompt,
+  onLoadLogs,
+  onToggleExpandedLog,
+}: {
+  settings: LlmSettings
+  saving: boolean
+  logs: LlmCallLogSummary[]
+  logsLoading: boolean
+  expandedLogId: string | null
+  onUpdate: (patch: Partial<LlmSettings>) => void
+  onSave: () => void
+  onTestPrompt: () => void
+  onLoadLogs: () => void
+  onToggleExpandedLog: (id: string | null) => void
+}) {
+  return (
+    <div className="space-y-4">
+      <SectionPanel icon={<Bot className="h-5 w-5 text-muted-foreground" />} title="Meeting Extraction">
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Prompt</span>
+          <textarea
+            className="min-h-[260px] w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-1 focus:ring-primary"
+            value={settings.meetingExtractionPrompt}
+            onChange={(e) => onUpdate({ meetingExtractionPrompt: e.target.value })}
+            placeholder="Meeting extraction prompt"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            The default prompt is shown when no custom prompt is saved. Editing it makes this scene use a custom prompt.
+          </span>
+        </label>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={onSave} disabled={saving} className="dialog-button-primary">
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving...' : 'Save Prompt'}
+          </button>
+          <button
+            onClick={() => onUpdate({ meetingExtractionPrompt: settings.defaultMeetingExtractionPrompt })}
+            className="dialog-button-secondary"
+          >
+            Restore Default
+          </button>
+          <button onClick={onTestPrompt} className="dialog-button-secondary">
+            <FlaskConical className="h-4 w-4" />
+            Test Prompt
+          </button>
+        </div>
+      </SectionPanel>
+      <LlmCallLogsSection
+        featureLabel="meeting extraction"
+        logs={logs}
+        loading={logsLoading}
+        expandedLogId={expandedLogId}
+        onLoad={onLoadLogs}
+        onToggleExpanded={onToggleExpandedLog}
+      />
+    </div>
+  )
+}
+
+function DatabaseSettingsSection({ t, info }: { t: (key: string) => string; info: SettingsInfo | null }) {
+  return (
+    <SectionPanel icon={<Database className="h-5 w-5 text-muted-foreground" />} title={t('settings.databaseInfo')}>
+      {info ? (
+        <div className="space-y-2 text-sm">
+          <div className="grid gap-1 sm:grid-cols-[140px_minmax(0,1fr)]">
+            <span className="text-muted-foreground">{t('settings.dbPath')}</span>
+            <span className="break-all font-mono text-xs sm:text-right">{info.dbPath}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('settings.dbSize')}</span>
+            <span>{formatBytes(info.dbSize)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('settings.lastBackup')}</span>
+            <span>{info.lastBackupAt ? formatTimestamp(info.lastBackupAt) : t('settings.never')}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      )}
+    </SectionPanel>
+  )
+}
+
+function ImportExportSettingsSection({
+  t,
+  exporting,
+  importing,
+  onExport,
+  onImport,
+}: {
+  t: (key: string) => string
+  exporting: boolean
+  importing: boolean
+  onExport: () => void
+  onImport: (e: React.ChangeEvent<HTMLInputElement>) => void
+}) {
+  return (
+    <SectionPanel icon={<Upload className="h-5 w-5 text-muted-foreground" />} title="Import / Export">
+      <div className="flex flex-wrap gap-3">
+        <button onClick={onExport} disabled={exporting} className="dialog-button-primary">
+          <Download className="h-4 w-4" />
+          {exporting ? t('settings.exporting') : t('settings.export')}
+        </button>
+
+        <label className="dialog-button-secondary cursor-pointer">
+          <Upload className="h-4 w-4" />
+          {importing ? t('settings.importing') : t('settings.import')}
+          <input
+            type="file"
+            accept=".db"
+            onChange={onImport}
+            className="hidden"
+            disabled={importing}
+          />
+        </label>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        Import replaces the current database after creating a pre-import backup.
+      </p>
+    </SectionPanel>
+  )
+}
+
+function ClientLogSettingsSection({
+  showLog,
+  clientLog,
+  logLoading,
+  setShowLog,
+}: {
+  showLog: boolean
+  clientLog: string
+  logLoading: boolean
+  setShowLog: (value: boolean | ((current: boolean) => boolean)) => void
+}) {
+  return (
+    <SectionPanel icon={<Terminal className="h-5 w-5 text-muted-foreground" />} title="Client Log">
+      <button onClick={() => setShowLog(v => !v)} className="dialog-button-secondary">
+        {showLog ? 'Close' : 'View Log'}
+      </button>
+      {showLog && (
+        <textarea
+          readOnly
+          value={clientLog}
+          rows={16}
+          className="mt-3 w-full resize-none rounded border bg-background p-2 font-mono text-xs"
+          placeholder={logLoading ? 'Loading...' : 'No log available'}
+        />
+      )}
+    </SectionPanel>
+  )
+}
+
+function VersionSettingsSection({ t, serverVersion }: { t: (key: string) => string; serverVersion: string }) {
+  return (
+    <SectionPanel icon={<Info className="h-5 w-5 text-muted-foreground" />} title={t('settings.versionInfo')}>
+      <div className="space-y-2 text-sm">
+        <div className="flex justify-between">
+          <span className="text-muted-foreground">{t('settings.uiVersion')}</span>
+          <span className="font-mono text-xs">{__CHRONICLE_VERSION__}</span>
+        </div>
+        {serverVersion && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('settings.serverVersion')}</span>
+            <span className="font-mono text-xs">{serverVersion}</span>
+          </div>
+        )}
+      </div>
+    </SectionPanel>
+  )
+}
+
 export function SettingsPage() {
   const { t, setLocale } = useI18n()
   const [info, setInfo] = useState<SettingsInfo | null>(null)
   const [exporting, setExporting] = useState(false)
   const [importing, setImporting] = useState(false)
   const [dayOffset, setDayOffset] = useState(5)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [message, setMessage] = useState<SettingsMessage>(null)
   const [pendingImportFile, setPendingImportFile] = useState<File | null>(null)
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
   const [showLog, setShowLog] = useState(false)
@@ -114,6 +728,7 @@ export function SettingsPage() {
   const [logLoading, setLogLoading] = useState(false)
   const [uiLanguage, setUiLanguage] = useState<string>('auto')
   const [serverVersion, setServerVersion] = useState('')
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(isTauriEnv ? 'general.language' : 'general.workday')
   const [llmSettings, setLlmSettings] = useState<LlmSettings>({
     baseUrl: '',
     model: '',
@@ -125,15 +740,103 @@ export function SettingsPage() {
   const [llmSaving, setLlmSaving] = useState(false)
   const [llmTesting, setLlmTesting] = useState(false)
   const [showPromptTest, setShowPromptTest] = useState(false)
-  const [llmLogs, setLlmLogs] = useState<LlmCallLogSummary[]>([])
-  const [llmLogsLoading, setLlmLogsLoading] = useState(false)
+  const [meetingExtractionLogs, setMeetingExtractionLogs] = useState<LlmCallLogSummary[]>([])
+  const [meetingExtractionLogsLoading, setMeetingExtractionLogsLoading] = useState(false)
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
 
-  // Auto-AFK state
   const [autoAfkEnabled, setAutoAfkEnabled] = useState(false)
   const [screenLockEnabled, setScreenLockEnabled] = useState(true)
   const [idleEnabled, setIdleEnabled] = useState(true)
   const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(5)
+
+  const settingsGroups = useMemo<SettingsTreeGroup[]>(() => {
+    const groups: SettingsTreeGroup[] = [
+      {
+        id: 'general',
+        label: 'General',
+        items: [
+          ...(isTauriEnv ? [{
+            id: 'general.language' as const,
+            label: t('settings.language'),
+            description: 'Choose the UI language.',
+          }] : []),
+          {
+            id: 'general.workday',
+            label: 'Workday',
+            description: 'Configure the day boundary used by reports.',
+          },
+        ],
+      },
+      {
+        id: 'automation',
+        label: 'Automation',
+        items: isTauriEnv ? [{
+          id: 'automation.autoAfk' as const,
+          label: t('settings.autoAfkTitle'),
+          description: 'Control automatic AFK triggers.',
+        }] : [],
+      },
+      {
+        id: 'ai',
+        label: 'AI',
+        items: [
+          {
+            id: 'ai.provider',
+            label: 'Provider',
+            description: 'Configure the shared LLM connection.',
+          },
+          {
+            id: 'ai.meetingExtraction',
+            label: 'Meeting Extraction',
+            description: 'Edit the prompt, test it, and inspect this scene logs.',
+          },
+        ],
+      },
+      {
+        id: 'data',
+        label: 'Data',
+        items: [
+          {
+            id: 'data.database',
+            label: 'Database',
+            description: 'Inspect the current SQLite database.',
+          },
+          {
+            id: 'data.importExport',
+            label: 'Import / Export',
+            description: 'Move Chronicle data in or out.',
+          },
+        ],
+      },
+      {
+        id: 'diagnostics',
+        label: 'Diagnostics',
+        items: [
+          ...(isTauriEnv ? [{
+            id: 'diagnostics.clientLog' as const,
+            label: 'Client Log',
+            description: 'Inspect the desktop client log.',
+          }] : []),
+          ...(isTauriEnv ? [{
+            id: 'diagnostics.version' as const,
+            label: 'Version',
+            description: 'Check UI and server versions.',
+          }] : []),
+        ],
+      },
+    ]
+    return groups.filter(group => group.items.length > 0)
+  }, [t])
+
+  const activeItem = settingsGroups
+    .flatMap(group => group.items)
+    .find(item => item.id === activeSection) ?? settingsGroups[0]?.items[0]
+
+  useEffect(() => {
+    if (!settingsGroups.some(group => group.items.some(item => item.id === activeSection))) {
+      setActiveSection(settingsGroups[0]?.items[0]?.id ?? 'general.workday')
+    }
+  }, [activeSection, settingsGroups])
 
   useEffect(() => {
     apiFetch('/api/settings/info')
@@ -148,9 +851,8 @@ export function SettingsPage() {
     ;(window as any).__TAURI__.core.invoke('get_client_log')
       .then((log: string) => { setClientLog(log); setLogLoading(false) })
       .catch(() => { setClientLog(t('settings.logUnavailable')); setLogLoading(false) })
-  }, [showLog])
+  }, [showLog, t])
 
-  // Load auto-AFK config on mount
   useEffect(() => {
     if (!isTauriEnv) return
     ;(window as any).__TAURI__.core.invoke('get_auto_afk_config')
@@ -163,7 +865,6 @@ export function SettingsPage() {
       .catch(() => {})
   }, [])
 
-  // Load UI language on mount
   useEffect(() => {
     if (!isTauriEnv) return
     ;(window as any).__TAURI__.core.invoke('get_ui_language')
@@ -171,7 +872,6 @@ export function SettingsPage() {
       .catch(() => {})
   }, [])
 
-  // Fetch server version
   useEffect(() => {
     apiFetch('/api/version')
       .then(r => r.json())
@@ -221,16 +921,26 @@ export function SettingsPage() {
     }
   }
 
-  const loadLlmLogs = async () => {
-    setLlmLogsLoading(true)
+  const handleTestMeetingExtractionPrompt = async () => {
+    try {
+      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
+      setLlmSettings(displayLlmSettings(saved))
+      setShowPromptTest(true)
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save prompt before test' })
+    }
+  }
+
+  const loadMeetingExtractionLogs = async () => {
+    setMeetingExtractionLogsLoading(true)
     try {
       const res = await apiFetch('/api/llm-call-logs?feature=meeting_extract&limit=50')
       if (!res.ok) throw new Error('Failed to load LLM logs')
-      setLlmLogs(await res.json())
+      setMeetingExtractionLogs(await res.json())
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
     } finally {
-      setLlmLogsLoading(false)
+      setMeetingExtractionLogsLoading(false)
     }
   }
 
@@ -274,7 +984,6 @@ export function SettingsPage() {
       if (!res.ok) throw new Error('Export failed')
       const buffer = await res.arrayBuffer()
 
-      // Try native save dialog first (Tauri), fallback to browser download
       try {
         const filePath = await save({
           title: 'Export Database',
@@ -284,7 +993,6 @@ export function SettingsPage() {
         if (!filePath) { setExporting(false); return }
         await writeFile(filePath, new Uint8Array(buffer))
       } catch {
-        // Fallback: browser download
         const blob = new Blob([buffer], { type: 'application/octet-stream' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -304,7 +1012,6 @@ export function SettingsPage() {
     }
   }
 
-  // SQLite magic bytes: "SQLite format 3\0"
   const SQLITE_MAGIC = new Uint8Array([0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33, 0x00])
 
   function isValidSqlite(file: File): Promise<boolean> {
@@ -356,420 +1063,113 @@ export function SettingsPage() {
     }
   }
 
+  const renderActiveSection = () => {
+    switch (activeSection) {
+      case 'general.language':
+        return isTauriEnv ? (
+          <LanguageSettingsSection t={t} uiLanguage={uiLanguage} onSaveLanguage={handleSaveLanguage} />
+        ) : null
+      case 'general.workday':
+        return <WorkdaySettingsSection dayOffset={dayOffset} setDayOffset={setDayOffset} />
+      case 'automation.autoAfk':
+        return isTauriEnv ? (
+          <AutoAfkSettingsSection
+            t={t}
+            autoAfkEnabled={autoAfkEnabled}
+            screenLockEnabled={screenLockEnabled}
+            idleEnabled={idleEnabled}
+            idleTimeoutMinutes={idleTimeoutMinutes}
+            setAutoAfkEnabled={setAutoAfkEnabled}
+            setScreenLockEnabled={setScreenLockEnabled}
+            setIdleEnabled={setIdleEnabled}
+            setIdleTimeoutMinutes={setIdleTimeoutMinutes}
+            onSave={handleSaveAutoAfk}
+          />
+        ) : null
+      case 'ai.provider':
+        return (
+          <LlmProviderSettingsSection
+            settings={llmSettings}
+            saving={llmSaving}
+            testing={llmTesting}
+            onUpdate={updateLlmSettings}
+            onSave={handleSaveLlmSettings}
+            onTest={handleTestLlmConnection}
+          />
+        )
+      case 'ai.meetingExtraction':
+        return (
+          <MeetingExtractionSettingsSection
+            settings={llmSettings}
+            saving={llmSaving}
+            logs={meetingExtractionLogs}
+            logsLoading={meetingExtractionLogsLoading}
+            expandedLogId={expandedLogId}
+            onUpdate={updateLlmSettings}
+            onSave={handleSaveLlmSettings}
+            onTestPrompt={handleTestMeetingExtractionPrompt}
+            onLoadLogs={loadMeetingExtractionLogs}
+            onToggleExpandedLog={setExpandedLogId}
+          />
+        )
+      case 'data.database':
+        return <DatabaseSettingsSection t={t} info={info} />
+      case 'data.importExport':
+        return (
+          <ImportExportSettingsSection
+            t={t}
+            exporting={exporting}
+            importing={importing}
+            onExport={handleExport}
+            onImport={handleImport}
+          />
+        )
+      case 'diagnostics.clientLog':
+        return isTauriEnv ? (
+          <ClientLogSettingsSection
+            showLog={showLog}
+            clientLog={clientLog}
+            logLoading={logLoading}
+            setShowLog={setShowLog}
+          />
+        ) : null
+      case 'diagnostics.version':
+        return isTauriEnv ? <VersionSettingsSection t={t} serverVersion={serverVersion} /> : null
+      default:
+        return null
+    }
+  }
+
   return (
-    <div className="p-6 max-w-2xl mx-auto h-screen overflow-y-auto">
-      <h1 className="text-2xl font-semibold mb-6">{t('settings.title')}</h1>
+    <div className="flex h-screen min-w-0 flex-col overflow-hidden md:flex-row">
+      <SettingsTree
+        groups={settingsGroups}
+        activeSection={activeSection}
+        onSelect={setActiveSection}
+      />
 
-      {/* Start of Day Offset */}
-      <div className="bg-card rounded-lg border p-4 mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Clock className="w-5 h-5 text-muted-foreground" />
-          <h2 className="text-lg font-medium">{t('settings.startOfDayOffset')}</h2>
-        </div>
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={0}
-            max={23}
-            value={dayOffset}
-            onChange={(e) => setDayOffset(parseInt(e.target.value))}
-            onMouseUp={() => setStartOfDayOffset(dayOffset)}
-            className="flex-1"
-          />
-          <span className="text-sm font-mono w-16 text-right">+{dayOffset}h</span>
-        </div>
-        <p className="text-xs text-muted-foreground mt-2">
-          {t('settings.startOfDayOffsetHint')}
-        </p>
-      </div>
-
-      {/* LLM Settings */}
-      <div className="bg-card rounded-lg border p-4 mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Bot className="w-5 h-5 text-muted-foreground" />
-          <h2 className="text-lg font-medium">LLM Configuration</h2>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">Base URL</span>
-            <input
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              value={llmSettings.baseUrl}
-              onChange={(e) => updateLlmSettings({ baseUrl: e.target.value })}
-              placeholder="http://localhost:11434/v1"
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">Model</span>
-            <input
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              value={llmSettings.model}
-              onChange={(e) => updateLlmSettings({ model: e.target.value })}
-              placeholder="qwen2.5:7b"
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">API Key</span>
-            <input
-              type="password"
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              value={llmSettings.apiKey}
-              onChange={(e) => updateLlmSettings({ apiKey: e.target.value })}
-              placeholder="Optional"
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-xs font-medium text-muted-foreground">Timeout</span>
-            <input
-              type="number"
-              min={1000}
-              step={1000}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-              value={llmSettings.timeoutMs}
-              onChange={(e) => updateLlmSettings({ timeoutMs: parseInt(e.target.value, 10) || 30000 })}
-            />
-          </label>
-        </div>
-        <label className="block space-y-1 mt-3">
-          <span className="text-xs font-medium text-muted-foreground">会议抽取 Prompt</span>
-          <textarea
-            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary resize-y min-h-[180px]"
-            value={llmSettings.meetingExtractionPrompt}
-            onChange={(e) => updateLlmSettings({ meetingExtractionPrompt: e.target.value })}
-            placeholder="Meeting extraction prompt"
-          />
-          <span className="text-[11px] text-muted-foreground">
-            Default prompt is shown here when no custom prompt is saved. Editing it makes the prompt custom.
-          </span>
-        </label>
-        <div className="flex flex-wrap gap-2 mt-4">
-          <button
-            onClick={handleSaveLlmSettings}
-            disabled={llmSaving}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 disabled:opacity-50"
-          >
-            <Save className="w-4 h-4" />
-            {llmSaving ? 'Saving...' : 'Save LLM Settings'}
-          </button>
-          <button
-            onClick={handleTestLlmConnection}
-            disabled={llmTesting}
-            className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:opacity-90 disabled:opacity-50"
-          >
-            <FlaskConical className="w-4 h-4" />
-            {llmTesting ? 'Testing...' : 'Test Connection'}
-          </button>
-          <button
-            onClick={async () => {
-              await saveLlmSettings(serializeLlmSettings(llmSettings))
-              setShowPromptTest(true)
-            }}
-            className="flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-muted transition"
-          >
-            <Bot className="w-4 h-4" />
-            Test Meeting Extraction Prompt
-          </button>
-        </div>
-      </div>
-
-      {/* LLM Call Logs */}
-      <div className="bg-card rounded-lg border p-4 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <FileText className="w-5 h-5 text-muted-foreground" />
-            <h2 className="text-lg font-medium">LLM Call Logs</h2>
-          </div>
-          <button
-            onClick={loadLlmLogs}
-            disabled={llmLogsLoading}
-            className="dialog-button-secondary"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${llmLogsLoading ? 'animate-spin' : ''}`} />
-            {llmLogs.length === 0 ? 'Load Logs' : 'Refresh'}
-          </button>
-        </div>
-        {llmLogs.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No logs loaded. Click Load Logs to inspect recent meeting extraction calls.</p>
-        ) : (
-          <div className="space-y-2">
-            {llmLogs.map((log) => {
-              const mode = log.requestInput?.mode ?? 'unknown'
-              const expanded = expandedLogId === log.id
-              return (
-                <div key={log.id} className="rounded-md border border-border/70 bg-muted/10">
-                  <button
-                    className="w-full text-left px-3 py-2 hover:bg-muted/40 transition"
-                    onClick={() => setExpandedLogId(expanded ? null : log.id)}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${
-                            log.status === 'success'
-                              ? 'bg-green-500/10 text-green-600'
-                              : log.status === 'parse_error'
-                                ? 'bg-amber-500/10 text-amber-600'
-                                : 'bg-red-500/10 text-red-600'
-                          }`}>
-                            {log.status}
-                          </span>
-                          <span className="text-xs text-muted-foreground">{mode}</span>
-                          <span className="text-xs text-muted-foreground truncate">{log.promptVersion}</span>
-                        </div>
-                        <div className="mt-1 text-xs text-muted-foreground font-mono truncate">
-                          {log.id}
-                        </div>
-                      </div>
-                      <div className="text-right text-xs text-muted-foreground shrink-0">
-                        <div>{formatTimestamp(log.createdAt)}</div>
-                        <div>{log.latencyMs ?? 0} ms{log.linkedTaskId ? ` · ${log.linkedTaskId}` : ''}</div>
-                      </div>
-                    </div>
-                  </button>
-                  {expanded && (
-                    <div className="border-t border-border/70 p-3 space-y-3">
-                      <LogJsonBlock label="Request Input" value={log.requestInput} />
-                      <LogJsonBlock label="Request Messages" value={log.requestMessages} />
-                      <LogJsonBlock label="Parsed Output" value={log.parsedOutput} />
-                      {log.rawResponse && <LogTextBlock label="Raw Response" value={log.rawResponse} />}
-                      {log.errorMessage && <LogTextBlock label="Error" value={log.errorMessage} />}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Database Info */}
-      <div className="bg-card rounded-lg border p-4 mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Database className="w-5 h-5 text-muted-foreground" />
-          <h2 className="text-lg font-medium">{t('settings.databaseInfo')}</h2>
-        </div>
-        {info ? (
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('settings.dbPath')}</span>
-              <span className="font-mono">{info.dbPath}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('settings.dbSize')}</span>
-              <span>{formatBytes(info.dbSize)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('settings.lastBackup')}</span>
-              <span>{info.lastBackupAt ? formatTimestamp(info.lastBackupAt) : t('settings.never')}</span>
-            </div>
-          </div>
-        ) : (
-          <p className="text-muted-foreground text-sm">Loading...</p>
-        )}
-      </div>
-
-      {/* Actions */}
-      <div className="flex gap-3 mb-6">
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:opacity-90 disabled:opacity-50"
-        >
-          <Download className="w-4 h-4" />
-          {exporting ? t('settings.exporting') : t('settings.export')}
-        </button>
-
-        <label className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-md hover:opacity-90 cursor-pointer disabled:opacity-50">
-          <Upload className="w-4 h-4" />
-          {importing ? t('settings.importing') : t('settings.import')}
-          <input
-            type="file"
-            accept=".db"
-            onChange={handleImport}
-            className="hidden"
-            disabled={importing}
-          />
-        </label>
-      </div>
-
-      {/* Message */}
-      {message && (
-        <div className={`flex items-center gap-2 p-3 rounded-md text-sm ${
-          message.type === 'success'
-            ? 'bg-green-500/10 text-green-500'
-            : 'bg-red-500/10 text-red-500'
-        }`}>
-          {message.type === 'success' ? (
-            <CheckCircle className="w-4 h-4" />
-          ) : (
-            <AlertCircle className="w-4 h-4" />
-          )}
-          {message.text}
-        </div>
-      )}
-
-      {/* Client Log (Tauri only) */}
-      {isTauriEnv && (
-        <div className="bg-card rounded-lg border p-4 mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Terminal className="w-5 h-5 text-muted-foreground" />
-              <h2 className="text-lg font-medium">Client Log</h2>
-            </div>
-            <button
-              onClick={() => setShowLog(v => !v)}
-              className="text-xs px-2 py-1 rounded border hover:bg-muted transition"
-            >
-              {showLog ? 'Close' : 'View Log'}
-            </button>
-          </div>
-          {showLog && (
-            <textarea
-              readOnly
-              value={clientLog}
-              rows={12}
-              className="w-full text-xs font-mono bg-background border rounded p-2 resize-none"
-              placeholder={logLoading ? 'Loading...' : 'No log available'}
-            />
-          )}
-        </div>
-      )}
-
-      {/* Version Info (Tauri only) */}
-      {isTauriEnv && (
-        <div className="bg-card rounded-lg border p-4 mb-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Info className="w-5 h-5 text-muted-foreground" />
-            <h2 className="text-lg font-medium">{t('settings.versionInfo')}</h2>
-          </div>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t('settings.uiVersion')}</span>
-              <span className="font-mono text-xs">{__CHRONICLE_VERSION__}</span>
-            </div>
-            {serverVersion && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">{t('settings.serverVersion')}</span>
-                <span className="font-mono text-xs">{serverVersion}</span>
+      <main className="min-w-0 flex-1 overflow-y-auto p-5 md:p-6">
+        <div className="mx-auto max-w-4xl space-y-5">
+          <header>
+            <h1 className="text-2xl font-semibold">{t('settings.title')}</h1>
+            {activeItem && (
+              <div className="mt-2">
+                <div className="text-sm font-medium text-foreground">{activeItem.label}</div>
+                <p className="text-sm text-muted-foreground">{activeItem.description}</p>
               </div>
             )}
-          </div>
+          </header>
+
+          <SettingsMessageBanner message={message} />
+          {renderActiveSection()}
         </div>
-      )}
+      </main>
 
-      {/* Language Settings (Tauri only) */}
-      {isTauriEnv && (
-        <div className="bg-card rounded-lg border p-4 mb-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Languages className="w-5 h-5 text-muted-foreground" />
-            <h2 className="text-lg font-medium">{t('settings.language')}</h2>
-          </div>
-          <div className="flex gap-2">
-            {[
-              { value: 'auto', label: t('settings.languageAuto') },
-              { value: 'zh-CN', label: t('settings.languageZh') },
-              { value: 'en', label: t('settings.languageEn') },
-            ].map(({ value, label }) => (
-              <button
-                key={value}
-                className={`text-sm px-4 py-2 rounded-lg border transition ${
-                  uiLanguage === value
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'hover:bg-muted border-border'
-                }`}
-                onClick={() => handleSaveLanguage(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground mt-2">{t('settings.languageDesc')}</p>
-        </div>
-      )}
-
-      {/* Auto-AFK Settings (Tauri only) */}
-      {isTauriEnv && (
-        <div className="bg-card rounded-lg border p-4 mb-6">
-          <div className="flex items-center gap-2 mb-4">
-            <Clock className="w-5 h-5 text-muted-foreground" />
-            <h2 className="text-lg font-medium">{t('settings.autoAfkTitle')}</h2>
-          </div>
-
-          <div className="space-y-4">
-            {/* Master toggle */}
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoAfkEnabled}
-                onChange={(e) => setAutoAfkEnabled(e.target.checked)}
-                className="w-4 h-4 rounded"
-              />
-              <span className="text-sm font-medium">{t('settings.autoAfkEnabled')}</span>
-            </label>
-
-            {autoAfkEnabled && (
-              <div className="ml-7 space-y-4 border-l-2 border-muted pl-4 pb-2">
-                {/* Screen lock AFK */}
-                <div>
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={screenLockEnabled}
-                      onChange={(e) => setScreenLockEnabled(e.target.checked)}
-                      className="w-4 h-4 rounded"
-                    />
-                    <span className="text-sm font-medium">{t('settings.screenLockAfk')}</span>
-                  </label>
-                  <p className="text-xs text-muted-foreground ml-7 mt-1">{t('settings.screenLockAfkDesc')}</p>
-                </div>
-
-                {/* Idle AFK */}
-                <div>
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={idleEnabled}
-                      onChange={(e) => setIdleEnabled(e.target.checked)}
-                      className="w-4 h-4 rounded"
-                    />
-                    <span className="text-sm font-medium">{t('settings.idleAfk')}</span>
-                  </label>
-                  <p className="text-xs text-muted-foreground ml-7 mt-1">{t('settings.idleAfkDesc')}</p>
-
-                  {idleEnabled && (
-                    <div className="flex items-center gap-2 ml-7 mt-2">
-                      <label className="text-sm text-muted-foreground">{t('settings.idleTimeout')}:</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={60}
-                        value={idleTimeoutMinutes}
-                        onChange={(e) => setIdleTimeoutMinutes(Math.max(1, Math.min(60, parseInt(e.target.value, 10) || 1)))}
-                        className="w-16 px-2 py-1 text-sm border rounded bg-background"
-                      />
-                      <span className="text-sm text-muted-foreground">{t('settings.idleTimeoutMinutes')}</span>
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  onClick={handleSaveAutoAfk}
-                  className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90 transition"
-                >
-                  {t('settings.saveAutoAfk')}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Import Confirmation Dialog */}
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <div className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="w-5 h-5" />
+              <AlertTriangle className="h-5 w-5" />
               <DialogTitle>{t('settings.importWarning')}</DialogTitle>
             </div>
           </DialogHeader>
@@ -777,16 +1177,10 @@ export function SettingsPage() {
             <DialogDescription>{t('settings.importWarningDesc')}</DialogDescription>
           </DialogBody>
           <DialogFooter>
-            <button
-              onClick={() => setShowConfirmDialog(false)}
-              className="dialog-button-secondary"
-            >
+            <button onClick={() => setShowConfirmDialog(false)} className="dialog-button-secondary">
               {t('common.cancel')}
             </button>
-            <button
-              onClick={confirmImport}
-              className="dialog-button-danger"
-            >
+            <button onClick={confirmImport} className="dialog-button-danger">
               {t('settings.importConfirm')}
             </button>
           </DialogFooter>

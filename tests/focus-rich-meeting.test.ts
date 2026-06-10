@@ -67,6 +67,51 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
   })
 
+  test('moving cursor across focus headers switches task detail', async ({ page }) => {
+    const taskA = await createTask(page, `CursorHeaderA-${Date.now()}`)
+    const taskB = await createTask(page, `CursorHeaderB-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 80)
+
+    await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '10:00-10:30 ' },
+                { type: 'text', text: `@${taskA.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskA.id)}`, taskId: taskA.id } }] },
+              ],
+            },
+            { type: 'paragraph', content: [{ type: 'text', text: 'A progress' }] },
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '11:00-11:30 ' },
+                { type: 'text', text: `@${taskB.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskB.id)}`, taskId: taskB.id } }] },
+              ],
+            },
+          ],
+        },
+      },
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    await editor.getByText(taskA.title).click()
+    await expect(page.getByRole('heading', { name: taskA.title })).toBeVisible()
+    await expect(editor.locator('.day-script-line-header').filter({ hasText: taskA.title })).toBeVisible()
+
+    await page.keyboard.press('Escape')
+    await editor.getByText(taskB.title).click()
+    await expect(page.getByRole('heading', { name: taskB.title })).toBeVisible()
+    await expect(editor.locator('.day-script-line-header').filter({ hasText: taskB.title })).toBeVisible()
+  })
+
   test('focus editor maps nested list progress edits to the owning task', async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
     const task = await createTask(page, `NestedProgress-${Date.now()}`)

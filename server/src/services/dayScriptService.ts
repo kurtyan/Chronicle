@@ -1,5 +1,5 @@
 import { getDb } from '../db'
-import { createTaskEntry, getTaskById } from './taskService'
+import { createTask, createTaskEntry, getTaskById, type Task } from './taskService'
 
 type JsonNode = {
   type?: string
@@ -46,6 +46,7 @@ export interface ProgressSyncConflict {
 
 export interface SaveDayScriptResult {
   script: DayScriptDocument
+  createdTasks: Task[]
   createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
   executionRecords: DayScriptExecutionRecord[]
   validationErrors: DayScriptValidationError[]
@@ -106,6 +107,8 @@ type ActivityMap = Map<string, DayScriptFocusActivity>
 
 const TIME_HEADER_RE = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s+|$)(.*)$/
 const TIME_LIKE_RE = /^\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}/
+const SEPARATOR_RE = /^-{4,}$/
+const NEW_TASK_HEADER_RE = /^(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})(\s+)new task\s+(.+?)\s*(✅)?\s*$/i
 
 function queryAll(sql: string, params: any[] = []): any[] {
   return getDb().prepare(sql).all(...params)
@@ -180,6 +183,67 @@ function collectInlineText(nodes: JsonNode[]): ParsedLine {
 
   for (const node of nodes) visit(node)
   return { text: text.replace(/\u00a0/g, ' '), taskIds: [...taskIds], html: '' }
+}
+
+function cloneNode(node: JsonNode): JsonNode {
+  return {
+    ...node,
+    attrs: node.attrs ? { ...node.attrs } : undefined,
+    marks: node.marks ? node.marks.map((mark) => ({ ...mark, attrs: mark.attrs ? { ...mark.attrs } : undefined })) : undefined,
+    content: node.content ? node.content.map(cloneNode) : undefined,
+  }
+}
+
+function taskMentionNode(task: Task): JsonNode {
+  return {
+    type: 'text',
+    text: `@${task.title}`,
+    marks: [{
+      type: 'link',
+      attrs: {
+        href: `/today?task=${encodeURIComponent(task.id)}`,
+        taskId: task.id,
+      },
+    }],
+  }
+}
+
+function rewriteNewTaskHeaders(document: JsonNode): { document: JsonNode; createdTasks: Task[] } {
+  const cloned = cloneNode(document)
+  const createdTasks: Task[] = []
+
+  const visit = (node: JsonNode) => {
+    const type = node.type ?? ''
+    if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem' || type === 'codeBlock') {
+      const line = collectInlineText(node.content ?? [])
+      const match = line.text.trimEnd().match(NEW_TASK_HEADER_RE)
+      if (!match) return
+
+      const title = match[3].replace(/\s*✅\s*/g, ' ').trim()
+      if (!title) return
+
+      const task = createTask({
+        title,
+        type: 'TODO',
+        priority: 'MEDIUM',
+        tags: ['ktlo'],
+        status: 'PENDING',
+      })
+      createdTasks.push(task)
+
+      node.content = [
+        { type: 'text', text: `${match[1]}${match[2]}` },
+        taskMentionNode(task),
+        ...(match[4] ? [{ type: 'text', text: ' ✅' }] : []),
+      ]
+      return
+    }
+
+    for (const child of node.content ?? []) visit(child)
+  }
+
+  for (const child of cloned.content ?? []) visit(child)
+  return { document: cloned, createdTasks }
 }
 
 function timeToMinutes(value: string): number | null {
@@ -463,9 +527,16 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
   const validationErrors: DayScriptValidationError[] = []
   const blocks: ParsedBlock[] = []
   let current: ParsedBlock | null = null
+  let allowDetachedNotes = false
 
   lines.forEach((line, lineIndex) => {
     const visible = line.text.trimEnd()
+    if (SEPARATOR_RE.test(visible.trim())) {
+      current = null
+      allowDetachedNotes = true
+      return
+    }
+
     const headerMatch = visible.match(TIME_HEADER_RE)
 
     if (headerMatch) {
@@ -491,6 +562,7 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
         completed: bodyText.includes('✅'),
         taskIds: line.taskIds.filter((taskId) => Boolean(getTaskById(taskId))),
       }
+      allowDetachedNotes = false
       blocks.push(current)
       return
     }
@@ -501,7 +573,7 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
     }
 
     if (!current) {
-      if (visible.trim()) validationErrors.push({ lineIndex, message: 'Progress line must follow a timed block.' })
+      if (visible.trim() && !allowDetachedNotes) validationErrors.push({ lineIndex, message: 'Progress line must follow a timed block.' })
       return
     }
 
@@ -740,7 +812,7 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
     throw new Error('REVISION_CONFLICT')
   }
 
-  const { blocks: parsedBlocks, validationErrors } = parseDocument(normalizedDocument)
+  const { validationErrors } = parseDocument(normalizedDocument)
   if (validationErrors.length > 0) {
     return {
       script: existing ?? {
@@ -750,6 +822,7 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
         blocks: [],
         updatedAt: Date.now(),
       },
+      createdTasks: [],
       createdLogs: [],
       executionRecords: [],
       validationErrors,
@@ -757,23 +830,35 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
     }
   }
 
-  const nextBlocks = assignBlockIds(parsedBlocks, existing?.blocks ?? [])
   const now = Date.now()
+  let rewrittenDocument = normalizedDocument
+  let nextBlocks: RichDayScriptBlock[] = []
+  const createdTasks: Task[] = []
   const createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> = []
   const executionRecords: DayScriptExecutionRecord[] = []
   const conflicts: ProgressSyncConflict[] = []
   const activityMap = normalizeFocusActivities(focusActivities)
 
   const transaction = getDb().transaction(() => {
+    const rewriteResult = rewriteNewTaskHeaders(normalizedDocument)
+    rewrittenDocument = rewriteResult.document
+    createdTasks.push(...rewriteResult.createdTasks)
+
+    const parsed = parseDocument(rewrittenDocument)
+    if (parsed.validationErrors.length > 0) {
+      throw new Error('UNEXPECTED_DAY_SCRIPT_VALIDATION_AFTER_REWRITE')
+    }
+    nextBlocks = assignBlockIds(parsed.blocks, existing?.blocks ?? [])
+
     if (existing) {
       run(
         'UPDATE day_scripts SET document_json = ?, revision = ?, updated_at = ? WHERE script_date = ?',
-        [JSON.stringify(normalizedDocument), existing.revision + 1, now, scriptDate]
+        [JSON.stringify(rewrittenDocument), existing.revision + 1, now, scriptDate]
       )
     } else {
       run(
         'INSERT INTO day_scripts(script_date, document_json, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-        [scriptDate, JSON.stringify(normalizedDocument), 1, now, now]
+        [scriptDate, JSON.stringify(rewrittenDocument), 1, now, now]
       )
     }
 
@@ -796,6 +881,7 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
 
   return {
     script: getDayScript(scriptDate),
+    createdTasks,
     createdLogs,
     executionRecords,
     validationErrors: [],

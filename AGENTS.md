@@ -21,6 +21,14 @@
 
 ### Dev mode
 
+Before starting a dev environment, ask the user to assign ports for the current agent session when multiple worktrees/agents may run in parallel. Each agent should use distinct server, Tauri/Vite, and MCP ports, plus its own worktree-local `.dev-data` directory. Example allocation:
+
+```bash
+CHRONICLE_SERVER_PORT=18080 PORT=18090 CHRONICLE_MCP_PORT=18081 ./dev.sh
+```
+
+For additional agents, use a different range such as `18180/18190/18181` or `18280/18290/18281`. If the user explicitly approves automatic allocation, `./dev.sh` will choose unused server and Tauri/Vite ports starting from `18080` and `18090`.
+
 ```bash
 ./dev.sh              # start dev server + dev web + dev tauri
 ```
