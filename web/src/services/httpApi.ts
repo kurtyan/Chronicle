@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -323,6 +323,11 @@ export const httpApi: ApiInterface = {
 
   async refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]> {
     const { data } = await (await withClientId()).post<TaskProgressContext[]>('/api/task-context/summarize', { taskIds })
+    return data
+  },
+
+  async testTaskSummaryPrompt(taskId: string): Promise<TaskSummaryTestResult> {
+    const { data } = await (await withClientId()).post<TaskSummaryTestResult>('/api/task-context/test-summary', { taskId })
     return data
   },
 

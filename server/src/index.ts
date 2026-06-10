@@ -20,6 +20,7 @@ import { generatePlist, installLaunchd, uninstallLaunchd, isInstalled } from './
 import { getLogger } from './logging'
 import { getVersion } from './version'
 import { createSSEStream, broadcastEvent } from './services/eventBus'
+import { testTaskSummaryPrompt } from './services/taskContextService'
 import fs from 'fs'
 import path from 'path'
 
@@ -521,6 +522,18 @@ app.post('/api/task-context/summarize', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const taskIds = Array.isArray(body.taskIds) ? body.taskIds.filter((id: unknown) => typeof id === 'string') : undefined
   return c.json(await service.refreshTaskContexts(taskIds))
+})
+
+app.post('/api/task-context/test-summary', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    if (!body.taskId || typeof body.taskId !== 'string') {
+      return c.json({ error: 'taskId is required' }, 400)
+    }
+    return c.json(await testTaskSummaryPrompt(body.taskId))
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Task summary test failed' }, 400)
+  }
 })
 
 // --- Settings API ---

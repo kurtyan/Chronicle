@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -725,6 +725,9 @@ export class EmbeddedApiProvider implements ApiInterface {
   async refreshTaskContexts(): Promise<TaskProgressContext[]> {
     return []
   }
+  async testTaskSummaryPrompt(_taskId: string): Promise<TaskSummaryTestResult> {
+    throw new Error('Not supported in embedded mode')
+  }
   async fetchLlmSettings(): Promise<LlmSettings> {
     return {
       baseUrl: 'http://localhost:11434/v1',
@@ -747,12 +750,16 @@ Rules:
 - Do not add, remove, rename, or nest fields.
 - Use the same language as the task logs when possible.
 - Base the answer only on the supplied task data.
-- latestProgress must be a concise summary of the current task state, ideally 1-2 short sentences.
+- latestProgress must synthesize the current task state from all supplied Recent Task Entries, not only the latest entry.
+- latestProgress should include important progress, decisions, feedback, and current outcome from the full entry history.
+- latestProgress must be concise, ideally 1-2 short sentences.
 - latestProgress must not be empty.
 - Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
+- For nextStep only: if multiple entries mention next steps, use the next-step description from the entry with the latest Submitted At among those next-step entries.
+- Do not use the latest entry as the sole basis for latestProgress unless it is the only supplied entry.
 - If there is no explicit next step in the supplied logs, nextStep must be an empty string.
 - nextStep must never be null.
-- Escape any newline inside JSON string values as \\n.
+- Keep both JSON string values on one line. Replace any line breaks with spaces.
 - Do not include markdown fences or prose outside JSON.`,
     }
   }

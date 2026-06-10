@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -178,6 +178,9 @@ export async function fetchTaskContexts(status = 'PENDING,DOING'): Promise<TaskP
 }
 export async function refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]> {
   return (await getApi()).refreshTaskContexts(taskIds)
+}
+export async function testTaskSummaryPrompt(taskId: string): Promise<TaskSummaryTestResult> {
+  return (await getApi()).testTaskSummaryPrompt(taskId)
 }
 
 // Start of day offset

@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
+import DOMPurify from 'dompurify'
 import {
   AlertCircle,
   AlertTriangle,
@@ -12,6 +13,7 @@ import {
   FlaskConical,
   Info,
   Languages,
+  Loader2,
   RefreshCw,
   Save,
   Terminal,
@@ -21,9 +23,9 @@ import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTi
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { isTauriEnv, ensureApiReady, clientId } from '@/services/httpApi'
-import { fetchLlmSettings, fetchStartOfDayOffset, saveLlmSettings, setStartOfDayOffset, testLlmConnection } from '@/services/api'
+import { fetchLlmSettings, fetchStartOfDayOffset, fetchTaskEntries, fetchTodos, saveLlmSettings, setStartOfDayOffset, testLlmConnection, testTaskSummaryPrompt } from '@/services/api'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
-import type { LlmSettings } from '@/types'
+import type { LlmSettings, Task, TaskEntry, TaskSummaryTestResult } from '@/types'
 
 interface SettingsInfo {
   dbPath: string
@@ -91,9 +93,11 @@ function LogJsonBlock({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="space-y-1">
       <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <pre className="max-h-64 overflow-auto rounded-md bg-background/70 border border-border/60 p-2 text-[11px] leading-4 font-mono whitespace-pre-wrap">
-        {JSON.stringify(value, null, 2)}
-      </pre>
+      <textarea
+        readOnly
+        value={JSON.stringify(value, null, 2)}
+        className="max-h-64 min-h-[120px] w-full resize-y rounded-md border border-border/60 bg-background/70 p-2 font-mono text-[11px] leading-4 outline-none focus:ring-1 focus:ring-primary"
+      />
     </div>
   )
 }
@@ -102,9 +106,11 @@ function LogTextBlock({ label, value }: { label: string; value: string }) {
   return (
     <div className="space-y-1">
       <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <pre className="max-h-64 overflow-auto rounded-md bg-background/70 border border-border/60 p-2 text-[11px] leading-4 font-mono whitespace-pre-wrap">
-        {value}
-      </pre>
+      <textarea
+        readOnly
+        value={value}
+        className="max-h-64 min-h-[120px] w-full resize-y rounded-md border border-border/60 bg-background/70 p-2 font-mono text-[11px] leading-4 outline-none focus:ring-1 focus:ring-primary"
+      />
     </div>
   )
 }
@@ -616,6 +622,7 @@ function TaskSummarySettingsSection({
   expandedLogId,
   onUpdate,
   onSave,
+  onTestPrompt,
   onLoadLogs,
   onToggleExpandedLog,
 }: {
@@ -626,6 +633,7 @@ function TaskSummarySettingsSection({
   expandedLogId: string | null
   onUpdate: (patch: Partial<LlmSettings>) => void
   onSave: () => void
+  onTestPrompt: () => void
   onLoadLogs: () => void
   onToggleExpandedLog: (id: string | null) => void
 }) {
@@ -655,6 +663,10 @@ function TaskSummarySettingsSection({
           >
             Restore Default
           </button>
+          <button onClick={onTestPrompt} className="dialog-button-secondary">
+            <FlaskConical className="h-4 w-4" />
+            Test Prompt
+          </button>
         </div>
       </SectionPanel>
       <LlmCallLogsSection
@@ -666,6 +678,210 @@ function TaskSummarySettingsSection({
         onToggleExpanded={onToggleExpandedLog}
       />
     </div>
+  )
+}
+
+function TaskSummaryPromptTestDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [entries, setEntries] = useState<TaskEntry[]>([])
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [loadingTasks, setLoadingTasks] = useState(false)
+  const [loadingEntries, setLoadingEntries] = useState(false)
+  const [summarizing, setSummarizing] = useState(false)
+  const [result, setResult] = useState<TaskSummaryTestResult | null>(null)
+  const [error, setError] = useState('')
+
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoadingTasks(true)
+    setError('')
+    fetchTodos(undefined, 'PENDING,DOING')
+      .then((nextTasks) => {
+        if (cancelled) return
+        setTasks(nextTasks)
+        setSelectedTaskId((current) => current ?? nextTasks[0]?.id ?? null)
+      })
+      .catch((err: any) => {
+        if (!cancelled) setError(err?.response?.data?.error || err?.message || 'Failed to load tasks')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTasks(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open || !selectedTaskId) {
+      setEntries([])
+      return
+    }
+    let cancelled = false
+    setLoadingEntries(true)
+    setResult(null)
+    setError('')
+    fetchTaskEntries(selectedTaskId)
+      .then((nextEntries) => {
+        if (!cancelled) setEntries(nextEntries)
+      })
+      .catch((err: any) => {
+        if (!cancelled) setError(err?.response?.data?.error || err?.message || 'Failed to load task detail')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingEntries(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, selectedTaskId])
+
+  useEffect(() => {
+    if (open) return
+    setTasks([])
+    setEntries([])
+    setSelectedTaskId(null)
+    setResult(null)
+    setError('')
+    setSummarizing(false)
+  }, [open])
+
+  const runSummary = async () => {
+    if (!selectedTaskId) return
+    setSummarizing(true)
+    setError('')
+    setResult(null)
+    try {
+      setResult(await testTaskSummaryPrompt(selectedTaskId))
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || 'Task summary test failed')
+    } finally {
+      setSummarizing(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] sm:max-w-6xl flex flex-col">
+        <DialogHeader>
+          <div className="flex items-center gap-2">
+            <Bot className="h-5 w-5 text-muted-foreground" />
+            <DialogTitle>Test Task Summary Prompt</DialogTitle>
+          </div>
+          <DialogDescription>Select a task, inspect its read-only detail, then run the current task summary prompt.</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="min-h-0">
+          <div className="grid min-h-[520px] grid-cols-1 overflow-hidden rounded-lg border border-border lg:grid-cols-[280px_minmax(0,1fr)]">
+            <aside className="min-h-0 border-b border-border bg-card/60 lg:border-b-0 lg:border-r">
+              <div className="border-b border-border px-3 py-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Tasks</div>
+              <div className="max-h-[520px] overflow-y-auto p-2">
+                {loadingTasks ? (
+                  <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading tasks...
+                  </div>
+                ) : tasks.length === 0 ? (
+                  <div className="p-2 text-sm text-muted-foreground">No pending or doing tasks.</div>
+                ) : (
+                  <div className="space-y-1">
+                    {tasks.map((task) => (
+                      <button
+                        key={task.id}
+                        className={`w-full rounded-md px-3 py-2 text-left transition ${
+                          selectedTaskId === task.id
+                            ? 'bg-primary text-primary-foreground'
+                            : 'hover:bg-muted'
+                        }`}
+                        onClick={() => setSelectedTaskId(task.id)}
+                      >
+                        <div className="truncate text-sm font-medium">{task.title}</div>
+                        <div className="mt-0.5 text-xs opacity-75">{task.status} · {task.id}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </aside>
+            <section className="min-h-0 overflow-y-auto p-4">
+              {selectedTask ? (
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-xl font-semibold">{selectedTask.title}</h3>
+                      <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">{selectedTask.status}</span>
+                    </div>
+                    <div className="mt-1 font-mono text-xs text-muted-foreground">{selectedTask.id}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-xs font-medium uppercase tracking-normal text-muted-foreground">Recent Entries</div>
+                    {loadingEntries ? (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading detail...
+                      </div>
+                    ) : entries.length === 0 ? (
+                      <div className="rounded-md border border-border/70 bg-muted/20 p-3 text-sm text-muted-foreground">No entries recorded.</div>
+                    ) : (
+                      <div className="space-y-2">
+                        {entries.slice(-10).map((entry) => (
+                          <div key={entry.id} className="rounded-md border border-border/70 bg-muted/10 p-3">
+                            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <span className="rounded bg-muted px-1.5 py-0.5">{entry.type}</span>
+                              <span>{formatTimestamp(entry.createdAt)}</span>
+                            </div>
+                            <div
+                              className="prose-mirror-display text-sm"
+                              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(entry.content, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {result && (
+                    <div className="space-y-3 rounded-md border border-border bg-card p-3">
+                      <div className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">Result</div>
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-normal text-muted-foreground">Summary</div>
+                        <div className="mt-1 whitespace-pre-wrap text-sm">{result.latestProgress}</div>
+                      </div>
+                      {result.nextStep && (
+                        <div>
+                          <div className="text-xs font-medium uppercase tracking-normal text-muted-foreground">Next Step</div>
+                          <div className="mt-1 whitespace-pre-wrap text-sm">{result.nextStep}</div>
+                        </div>
+                      )}
+                      {result.llmCallLogId && <div className="font-mono text-xs text-muted-foreground">Log: {result.llmCallLogId}</div>}
+                    </div>
+                  )}
+                  {error && <div className="text-sm text-destructive">{error}</div>}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">Select a task to inspect.</div>
+              )}
+            </section>
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <button className="dialog-button-secondary" onClick={() => onOpenChange(false)} disabled={summarizing}>
+            Close
+          </button>
+          <button className="dialog-button-primary" onClick={runSummary} disabled={!selectedTaskId || summarizing}>
+            {summarizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+            Summarize
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -810,6 +1026,7 @@ export function SettingsPage() {
   const [llmSaving, setLlmSaving] = useState(false)
   const [llmTesting, setLlmTesting] = useState(false)
   const [showPromptTest, setShowPromptTest] = useState(false)
+  const [showTaskSummaryPromptTest, setShowTaskSummaryPromptTest] = useState(false)
   const [meetingExtractionLogs, setMeetingExtractionLogs] = useState<LlmCallLogSummary[]>([])
   const [meetingExtractionLogsLoading, setMeetingExtractionLogsLoading] = useState(false)
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
@@ -1004,6 +1221,16 @@ export function SettingsPage() {
       const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
       setLlmSettings(displayLlmSettings(saved))
       setShowPromptTest(true)
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save prompt before test' })
+    }
+  }
+
+  const handleTestTaskSummaryPrompt = async () => {
+    try {
+      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
+      setLlmSettings(displayLlmSettings(saved))
+      setShowTaskSummaryPromptTest(true)
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save prompt before test' })
     }
@@ -1213,6 +1440,7 @@ export function SettingsPage() {
             expandedLogId={expandedTaskSummaryLogId}
             onUpdate={updateLlmSettings}
             onSave={handleSaveLlmSettings}
+            onTestPrompt={handleTestTaskSummaryPrompt}
             onLoadLogs={loadTaskSummaryLogs}
             onToggleExpandedLog={setExpandedTaskSummaryLogId}
           />
@@ -1295,6 +1523,10 @@ export function SettingsPage() {
         open={showPromptTest}
         mode="test"
         onOpenChange={setShowPromptTest}
+      />
+      <TaskSummaryPromptTestDialog
+        open={showTaskSummaryPromptTest}
+        onOpenChange={setShowTaskSummaryPromptTest}
       />
     </div>
   )

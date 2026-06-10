@@ -257,3 +257,10 @@ export interface TaskProgressContext {
   lastActivityAt: number | null
   summary: TaskProgressSummary
 }
+
+export interface TaskSummaryTestResult {
+  taskId: string
+  latestProgress: string
+  nextStep: string
+  llmCallLogId: string | null
+}

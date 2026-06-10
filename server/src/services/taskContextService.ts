@@ -22,6 +22,13 @@ export interface TaskProgressContext {
   summary: TaskProgressSummary
 }
 
+export interface TaskSummaryTestResult {
+  taskId: string
+  latestProgress: string
+  nextStep: string
+  llmCallLogId: string | null
+}
+
 interface CacheRow {
   task_id: string
   fingerprint: string
@@ -55,11 +62,7 @@ function escapeJson(text: string): string {
 function makeFingerprint(taskId: string): string {
   const task = getTaskById(taskId)
   if (!task) return ''
-  const entries = getTaskEntries(taskId).slice(-12).map((entry) => `${entry.type}:${entry.createdAt}:${entry.content}`)
-  const sessions = queryAll(
-    'SELECT started_at, ended_at FROM work_sessions WHERE task_id = ? ORDER BY started_at DESC LIMIT 12',
-    [taskId]
-  ).map((row) => `${row.started_at}:${row.ended_at ?? ''}`)
+  const entries = getRecentSummaryEntries(taskId).map((entry) => `${entry.type}:${entry.createdAt}:${entry.content}`)
 
   return createHash('sha1')
     .update(JSON.stringify({
@@ -67,7 +70,6 @@ function makeFingerprint(taskId: string): string {
       status: task.status,
       updatedAt: task.updatedAt,
       entries,
-      sessions,
     }))
     .digest('hex')
 }
@@ -95,15 +97,59 @@ function getLastActivityAt(taskId: string, fallbackUpdatedAt: number): number | 
 function fallbackSummary(taskId: string): { latestProgress: string; nextStep: string } {
   const entries = getTaskEntries(taskId)
   const latestLog = [...entries].reverse().find((entry) => entry.type === 'log' || entry.type === 'plan')
-  const explicitNextStep = extractExplicitNextStep(entries.map((entry) => entry.content).reverse())
+  const explicitNextStep = extractExplicitNextStep(entries.map((entry) => stripHtml(entry.content)).reverse())
   return {
-    latestProgress: latestLog?.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || 'No recent progress recorded.',
+    latestProgress: latestLog ? normalizeSummaryValue(stripHtml(latestLog.content)) : 'No recent progress recorded.',
     nextStep: explicitNextStep || '',
   }
 }
 
 function stripHtml(content: string): string {
-  return content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+  return content
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|h[1-6]|blockquote)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
+function normalizeSummaryValue(value: string): string {
+  return value
+    .replace(/\\n/g, ' ')
+    .replace(/\\r/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function getRecentSummaryEntries(taskId: string) {
+  return getTaskEntries(taskId).slice(-10)
+}
+
+function buildSummaryInputText(input: { title: string; status: string; entries: Array<{ type: string; createdAt: string; content: string }> }): string {
+  const entryLines = input.entries.length > 0
+    ? input.entries.map((entry, index) => [
+        `Entry ${index + 1}`,
+        `Type: ${entry.type}`,
+        `Submitted At: ${entry.createdAt}`,
+        `Content:`,
+        entry.content,
+      ].join('\n')).join('\n\n')
+    : 'No recent entries.'
+
+  return [
+    `Task Title: ${input.title}`,
+    `Task Status: ${input.status}`,
+    '',
+    'Recent Task Entries:',
+    entryLines,
+  ].join('\n')
 }
 
 function extractExplicitNextStep(contents: string[]): string {
@@ -177,32 +223,33 @@ function escapeControlCharsInsideJsonStrings(raw: string): string {
   return result
 }
 
-async function callSummaryModel(taskId: string): Promise<{ latestProgress: string; nextStep: string }> {
+async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'record'): Promise<TaskSummaryTestResult> {
   const settings = getLlmSettings()
   if (!settings.baseUrl || !settings.model) {
-    return fallbackSummary(taskId)
+    return { taskId, ...fallbackSummary(taskId), llmCallLogId: null }
   }
 
   const task = getTaskById(taskId)
-  if (!task) return fallbackSummary(taskId)
-  const entries = getTaskEntries(taskId).slice(-10)
-  const workMs = getTotalWorkMs(taskId)
+  if (!task) return { taskId, ...fallbackSummary(taskId), llmCallLogId: null }
+  const entries = getRecentSummaryEntries(taskId)
   const prompt = settings.taskSummaryPrompt.trim() || DEFAULT_TASK_SUMMARY_PROMPT
   const promptVersion = settings.taskSummaryPrompt.trim() ? 'task_summary_custom' : 'task_summary_default_v1'
 
   const input = {
+    taskId,
+    mode,
     title: task.title,
     status: task.status,
-    totalWorkMs: workMs,
     entries: entries.map((entry) => ({
       type: entry.type,
       createdAt: new Date(entry.createdAt).toISOString(),
       content: stripHtml(entry.content),
     })),
   }
+  const inputText = buildSummaryInputText(input)
   const messages = [
     { role: 'system', content: prompt },
-    { role: 'user', content: JSON.stringify(input) },
+    { role: 'user', content: inputText },
   ]
   const logId = crypto.randomUUID()
   const started = Date.now()
@@ -237,10 +284,10 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
     rawResponse = String(json.choices?.[0]?.message?.content ?? '{}').trim()
     const parsed = summarySchema.parse(parseLlmJsonObject(rawResponse))
     parsedOutput = {
-      latestProgress: parsed.latestProgress.trim(),
-      nextStep: parsed.nextStep.trim(),
+      latestProgress: normalizeSummaryValue(parsed.latestProgress),
+      nextStep: normalizeSummaryValue(parsed.nextStep),
     }
-    return parsedOutput
+    return { taskId, ...parsedOutput, llmCallLogId: logId }
   } catch (err: any) {
     status = rawResponse || rawProviderResponse ? 'parse_error' : 'error'
     errorMessage = err?.message ?? 'Task summary failed'
@@ -254,7 +301,7 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
       promptVersion,
       model: settings.model,
       baseUrl: settings.baseUrl,
-      requestInput: input,
+      requestInput: { ...input, inputText },
       requestMessages: messages,
       rawProviderResponse,
       rawResponse,
@@ -265,6 +312,12 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
     })
     linkLlmCallLogToTask(logId, taskId)
   }
+}
+
+export async function testTaskSummaryPrompt(taskId: string): Promise<TaskSummaryTestResult> {
+  const task = getTaskById(taskId)
+  if (!task) throw new Error('Task not found')
+  return callSummaryModel(taskId, 'test')
 }
 
 function buildTaskContext(taskId: string): TaskProgressContext | null {
