@@ -324,6 +324,7 @@ export function deleteTaskEntry(taskId: string, entryId: string): boolean {
   const db = getDb()
   const transaction = db.transaction(() => {
     db.prepare('DELETE FROM plan_item_details WHERE entry_id = ?').run(entryId)
+    db.prepare('UPDATE day_script_progress_syncs SET last_entry_id = NULL WHERE last_entry_id = ?').run(entryId)
     db.prepare('DELETE FROM task_entries WHERE id = ? AND task_id = ?').run(entryId, taskId)
     db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(Date.now(), taskId)
     removeEntryFromIndex(entryId)

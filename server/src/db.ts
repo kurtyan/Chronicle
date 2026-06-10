@@ -171,18 +171,19 @@ export function initDb() {
       task_id TEXT NOT NULL,
       synced_progress TEXT NOT NULL,
       synced_progress_html TEXT NOT NULL DEFAULT '',
-      last_entry_id TEXT NOT NULL,
+      last_entry_id TEXT,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (block_id, task_id),
       FOREIGN KEY (block_id) REFERENCES day_script_blocks(id) ON DELETE CASCADE,
       FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-      FOREIGN KEY (last_entry_id) REFERENCES task_entries(id) ON DELETE CASCADE
+      FOREIGN KEY (last_entry_id) REFERENCES task_entries(id) ON DELETE SET NULL
     )
   `)
   const progressSyncColumns = db.prepare("PRAGMA table_info('day_script_progress_syncs')").all() as Array<{ name: string }>
   if (!progressSyncColumns.some((column) => column.name === 'synced_progress_html')) {
     db.exec("ALTER TABLE day_script_progress_syncs ADD COLUMN synced_progress_html TEXT NOT NULL DEFAULT ''")
   }
+  migrateDayScriptProgressSyncs()
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS day_script_execution_records (
@@ -252,10 +253,14 @@ function cleanupOrphans(): void {
     WHERE block_id NOT IN (SELECT id FROM day_script_blocks)
        OR task_id NOT IN (SELECT id FROM tasks);
 
+    UPDATE day_script_progress_syncs
+    SET last_entry_id = NULL
+    WHERE last_entry_id IS NOT NULL
+      AND last_entry_id NOT IN (SELECT id FROM task_entries);
+
     DELETE FROM day_script_progress_syncs
     WHERE block_id NOT IN (SELECT id FROM day_script_blocks)
-       OR task_id NOT IN (SELECT id FROM tasks)
-       OR last_entry_id NOT IN (SELECT id FROM task_entries);
+       OR task_id NOT IN (SELECT id FROM tasks);
 
     UPDATE day_script_execution_records
     SET work_session_id = NULL
@@ -277,6 +282,53 @@ function cleanupOrphans(): void {
 
     DELETE FROM task_progress_summaries
     WHERE task_id NOT IN (SELECT id FROM tasks);
+  `)
+}
+
+function migrateDayScriptProgressSyncs(): void {
+  const db = getDb()
+  const columns = db.prepare("PRAGMA table_info('day_script_progress_syncs')").all() as Array<{ name: string; notnull: number }>
+  const lastEntryColumn = columns.find((column) => column.name === 'last_entry_id')
+  const foreignKeys = db.prepare("PRAGMA foreign_key_list('day_script_progress_syncs')").all() as Array<{ from: string; on_delete: string }>
+  const lastEntryForeignKey = foreignKeys.find((key) => key.from === 'last_entry_id')
+  if (lastEntryColumn?.notnull === 0 && lastEntryForeignKey?.on_delete?.toUpperCase() === 'SET NULL') return
+
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+
+    DROP TABLE IF EXISTS day_script_progress_syncs_next;
+
+    CREATE TABLE IF NOT EXISTS day_script_progress_syncs_next (
+      block_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      synced_progress TEXT NOT NULL,
+      synced_progress_html TEXT NOT NULL DEFAULT '',
+      last_entry_id TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (block_id, task_id),
+      FOREIGN KEY (block_id) REFERENCES day_script_blocks(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+      FOREIGN KEY (last_entry_id) REFERENCES task_entries(id) ON DELETE SET NULL
+    );
+
+    INSERT OR REPLACE INTO day_script_progress_syncs_next (
+      block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at
+    )
+    SELECT
+      block_id,
+      task_id,
+      synced_progress,
+      COALESCE(synced_progress_html, ''),
+      CASE WHEN last_entry_id IN (SELECT id FROM task_entries) THEN last_entry_id ELSE NULL END,
+      updated_at
+    FROM day_script_progress_syncs
+    WHERE block_id IN (SELECT id FROM day_script_blocks)
+      AND task_id IN (SELECT id FROM tasks);
+
+    DROP TABLE day_script_progress_syncs;
+    ALTER TABLE day_script_progress_syncs_next RENAME TO day_script_progress_syncs;
+
+    PRAGMA foreign_keys = ON;
   `)
 }
 

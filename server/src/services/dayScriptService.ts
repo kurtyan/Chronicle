@@ -420,8 +420,29 @@ function renderProgressLineHtml(node: JsonNode): string {
   return rendered
 }
 
+function isTrailingBlankProgressLine(line: ParsedLine): boolean {
+  if (line.separator) return false
+  if (line.text.trim()) return false
+  const html = line.html.trim()
+  if (!html) return true
+  if (/<(?:img|pre|code|ul|ol|li|blockquote|hr|h[1-6])\b/i.test(html)) return false
+  const text = html
+    .replace(/<br\s*\/?>/gi, '')
+    .replace(/<\/?p\b[^>]*>/gi, '')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .trim()
+  return text.length === 0
+}
+
+function trimTrailingBlankProgressLines(lines: ParsedLine[]): ParsedLine[] {
+  let end = lines.length
+  while (end > 0 && isTrailingBlankProgressLine(lines[end - 1])) end -= 1
+  return lines.slice(0, end)
+}
+
 function progressLinesToHtml(lines: ParsedLine[]): string {
-  return lines.map((line) => line.html).join('')
+  return trimTrailingBlankProgressLines(lines).map((line) => line.html).join('')
 }
 
 function progressDeltaHtml(lines: ParsedLine[], existingProgress: string): string {

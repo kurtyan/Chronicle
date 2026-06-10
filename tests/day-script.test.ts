@@ -66,6 +66,11 @@ async function getEntries(page: Page, taskId: string) {
   return res.json()
 }
 
+async function deleteEntry(page: Page, taskId: string, entryId: string) {
+  const res = await page.request.delete(`/api/tasks/${taskId}/logs/${entryId}`)
+  expect(res.ok()).toBeTruthy()
+}
+
 test.describe('Day Script progress sync', () => {
   test.beforeEach(async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
@@ -422,6 +427,120 @@ test.describe('Day Script progress sync', () => {
     expect(entries[1].content).toContain('day-script-image-after-text.png')
     expect(entries[1].content).toContain('day-script-second-image-after-text.png')
     expect(entries[1].content).not.toContain('Already synced text')
+  })
+
+  test('completed focus line ignores trailing blank progress edits', async ({ page }) => {
+    const task = await createTask(page, `DayScript-TrailingBlank-${Date.now()}`)
+    const date = uniqueScriptDate(12)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Stable progress' }] },
+          ],
+        },
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect(first.createdLogs).toHaveLength(1)
+
+    const blankSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Stable progress' }] },
+            { type: 'paragraph' },
+            { type: 'paragraph', content: [{ type: 'text', text: '   ' }] },
+          ],
+        },
+      },
+    })
+    expect(blankSave.ok()).toBeTruthy()
+    const blankSaved = await blankSave.json()
+    expect(blankSaved.createdLogs).toHaveLength(0)
+
+    const entriesAfterBlank = await getEntries(page, task.id)
+    expect(entriesAfterBlank).toHaveLength(1)
+
+    const realAppend = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: blankSaved.script.revision,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Stable progress' }] },
+            { type: 'paragraph' },
+            { type: 'paragraph', content: [{ type: 'text', text: 'Real append' }] },
+          ],
+        },
+      },
+    })
+    expect(realAppend.ok()).toBeTruthy()
+    expect((await realAppend.json()).createdLogs).toHaveLength(1)
+
+    const entriesAfterAppend = await getEntries(page, task.id)
+    expect(entriesAfterAppend).toHaveLength(2)
+    expect(entriesAfterAppend[1].content).toContain('Real append')
+    expect(entriesAfterAppend[1].content).not.toContain('Stable progress')
+  })
+
+  test('deleted day script sync log is not recreated on next save', async ({ page }) => {
+    const task = await createTask(page, `DayScript-DeletedSync-${Date.now()}`)
+    const date = uniqueScriptDate(13)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Initial progress' },
+        ]),
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect(first.createdLogs).toHaveLength(1)
+
+    await deleteEntry(page, task.id, first.createdLogs[0].entryId)
+    expect(await getEntries(page, task.id)).toHaveLength(0)
+
+    const repeatSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: first.script.document,
+      },
+    })
+    expect(repeatSave.ok()).toBeTruthy()
+    const repeat = await repeatSave.json()
+    expect(repeat.createdLogs).toHaveLength(0)
+    expect(await getEntries(page, task.id)).toHaveLength(0)
+
+    const appendSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: repeat.script.revision,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Initial progress' },
+          { text: 'Follow-up progress' },
+        ]),
+      },
+    })
+    expect(appendSave.ok()).toBeTruthy()
+    expect((await appendSave.json()).createdLogs).toHaveLength(1)
+
+    const entriesAfterAppend = await getEntries(page, task.id)
+    expect(entriesAfterAppend).toHaveLength(1)
+    expect(entriesAfterAppend[0].content).toContain('Follow-up progress')
+    expect(entriesAfterAppend[0].content).not.toContain('Initial progress')
   })
 
   test('compact time header is normalized on save', async ({ page }) => {
