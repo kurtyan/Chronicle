@@ -9,6 +9,10 @@ import type { DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, Progres
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 
+const TODAY_LEFT_PANE_PERCENT_KEY = 'chronicle_today_left_pane_percent'
+const TODAY_LEFT_PANE_MIN_PERCENT = 12
+const TODAY_LEFT_PANE_MAX_PERCENT = 88
+
 function dateOffset(date: string, offset: number): string {
   const [year, month, day] = date.split('-').map(Number)
   const next = new Date(year, month - 1, day + offset)
@@ -178,8 +182,8 @@ export function TodayPage() {
   const [conflicts, setConflicts] = useState<ProgressSyncConflict[]>([])
   const [insertedNextStepIds, setInsertedNextStepIds] = useState<Set<string>>(() => new Set())
   const [leftPanePercent, setLeftPanePercent] = useState(() => {
-    const saved = Number(localStorage.getItem('chronicle_today_left_pane_percent'))
-    return Number.isFinite(saved) && saved >= 25 && saved <= 75 ? saved : 50
+    const saved = Number(localStorage.getItem(TODAY_LEFT_PANE_PERCENT_KEY))
+    return Number.isFinite(saved) && saved >= TODAY_LEFT_PANE_MIN_PERCENT && saved <= TODAY_LEFT_PANE_MAX_PERCENT ? saved : 50
   })
   const splitContainerRef = useRef<HTMLDivElement | null>(null)
 
@@ -344,9 +348,9 @@ export function TodayPage() {
   }
 
   const updatePanePercent = useCallback((nextPercent: number) => {
-    const clamped = Math.min(75, Math.max(25, nextPercent))
+    const clamped = Math.min(TODAY_LEFT_PANE_MAX_PERCENT, Math.max(TODAY_LEFT_PANE_MIN_PERCENT, nextPercent))
     setLeftPanePercent(clamped)
-    localStorage.setItem('chronicle_today_left_pane_percent', String(clamped))
+    localStorage.setItem(TODAY_LEFT_PANE_PERCENT_KEY, String(clamped))
   }, [])
 
   const handleDividerMouseDown = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -450,8 +454,8 @@ export function TodayPage() {
           role="separator"
           aria-label="Resize focus and task detail panels"
           aria-orientation="vertical"
-          aria-valuemin={25}
-          aria-valuemax={75}
+          aria-valuemin={TODAY_LEFT_PANE_MIN_PERCENT}
+          aria-valuemax={TODAY_LEFT_PANE_MAX_PERCENT}
           aria-valuenow={Math.round(leftPanePercent)}
           tabIndex={0}
           className="group relative z-20 w-px shrink-0 cursor-col-resize bg-border outline-none focus:bg-primary"

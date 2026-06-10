@@ -14,6 +14,9 @@ import { registerShortcut } from '@/shortcuts/registry'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 
 const DRAFT_ID = '__draft__'
+const BOARD_TASK_LIST_PERCENT_KEY = 'chronicle_tasklist_pct'
+const BOARD_TASK_LIST_MIN_WIDTH = 180
+const BOARD_DETAIL_MIN_WIDTH = 320
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -109,13 +112,14 @@ export function BoardPage() {
   }, [activeTaskId, entries])
 
   const [taskListWidth, setTaskListWidth] = useState(() => {
-    const saved = localStorage.getItem('chronicle_tasklist_pct')
+    const saved = localStorage.getItem(BOARD_TASK_LIST_PERCENT_KEY)
     const pct = saved ? parseFloat(saved) : 0.3
     return Math.round(window.innerWidth * pct)
   })
   const isResizing = useRef(false)
   const startX = useRef(0)
   const startWidth = useRef(0)
+  const boardContainerRef = useRef<HTMLDivElement | null>(null)
 
   // Draft editing state
   const [draftTitle, setDraftTitle] = useState('')
@@ -606,17 +610,32 @@ export function BoardPage() {
 
   // ==================== Resize ====================
 
+  const clampTaskListWidth = useCallback((width: number, containerWidth = boardContainerRef.current?.clientWidth ?? window.innerWidth) => {
+    const maxWidth = Math.max(BOARD_TASK_LIST_MIN_WIDTH, containerWidth - BOARD_DETAIL_MIN_WIDTH)
+    return Math.min(maxWidth, Math.max(BOARD_TASK_LIST_MIN_WIDTH, width))
+  }, [])
+
+  useEffect(() => {
+    const handleWindowResize = () => {
+      setTaskListWidth((width) => clampTaskListWidth(width))
+    }
+    handleWindowResize()
+    window.addEventListener('resize', handleWindowResize)
+    return () => window.removeEventListener('resize', handleWindowResize)
+  }, [clampTaskListWidth])
+
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     isResizing.current = true
     startX.current = e.clientX
     startWidth.current = taskListWidth
+    const containerWidth = boardContainerRef.current?.clientWidth ?? window.innerWidth
     document.body.style.userSelect = 'none'
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!isResizing.current) return
       const diff = ev.clientX - startX.current
-      const newWidth = Math.min(500, Math.max(180, startWidth.current + diff))
+      const newWidth = clampTaskListWidth(startWidth.current + diff, containerWidth)
       setTaskListWidth(newWidth)
     }
 
@@ -627,15 +646,16 @@ export function BoardPage() {
       document.removeEventListener('mouseup', onMouseUp)
       // Save as percentage of current window width
       setTaskListWidth((w) => {
-        const pct = w / window.innerWidth
-        localStorage.setItem('chronicle_tasklist_pct', String(pct))
-        return w
+        const clamped = clampTaskListWidth(w, containerWidth)
+        const pct = clamped / containerWidth
+        localStorage.setItem(BOARD_TASK_LIST_PERCENT_KEY, String(pct))
+        return clamped
       })
     }
 
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
-  }, [taskListWidth])
+  }, [clampTaskListWidth, taskListWidth])
 
   // ==================== Task actions ====================
 
@@ -713,9 +733,9 @@ export function BoardPage() {
   // ==================== Render ====================
 
   return (
-    <div className="flex h-full">
+    <div ref={boardContainerRef} className="flex h-full">
       {/* Todo List */}
-      <div style={{ width: taskListWidth, minWidth: 180, maxWidth: 500 }} className="relative border-r bg-card flex flex-col flex-shrink-0">
+      <div style={{ width: taskListWidth, minWidth: BOARD_TASK_LIST_MIN_WIDTH }} className="relative border-r bg-card flex flex-col flex-shrink-0">
         {/* Resize handle overlay */}
         <div
           className="absolute inset-y-0 -right-1 w-2 cursor-col-resize z-10 hover:bg-primary/5 rounded-l"

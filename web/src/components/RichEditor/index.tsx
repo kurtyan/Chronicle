@@ -10,6 +10,7 @@ import { useEffect, useRef, useMemo, useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
 import type { Task } from '@/types'
+import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
 
 /** Detect Tauri environment */
 export function isTauri(): boolean {
@@ -236,7 +237,9 @@ function RichEditorInner({
   const extensions = useMemo(() => [
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4] },
+      codeBlock: false,
     }),
+    WrappedCodeBlock,
     ChronicleImage.configure({
       inline: false,
     }),

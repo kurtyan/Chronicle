@@ -390,8 +390,10 @@ function renderNodeHtml(node: JsonNode): string {
       return `<ol>${(node.content ?? []).map(renderNodeHtml).join('')}</ol>`
     case 'listItem':
       return `<li>${renderInlineContent(node.content)}</li>`
-    case 'codeBlock':
-      return `<pre><code>${escapeHtml(collectInlineText(node.content ?? []).text)}</code></pre>`
+    case 'codeBlock': {
+      const wrap = node.attrs?.softWrap === false ? 'off' : 'on'
+      return `<pre data-code-wrap="${wrap}"><code>${escapeHtml(collectInlineText(node.content ?? []).text)}</code></pre>`
+    }
     case 'image':
     case 'imageResize': {
       const attrs = node.attrs ?? {}

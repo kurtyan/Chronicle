@@ -35,6 +35,13 @@ function convertImageSrcs(html: string): string {
   }
 }
 
+function withCodeBlockWrapButtons(html: string): string {
+  return html.replace(/<pre\b([^>]*)>/g, (_match, attrs: string) => {
+    const nextAttrs = /\sdata-code-wrap=/.test(attrs) ? attrs : `${attrs} data-code-wrap="on"`
+    return `<pre${nextAttrs}><button type="button" class="code-block-wrap-toggle" aria-label="Toggle code block soft wrap" title="Toggle soft wrap" aria-pressed="${nextAttrs.includes('data-code-wrap="off"') ? 'false' : 'true'}">↵</button>`
+  })
+}
+
 interface TaskEntryBlockProps {
   entry?: TaskEntry
   onSave: (id: string, newContent: string) => void
@@ -410,6 +417,20 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     const dy = e.clientY - mouseDownPos.current.y
     if (Math.sqrt(dx * dx + dy * dy) > 3) return // was a drag/selection, not a click
 
+    const wrapButton = (e.target as HTMLElement).closest('button.code-block-wrap-toggle') as HTMLButtonElement | null
+    if (wrapButton) {
+      e.preventDefault()
+      e.stopPropagation()
+      const pre = wrapButton.closest('pre')
+      if (pre) {
+        const next = pre.getAttribute('data-code-wrap') === 'off' ? 'on' : 'off'
+        pre.setAttribute('data-code-wrap', next)
+        wrapButton.setAttribute('aria-pressed', String(next === 'on'))
+        wrapButton.title = next === 'on' ? 'Disable soft wrap' : 'Enable soft wrap'
+      }
+      return
+    }
+
     // Handle image click — open viewer
     const imgEl = (e.target as HTMLElement).closest('img') as HTMLImageElement | null
     if (imgEl) {
@@ -574,7 +595,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
         <div
           data-testid="entry-content"
           className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"
-          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(convertImageSrcs(entry.content), highlightTokens) : convertImageSrcs(entry.content), { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
+          dangerouslySetInnerHTML={{ __html: withCodeBlockWrapButtons(DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(convertImageSrcs(entry.content), highlightTokens) : convertImageSrcs(entry.content), { ALLOW_UNKNOWN_PROTOCOLS: true })) }}
         />
       </div>
       {imageViewerSrc && (

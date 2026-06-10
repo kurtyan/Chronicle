@@ -273,6 +273,7 @@ test.describe('Day Script progress sync', () => {
             },
             {
               type: 'codeBlock',
+              attrs: { softWrap: false },
               content: [{ type: 'text', text: 'const value = 1' }],
             },
             {
@@ -297,7 +298,7 @@ test.describe('Day Script progress sync', () => {
     expect(entries[0].content).toContain('<strong>Bold progress</strong>')
     expect(entries[0].content).toContain('<ul>')
     expect(entries[0].content).toContain('List progress')
-    expect(entries[0].content).toContain('<pre><code>const value = 1</code></pre>')
+    expect(entries[0].content).toContain('<pre data-code-wrap="off"><code>const value = 1</code></pre>')
     expect(entries[0].content).toContain('<img')
     expect(entries[0].content).toContain('day-script-image.png')
   })

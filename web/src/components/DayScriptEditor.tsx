@@ -11,6 +11,7 @@ import { createPortal } from 'react-dom'
 import type { DayScriptDocument, Task } from '@/types'
 import { buildDayScriptActivityKey, findActiveBlock, parseDayScriptDocument } from '@/lib/dayScript'
 import { ChronicleImage, isTauri, resolveImageSrcsInEditor, uploadAndInsertImage } from '@/components/RichEditor'
+import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
 
 interface DayScriptEditorProps {
   value: DayScriptDocument['document']
@@ -167,7 +168,9 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
         horizontalRule: {},
+        codeBlock: false,
       }),
+      WrappedCodeBlock,
       ChronicleImage.configure({
         inline: false,
       }),
