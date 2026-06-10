@@ -165,6 +165,7 @@ export function initDb() {
       block_id TEXT NOT NULL,
       task_id TEXT NOT NULL,
       synced_progress TEXT NOT NULL,
+      synced_progress_html TEXT NOT NULL DEFAULT '',
       last_entry_id TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (block_id, task_id),
@@ -173,6 +174,10 @@ export function initDb() {
       FOREIGN KEY (last_entry_id) REFERENCES task_entries(id) ON DELETE CASCADE
     )
   `)
+  const progressSyncColumns = db.prepare("PRAGMA table_info('day_script_progress_syncs')").all() as Array<{ name: string }>
+  if (!progressSyncColumns.some((column) => column.name === 'synced_progress_html')) {
+    db.exec("ALTER TABLE day_script_progress_syncs ADD COLUMN synced_progress_html TEXT NOT NULL DEFAULT ''")
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS day_script_execution_records (

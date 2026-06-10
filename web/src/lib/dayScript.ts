@@ -11,6 +11,7 @@ type JsonNode = {
 export interface ParsedDayScriptLine {
   text: string
   taskIds: string[]
+  separator?: boolean
 }
 
 export interface ParsedDayScriptBlock extends Omit<DayScriptBlock, 'id'> {
@@ -18,7 +19,8 @@ export interface ParsedDayScriptBlock extends Omit<DayScriptBlock, 'id'> {
   lineEnd: number
 }
 
-const TIME_HEADER_RE = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s+|$)(.*)$/
+const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
+const TIME_HEADER_RE = new RegExp(`^(${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN})(?:\\s+|$)(.*)$`)
 const SEPARATOR_RE = /^-{4,}$/
 
 export function buildDayScriptActivityKey(block: Pick<DayScriptBlock, 'sortOrder' | 'startTime' | 'endTime' | 'headerText'>, taskId: string): string {
@@ -63,10 +65,38 @@ function collectInline(nodes: JsonNode[]): ParsedDayScriptLine {
   return { text: text.replace(/\u00a0/g, ' '), taskIds: [...taskIds] }
 }
 
+function parseTimeValue(value: string): string | null {
+  const trimmed = value.trim()
+  const colonMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/)
+  const compactMatch = trimmed.match(/^(\d{3,4})$/)
+  const hours = colonMatch ? Number(colonMatch[1]) : compactMatch ? Number(trimmed.slice(0, -2)) : NaN
+  const minutes = colonMatch ? Number(colonMatch[2]) : compactMatch ? Number(trimmed.slice(-2)) : NaN
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return null
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
+function parseTimeHeader(text: string): { startTime: string; endTime: string; bodyText: string } | null {
+  const match = text.match(TIME_HEADER_RE)
+  if (!match) return null
+  const startTime = parseTimeValue(match[1])
+  const endTime = parseTimeValue(match[2])
+  if (!startTime || !endTime) return null
+  return { startTime, endTime, bodyText: match[3] }
+}
+
 export function extractDayScriptLines(document: JsonNode | null | undefined): ParsedDayScriptLine[] {
   const lines: ParsedDayScriptLine[] = []
   const visit = (node: JsonNode) => {
     const type = node.type ?? ''
+    if (type === 'horizontalRule') {
+      lines.push({ text: '----', taskIds: [], separator: true })
+      return
+    }
+    if (type === 'image' || type === 'imageResize') {
+      lines.push({ text: '', taskIds: [] })
+      return
+    }
     if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem' || type === 'codeBlock') {
       lines.push(collectInline(node.content ?? []))
       return
@@ -86,20 +116,20 @@ export function parseDayScriptDocument(document: JsonNode | null | undefined): P
 
   lines.forEach((line, index) => {
     const visible = line.text.trimEnd()
-    if (SEPARATOR_RE.test(visible.trim())) {
+    if (line.separator || SEPARATOR_RE.test(visible.trim())) {
       current = null
       return
     }
 
-    const match = visible.match(TIME_HEADER_RE)
-    if (match) {
+    const header = parseTimeHeader(visible)
+    if (header) {
       current = {
         sortOrder: blocks.length,
-        startTime: match[1],
-        endTime: match[2],
-        headerText: match[3].replace(/\s*✅\s*/g, ' ').trim(),
+        startTime: header.startTime,
+        endTime: header.endTime,
+        headerText: header.bodyText.replace(/\s*✅\s*/g, ' ').trim(),
         progressText: '',
-        completed: match[3].includes('✅'),
+        completed: header.bodyText.includes('✅'),
         taskIds: line.taskIds,
         lineStart: index,
         lineEnd: index,

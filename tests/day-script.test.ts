@@ -275,6 +275,15 @@ test.describe('Day Script progress sync', () => {
               type: 'codeBlock',
               content: [{ type: 'text', text: 'const value = 1' }],
             },
+            {
+              type: 'imageResize',
+              attrs: {
+                src: 'asset://localhost/tmp/day-script-image.png',
+                fullpath: '/tmp/day-script-image.png',
+                filename: 'day-script-image.png',
+                width: '245',
+              },
+            },
           ],
         },
       },
@@ -289,6 +298,157 @@ test.describe('Day Script progress sync', () => {
     expect(entries[0].content).toContain('<ul>')
     expect(entries[0].content).toContain('List progress')
     expect(entries[0].content).toContain('<pre><code>const value = 1</code></pre>')
+    expect(entries[0].content).toContain('<img')
+    expect(entries[0].content).toContain('day-script-image.png')
+  })
+
+  test('completed focus line appends image-only progress delta', async ({ page }) => {
+    const task = await createTask(page, `DayScript-ImageDelta-${Date.now()}`)
+    const date = uniqueScriptDate(8)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Text progress' }] },
+          ],
+        },
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect(first.createdLogs).toHaveLength(1)
+
+    const withImage = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Text progress' }] },
+            {
+              type: 'imageResize',
+              attrs: {
+                src: 'asset://localhost/tmp/day-script-delta-image.png',
+                fullpath: '/tmp/day-script-delta-image.png',
+                filename: 'day-script-delta-image.png',
+                width: '245',
+              },
+            },
+          ],
+        },
+      },
+    })
+    expect(withImage.ok()).toBeTruthy()
+    const imageSaved = await withImage.json()
+    expect(imageSaved.createdLogs).toHaveLength(1)
+
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(2)
+    expect(entries[1].content).toContain('<img')
+    expect(entries[1].content).toContain('day-script-delta-image.png')
+
+    const repeat = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: imageSaved.script.revision,
+        document: imageSaved.script.document,
+      },
+    })
+    expect(repeat.ok()).toBeTruthy()
+    expect((await repeat.json()).createdLogs).toHaveLength(0)
+  })
+
+  test('completed focus line appends images after text was already synced', async ({ page }) => {
+    const task = await createTask(page, `DayScript-ImageAfterText-${Date.now()}`)
+    const date = uniqueScriptDate(9)
+
+    const textSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Already synced text' }] },
+          ],
+        },
+      },
+    })
+    expect(textSave.ok()).toBeTruthy()
+    const textSaved = await textSave.json()
+    expect(textSaved.createdLogs).toHaveLength(1)
+
+    const imageSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: textSaved.script.revision,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Already synced text' }] },
+            {
+              type: 'imageResize',
+              attrs: {
+                src: 'asset://localhost/tmp/day-script-image-after-text.png',
+                fullpath: '/tmp/day-script-image-after-text.png',
+                filename: 'day-script-image-after-text.png',
+                width: '500',
+              },
+            },
+            {
+              type: 'imageResize',
+              attrs: {
+                src: 'asset://localhost/tmp/day-script-second-image-after-text.png',
+                fullpath: '/tmp/day-script-second-image-after-text.png',
+                filename: 'day-script-second-image-after-text.png',
+                width: '500',
+              },
+            },
+          ],
+        },
+      },
+    })
+    expect(imageSave.ok()).toBeTruthy()
+    expect((await imageSave.json()).createdLogs).toHaveLength(1)
+
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(2)
+    expect(entries[1].content).toContain('<img')
+    expect(entries[1].content).toContain('day-script-image-after-text.png')
+    expect(entries[1].content).toContain('day-script-second-image-after-text.png')
+    expect(entries[1].content).not.toContain('Already synced text')
+  })
+
+  test('compact time header is normalized on save', async ({ page }) => {
+    const task = await createTask(page, `DayScript-CompactTime-${Date.now()}`)
+    const date = uniqueScriptDate(10)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `1443-1500 @${task.title} ✅`, taskId: task.id },
+          { text: 'Compact time progress' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toHaveLength(0)
+    expect(saved.script.blocks[0]).toMatchObject({
+      startTime: '14:43',
+      endTime: '15:00',
+    })
+    expect(saved.script.document.content[0].content[0].text).toBe('14:43-15:00 ')
+
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].content).toContain('Day Script progress · 2099-01-10 · 14:43-15:00')
+    expect(entries[0].content).toContain('Compact time progress')
   })
 
   test('new task focus line creates ktlo task and rewrites the header mention', async ({ page }) => {
@@ -335,6 +495,34 @@ test.describe('Day Script progress sync', () => {
     })
     expect(repeat.ok()).toBeTruthy()
     expect((await repeat.json()).createdTasks).toHaveLength(0)
+  })
+
+  test('compact time new task line creates ktlo task and normalizes the header', async ({ page }) => {
+    const date = uniqueScriptDate(11)
+    const title = `Inline Compact KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `1443-1500 new task ${title} ✅` },
+          { text: 'Investigated compact-time production incident' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdTasks).toHaveLength(1)
+    expect(saved.script.blocks[0]).toMatchObject({
+      startTime: '14:43',
+      endTime: '15:00',
+    })
+    expect(saved.script.document.content[0].content[0].text).toBe('14:43-15:00 ')
+
+    const entries = await getEntries(page, saved.createdTasks[0].id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].content).toContain('Day Script progress · 2099-01-11 · 14:43-15:00')
+    expect(entries[0].content).toContain('Investigated compact-time production incident')
   })
 
   test('strict separator stops loose notes from becoming previous task progress', async ({ page }) => {

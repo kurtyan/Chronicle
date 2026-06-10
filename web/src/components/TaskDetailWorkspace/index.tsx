@@ -59,6 +59,12 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const DRAFT_ID = '__draft__'
   const isDraftActive = activeTaskId === DRAFT_ID
 
+  const scrollWorkspaceToBottom = useCallback(() => {
+    const el = workspaceScrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [])
+
   const handleStartTask = async () => {
     if (!activeTaskId || isDraftActive) return
     await updateTask(activeTaskId, { status: 'DOING' })
@@ -255,6 +261,17 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
       setEditingEntryId(null)
     }
   }, [activeTaskId])
+
+  useEffect(() => {
+    if (!activeTaskId || activeTaskId === DRAFT_ID || entryLoading) return
+
+    const animationFrame = window.requestAnimationFrame(scrollWorkspaceToBottom)
+    const delayedScroll = window.setTimeout(scrollWorkspaceToBottom, 80)
+    return () => {
+      window.cancelAnimationFrame(animationFrame)
+      window.clearTimeout(delayedScroll)
+    }
+  }, [activeTaskId, entryLoading, entries, scrollWorkspaceToBottom])
 
   // Register task-detail keyboard shortcuts (work on both Board and Today pages)
   useEffect(() => {

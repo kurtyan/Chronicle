@@ -1,5 +1,6 @@
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import type { NodeViewRenderer, NodeViewRendererProps } from '@tiptap/core'
+import { TextSelection } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
@@ -20,7 +21,7 @@ export function insertImageWithAttrs(ed: Editor, filePath: string, filename?: st
   const src = isTauri()
     ? (window as any).__TAURI__.core.convertFileSrc(filePath)
     : `file://${filePath}`
-  const { tr } = ed.state
+  const { state } = ed
   const imageNode = ed.schema.nodes.imageResize.create({
     src,
     width: 500,
@@ -28,7 +29,12 @@ export function insertImageWithAttrs(ed: Editor, filePath: string, filename?: st
     fullpath: filePath,
     filename,
   })
-  tr.insert(tr.selection.from, imageNode)
+  const paragraphNode = ed.schema.nodes.paragraph.create()
+  const insertPos = state.selection.from
+  let tr = state.tr.replaceSelectionWith(imageNode, false)
+  const paragraphPos = insertPos + imageNode.nodeSize
+  tr = tr.insert(paragraphPos, paragraphNode)
+  tr = tr.setSelection(TextSelection.create(tr.doc, paragraphPos + 1))
   ed.view.dispatch(tr)
   ed.commands.focus()
 }

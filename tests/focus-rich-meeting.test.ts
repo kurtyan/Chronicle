@@ -44,6 +44,26 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('pre code')).toContainText('const value = 1')
   })
 
+  test('focus editor converts three dashes to a separator', async ({ page }) => {
+    const date = uniqueScriptDate(Date.now() % 20 + 40)
+
+    await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: { type: 'doc', content: [{ type: 'paragraph' }] },
+      },
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    await editor.click()
+    await page.keyboard.type('---')
+
+    await expect(editor.locator('hr')).toBeVisible()
+  })
+
   test('selecting a focus task mention opens that task detail immediately', async ({ page }) => {
     const task = await createTask(page, `MentionOpensDetail-${Date.now()}`)
     const date = uniqueScriptDate(Date.now() % 20 + 60)

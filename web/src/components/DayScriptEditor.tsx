@@ -51,9 +51,10 @@ type LineMapping = {
   topIndex: number
 }
 
-const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock'])
-const LINE_ELEMENT_SELECTOR = 'p, h1, h2, h3, h4, blockquote, li, pre'
-const TIME_HEADER_RE = /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})(?:\s+|$)/
+const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock', 'horizontalRule', 'image', 'imageResize'])
+const LINE_ELEMENT_SELECTOR = 'p, h1, h2, h3, h4, blockquote, li, pre, hr, img'
+const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
+const TIME_HEADER_RE = new RegExp(`^${TIME_VALUE_PATTERN}\\s*-\\s*${TIME_VALUE_PATTERN}(?:\\s+|$)`)
 
 const FocusLineDecorations = Extension.create({
   name: 'focusLineDecorations',
@@ -159,12 +160,13 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
   const suppressEditingNotificationRef = useRef(false)
   const lastCursorTaskIdRef = useRef<string | null>(null)
   const currentValueRef = useRef(JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] }))
+  const pendingClipboardImageFallbackRef = useRef<number | null>(null)
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
-        horizontalRule: false,
+        horizontalRule: {},
       }),
       ChronicleImage.configure({
         inline: false,
@@ -199,6 +201,10 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           event.preventDefault()
           onSave()
           return true
+        }
+        if (isTauri() && event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'v') {
+          scheduleClipboardImageFallback()
+          return false
         }
         if (mentionState) {
           if (event.key === 'ArrowDown') {
@@ -262,6 +268,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
         const file = event.clipboardData!.files[0]
         if (!file?.type.startsWith('image/')) return false
         event.preventDefault()
+        cancelClipboardImageFallback()
         const activeEditor = editorRef.current
         uploadAndInsertImage(activeEditor, getUploadTaskId(activeEditor), file)
         return true
@@ -309,6 +316,10 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     const timer = window.setTimeout(resolveImageSrcsInEditor, 50)
     return () => window.clearTimeout(timer)
   }, [editor, value])
+
+  useEffect(() => {
+    return () => cancelClipboardImageFallback()
+  }, [])
 
   const filteredTasks = useMemo(() => {
     const query = mentionState?.query.trim().toLowerCase() ?? ''
@@ -367,6 +378,38 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     onNavigateTask(taskId)
   }
 
+  async function pasteClipboardImage(nextEditor: Editor | null) {
+    if (!nextEditor || !navigator.clipboard?.read) return
+    try {
+      const items = await navigator.clipboard.read()
+      for (const item of items) {
+        const imageType = item.types.find((type) => type.startsWith('image/'))
+        if (!imageType) continue
+        const blob = await item.getType(imageType)
+        const extension = imageType.split('/')[1] || 'png'
+        const file = new File([blob], `clipboard-image.${extension}`, { type: imageType })
+        uploadAndInsertImage(nextEditor, getUploadTaskId(nextEditor), file)
+        return
+      }
+    } catch {
+      // Native paste may still handle clipboard content; ignore permission/read failures.
+    }
+  }
+
+  function cancelClipboardImageFallback() {
+    if (pendingClipboardImageFallbackRef.current === null) return
+    window.clearTimeout(pendingClipboardImageFallbackRef.current)
+    pendingClipboardImageFallbackRef.current = null
+  }
+
+  function scheduleClipboardImageFallback() {
+    cancelClipboardImageFallback()
+    pendingClipboardImageFallbackRef.current = window.setTimeout(() => {
+      pendingClipboardImageFallbackRef.current = null
+      pasteClipboardImage(editorRef.current)
+    }, 80)
+  }
+
   function getUploadTaskId(nextEditor: Editor | null): string {
     if (!nextEditor) return 'day-script'
     const lineIndex = getSelectionLineIndex(nextEditor)
@@ -413,7 +456,8 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
       for (let line = block.lineStart; line <= block.lineEnd; line++) {
         const element = lineElements[line]
         if (!element) continue
-        if (line === block.lineStart) element.classList.add('day-script-line-header')
+        if (line !== block.lineStart) continue
+        element.classList.add('day-script-line-header')
         if (block.completed) element.classList.add('day-script-line-complete')
         if (index === currentIndex) element.classList.add('day-script-line-active')
       }
@@ -547,12 +591,18 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           margin: 0.5rem 0;
           color: hsl(var(--muted-foreground));
         }
+        .day-script-editor.ProseMirror hr {
+          border: 0;
+          border-top: 1px solid hsl(var(--border));
+          margin: 1rem 0;
+        }
         .day-script-editor.ProseMirror pre {
           background: hsl(var(--muted));
           border-radius: 0.5rem;
           margin: 0.5rem 0;
           overflow-x: auto;
-          padding: 0.75rem 1rem;
+          padding: 0.65rem 1rem;
+          display: block;
         }
         .day-script-editor.ProseMirror pre code {
           display: block;
@@ -560,7 +610,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           padding: 0;
           border-radius: 0;
           font-size: 0.9rem;
-          line-height: 1.65;
+          line-height: 1.5;
           white-space: pre;
         }
         .day-script-editor.ProseMirror code {
