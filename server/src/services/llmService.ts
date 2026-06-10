@@ -24,6 +24,15 @@ Rules:
 - Put unresolved ambiguity in warnings.
 - Do not include markdown fences or prose outside JSON.`
 
+export const DEFAULT_TASK_SUMMARY_PROMPT = `Summarize the latest task state.
+Return JSON only:
+{"latestProgress":"string","nextStep":"string"}
+Use the same language as the task logs when possible.
+Base the answer only on the supplied task data.
+Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
+If there is no explicit next step in the supplied logs, return an empty string for nextStep.
+Escape any newline inside JSON string values as \\n.`
+
 export interface LlmSettings {
   baseUrl: string
   model: string
@@ -31,6 +40,8 @@ export interface LlmSettings {
   timeoutMs: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
+  taskSummaryPrompt: string
+  defaultTaskSummaryPrompt: string
 }
 
 export interface LlmCallLog {
@@ -70,6 +81,8 @@ export function getLlmSettings(): LlmSettings {
     timeoutMs: Number.isFinite(config.timeoutMs) ? config.timeoutMs : 30000,
     meetingExtractionPrompt: config.meetingExtractionPrompt,
     defaultMeetingExtractionPrompt: DEFAULT_MEETING_EXTRACTION_PROMPT,
+    taskSummaryPrompt: config.taskSummaryPrompt,
+    defaultTaskSummaryPrompt: DEFAULT_TASK_SUMMARY_PROMPT,
   }
 }
 
@@ -83,6 +96,7 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
       apiKey: input.apiKey ?? current.apiKey,
       timeoutMs,
       meetingExtractionPrompt: input.meetingExtractionPrompt ?? current.meetingExtractionPrompt,
+      taskSummaryPrompt: input.taskSummaryPrompt ?? current.taskSummaryPrompt,
     },
   } as any)
   return getLlmSettings()
@@ -304,7 +318,7 @@ function uniqueClean(values: string[]): string[] {
   return result
 }
 
-function insertLlmCallLog(data: {
+export function insertLlmCallLog(data: {
   id: string
   feature: string
   promptVersion: string

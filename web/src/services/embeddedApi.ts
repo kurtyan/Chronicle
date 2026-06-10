@@ -735,6 +735,15 @@ export class EmbeddedApiProvider implements ApiInterface {
       defaultMeetingExtractionPrompt: `You extract meeting notes from raw user input.
 The user input may contain HTML rich text. Use both the HTML and plain-text versions when provided.
 Return only valid JSON matching the meeting extraction schema.`,
+      taskSummaryPrompt: '',
+      defaultTaskSummaryPrompt: `Summarize the latest task state.
+Return JSON only:
+{"latestProgress":"string","nextStep":"string"}
+Use the same language as the task logs when possible.
+Base the answer only on the supplied task data.
+Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
+If there is no explicit next step in the supplied logs, return an empty string for nextStep.
+Escape any newline inside JSON string values as \\n.`,
     }
   }
   async saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings> {

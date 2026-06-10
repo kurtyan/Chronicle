@@ -26,6 +26,7 @@ export interface ChronicleConfig {
     apiKey: string
     timeoutMs: number
     meetingExtractionPrompt: string
+    taskSummaryPrompt: string
   }
 }
 
@@ -52,6 +53,7 @@ const defaultConfig: ChronicleConfig = {
     apiKey: '',
     timeoutMs: 30000,
     meetingExtractionPrompt: '',
+    taskSummaryPrompt: '',
   },
 }
 
@@ -110,6 +112,7 @@ export function getConfig(): ChronicleConfig {
       apiKey: envLlmApiKey ?? fileConfig.llm?.apiKey ?? defaultConfig.llm.apiKey,
       timeoutMs: envLlmTimeoutMs ? parseInt(envLlmTimeoutMs, 10) : (fileConfig.llm?.timeoutMs ?? defaultConfig.llm.timeoutMs),
       meetingExtractionPrompt: fileConfig.llm?.meetingExtractionPrompt ?? defaultConfig.llm.meetingExtractionPrompt,
+      taskSummaryPrompt: fileConfig.llm?.taskSummaryPrompt ?? defaultConfig.llm.taskSummaryPrompt,
     },
   }
 }

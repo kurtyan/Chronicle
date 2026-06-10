@@ -133,7 +133,7 @@ function NextStepsPanel({
   if (contexts.length === 0) return null
 
   return (
-    <div className="absolute left-3 top-3 z-10 w-[min(520px,calc(100%-1.5rem))] rounded-lg border border-border bg-card/95 p-3 shadow-lg backdrop-blur">
+    <div className="shrink-0 rounded-lg border border-border bg-card/95 p-3 shadow-sm">
       <button className="flex w-full items-center justify-between gap-3 text-left" onClick={toggle}>
         <span className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">Next steps</span>
         <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{contexts.length}</span>
@@ -273,7 +273,12 @@ export function TodayPage() {
       ? script.document
       : { type: 'doc', content: [] }
     const content = Array.isArray(document.content) ? [...document.content] : []
-    const nextDocument = { ...document, content: [...content, nextNode] }
+    const lastNode = content[content.length - 1]
+    const separatorNode = { type: 'horizontalRule' }
+    const nextContent = lastNode?.type === 'horizontalRule'
+      ? [...content, nextNode]
+      : [...content, separatorNode, nextNode]
+    const nextDocument = { ...document, content: nextContent }
     setScript({ ...script, document: nextDocument })
     setInsertedNextStepIds((ids) => new Set(ids).add(context.taskId))
   }
@@ -396,7 +401,7 @@ export function TodayPage() {
                 {loadError ?? 'Loading Day Script...'}
               </div>
             ) : (
-              <div className="relative flex h-full min-h-0 flex-1 overflow-hidden">
+              <div className="relative flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden">
                 {saveError && (
                   <div className="absolute right-3 top-3 z-20 max-w-[70%] rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300 shadow">
                     {saveError}

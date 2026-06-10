@@ -146,6 +146,8 @@ export interface LlmSettings {
   timeoutMs: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
+  taskSummaryPrompt: string
+  defaultTaskSummaryPrompt: string
 }
 
 export interface MeetingExtractionResult {

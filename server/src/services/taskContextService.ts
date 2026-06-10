@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { getDb } from '../db'
 import { getTaskById, getTaskEntries, getAllTasks } from './taskService'
-import { getLlmSettings } from './llmService'
+import { DEFAULT_TASK_SUMMARY_PROMPT, getLlmSettings, insertLlmCallLog, linkLlmCallLogToTask } from './llmService'
 
 export interface TaskProgressSummary {
   taskId: string
@@ -172,16 +172,8 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
   if (!task) return fallbackSummary(taskId)
   const entries = getTaskEntries(taskId).slice(-10)
   const workMs = getTotalWorkMs(taskId)
-  const prompt = [
-    'Summarize the latest task state.',
-    'Return JSON only:',
-    '{"latestProgress":"string","nextStep":"string"}',
-    'Use the same language as the task logs when possible.',
-    'Base the answer only on the supplied task data.',
-    'Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.',
-    'If there is no explicit next step in the supplied logs, return an empty string for nextStep.',
-    'Escape any newline inside JSON string values as \\n.',
-  ].join('\n')
+  const prompt = settings.taskSummaryPrompt.trim() || DEFAULT_TASK_SUMMARY_PROMPT
+  const promptVersion = settings.taskSummaryPrompt.trim() ? 'task_summary_custom' : 'task_summary_default_v1'
 
   const input = {
     title: task.title,
@@ -193,6 +185,16 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
       content: stripHtml(entry.content),
     })),
   }
+  const messages = [
+    { role: 'system', content: prompt },
+    { role: 'user', content: JSON.stringify(input) },
+  ]
+  const logId = crypto.randomUUID()
+  const started = Date.now()
+  let rawResponse: string | null = null
+  let parsedOutput: any = null
+  let status = 'success'
+  let errorMessage: string | null = null
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
@@ -209,23 +211,41 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
         temperature: 0,
         max_tokens: 300,
         response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: prompt },
-          { role: 'user', content: JSON.stringify(input) },
-        ],
+        messages,
       }),
     })
     const text = await response.text()
     if (!response.ok) throw new Error(`LLM request failed (${response.status}): ${text.slice(0, 200)}`)
     const json = JSON.parse(text)
-    const raw = String(json.choices?.[0]?.message?.content ?? '{}').trim()
-    const parsed = parseLlmJsonObject(raw)
-    return {
+    rawResponse = String(json.choices?.[0]?.message?.content ?? '{}').trim()
+    const parsed = parseLlmJsonObject(rawResponse)
+    parsedOutput = {
       latestProgress: String(parsed.latestProgress ?? '').trim() || fallbackSummary(taskId).latestProgress,
       nextStep: String(parsed.nextStep ?? '').trim(),
     }
+    return parsedOutput
+  } catch (err: any) {
+    status = rawResponse ? 'parse_error' : 'error'
+    errorMessage = err?.message ?? 'Task summary failed'
+    parsedOutput = fallbackSummary(taskId)
+    throw err
   } finally {
     clearTimeout(timeout)
+    insertLlmCallLog({
+      id: logId,
+      feature: 'task_summary',
+      promptVersion,
+      model: settings.model,
+      baseUrl: settings.baseUrl,
+      requestInput: input,
+      requestMessages: messages,
+      rawResponse,
+      parsedOutput,
+      status,
+      errorMessage,
+      latencyMs: Date.now() - started,
+    })
+    linkLlmCallLogToTask(logId, taskId)
   }
 }
 

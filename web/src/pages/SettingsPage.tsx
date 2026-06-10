@@ -57,6 +57,7 @@ type SettingsSectionId =
   | 'automation.autoAfk'
   | 'ai.provider'
   | 'ai.meetingExtraction'
+  | 'ai.taskSummary'
   | 'data.database'
   | 'data.importExport'
   | 'diagnostics.clientLog'
@@ -111,18 +112,22 @@ function displayLlmSettings(settings: LlmSettings): LlmSettings {
   return {
     ...settings,
     meetingExtractionPrompt: settings.meetingExtractionPrompt || settings.defaultMeetingExtractionPrompt,
+    taskSummaryPrompt: settings.taskSummaryPrompt || settings.defaultTaskSummaryPrompt,
   }
 }
 
 function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
-  const prompt = settings.meetingExtractionPrompt.trim()
-  const defaultPrompt = settings.defaultMeetingExtractionPrompt.trim()
+  const meetingPrompt = settings.meetingExtractionPrompt.trim()
+  const defaultMeetingPrompt = settings.defaultMeetingExtractionPrompt.trim()
+  const taskSummaryPrompt = settings.taskSummaryPrompt.trim()
+  const defaultTaskSummaryPrompt = settings.defaultTaskSummaryPrompt.trim()
   return {
     baseUrl: settings.baseUrl,
     model: settings.model,
     apiKey: settings.apiKey,
     timeoutMs: settings.timeoutMs,
-    meetingExtractionPrompt: prompt === defaultPrompt ? '' : settings.meetingExtractionPrompt,
+    meetingExtractionPrompt: meetingPrompt === defaultMeetingPrompt ? '' : settings.meetingExtractionPrompt,
+    taskSummaryPrompt: taskSummaryPrompt === defaultTaskSummaryPrompt ? '' : settings.taskSummaryPrompt,
   }
 }
 
@@ -563,7 +568,7 @@ function MeetingExtractionSettingsSection({
         <label className="block space-y-1">
           <span className="text-xs font-medium text-muted-foreground">Prompt</span>
           <textarea
-            className="min-h-[260px] w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-1 focus:ring-primary"
+            className="min-h-[390px] w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-1 focus:ring-primary"
             value={settings.meetingExtractionPrompt}
             onChange={(e) => onUpdate({ meetingExtractionPrompt: e.target.value })}
             placeholder="Meeting extraction prompt"
@@ -591,6 +596,67 @@ function MeetingExtractionSettingsSection({
       </SectionPanel>
       <LlmCallLogsSection
         featureLabel="meeting extraction"
+        logs={logs}
+        loading={logsLoading}
+        expandedLogId={expandedLogId}
+        onLoad={onLoadLogs}
+        onToggleExpanded={onToggleExpandedLog}
+      />
+    </div>
+  )
+}
+
+function TaskSummarySettingsSection({
+  settings,
+  saving,
+  logs,
+  logsLoading,
+  expandedLogId,
+  onUpdate,
+  onSave,
+  onLoadLogs,
+  onToggleExpandedLog,
+}: {
+  settings: LlmSettings
+  saving: boolean
+  logs: LlmCallLogSummary[]
+  logsLoading: boolean
+  expandedLogId: string | null
+  onUpdate: (patch: Partial<LlmSettings>) => void
+  onSave: () => void
+  onLoadLogs: () => void
+  onToggleExpandedLog: (id: string | null) => void
+}) {
+  return (
+    <div className="space-y-4">
+      <SectionPanel icon={<Bot className="h-5 w-5 text-muted-foreground" />} title="Task Summary">
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Prompt</span>
+          <textarea
+            className="min-h-[390px] w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-1 focus:ring-primary"
+            value={settings.taskSummaryPrompt}
+            onChange={(e) => onUpdate({ taskSummaryPrompt: e.target.value })}
+            placeholder="Task summary prompt"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            The prompt must return JSON with latestProgress and nextStep. Leave nextStep empty unless the logs explicitly mention a next step.
+          </span>
+        </label>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={onSave} disabled={saving} className="dialog-button-primary">
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving...' : 'Save Prompt'}
+          </button>
+          <button
+            onClick={() => onUpdate({ taskSummaryPrompt: settings.defaultTaskSummaryPrompt })}
+            className="dialog-button-secondary"
+          >
+            Restore Default
+          </button>
+        </div>
+      </SectionPanel>
+      <LlmCallLogsSection
+        featureLabel="task summary"
         logs={logs}
         loading={logsLoading}
         expandedLogId={expandedLogId}
@@ -736,6 +802,8 @@ export function SettingsPage() {
     timeoutMs: 30000,
     meetingExtractionPrompt: '',
     defaultMeetingExtractionPrompt: '',
+    taskSummaryPrompt: '',
+    defaultTaskSummaryPrompt: '',
   })
   const [llmSaving, setLlmSaving] = useState(false)
   const [llmTesting, setLlmTesting] = useState(false)
@@ -743,6 +811,9 @@ export function SettingsPage() {
   const [meetingExtractionLogs, setMeetingExtractionLogs] = useState<LlmCallLogSummary[]>([])
   const [meetingExtractionLogsLoading, setMeetingExtractionLogsLoading] = useState(false)
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
+  const [taskSummaryLogs, setTaskSummaryLogs] = useState<LlmCallLogSummary[]>([])
+  const [taskSummaryLogsLoading, setTaskSummaryLogsLoading] = useState(false)
+  const [expandedTaskSummaryLogId, setExpandedTaskSummaryLogId] = useState<string | null>(null)
 
   const [autoAfkEnabled, setAutoAfkEnabled] = useState(false)
   const [screenLockEnabled, setScreenLockEnabled] = useState(true)
@@ -789,6 +860,11 @@ export function SettingsPage() {
             id: 'ai.meetingExtraction',
             label: 'Meeting Extraction',
             description: 'Edit the prompt, test it, and inspect this scene logs.',
+          },
+          {
+            id: 'ai.taskSummary',
+            label: 'Task Summary',
+            description: 'Edit the prompt and inspect task summary calls.',
           },
         ],
       },
@@ -941,6 +1017,19 @@ export function SettingsPage() {
       setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
     } finally {
       setMeetingExtractionLogsLoading(false)
+    }
+  }
+
+  const loadTaskSummaryLogs = async () => {
+    setTaskSummaryLogsLoading(true)
+    try {
+      const res = await apiFetch('/api/llm-call-logs?feature=task_summary&limit=50')
+      if (!res.ok) throw new Error('Failed to load LLM logs')
+      setTaskSummaryLogs(await res.json())
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
+    } finally {
+      setTaskSummaryLogsLoading(false)
     }
   }
 
@@ -1110,6 +1199,20 @@ export function SettingsPage() {
             onTestPrompt={handleTestMeetingExtractionPrompt}
             onLoadLogs={loadMeetingExtractionLogs}
             onToggleExpandedLog={setExpandedLogId}
+          />
+        )
+      case 'ai.taskSummary':
+        return (
+          <TaskSummarySettingsSection
+            settings={llmSettings}
+            saving={llmSaving}
+            logs={taskSummaryLogs}
+            logsLoading={taskSummaryLogsLoading}
+            expandedLogId={expandedTaskSummaryLogId}
+            onUpdate={updateLlmSettings}
+            onSave={handleSaveLlmSettings}
+            onLoadLogs={loadTaskSummaryLogs}
+            onToggleExpandedLog={setExpandedTaskSummaryLogId}
           />
         )
       case 'data.database':
