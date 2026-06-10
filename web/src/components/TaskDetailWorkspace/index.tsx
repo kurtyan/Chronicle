@@ -629,8 +629,11 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
 
 function TaskSummaryWidget({ context, updating }: { context?: TaskProgressContext; updating: boolean }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('chronicle_task_summary_collapsed') === '1')
+  const [expanded, setExpanded] = useState(false)
   const summary = context?.summary
+  const latestProgress = summary?.latestProgress || 'Summary pending.'
   const nextStep = summary?.nextStep.trim() ?? ''
+  const canExpand = latestProgress.length > 160 || nextStep.length > 120 || latestProgress.includes('\n') || nextStep.includes('\n')
   const stateLabel = updating
     ? 'Updating'
     : summary?.errorMessage
@@ -654,6 +657,10 @@ function TaskSummaryWidget({ context, updating }: { context?: TaskProgressContex
     localStorage.setItem('chronicle_task_summary_collapsed', next ? '1' : '0')
   }
 
+  useEffect(() => {
+    setExpanded(false)
+  }, [context?.taskId, latestProgress, nextStep])
+
   return (
     <div className="ml-auto w-full max-w-[560px] rounded-lg border border-border bg-card/95 px-3 py-2 shadow-sm">
       <button className="flex w-full items-center justify-between gap-3 text-left" onClick={toggle}>
@@ -664,13 +671,22 @@ function TaskSummaryWidget({ context, updating }: { context?: TaskProgressContex
         <div className="mt-2 grid gap-2 text-sm">
           <div>
             <div className="text-[11px] font-medium uppercase tracking-normal text-muted-foreground">Progress</div>
-            <div className="line-clamp-2 text-foreground">{summary?.latestProgress || 'Summary pending.'}</div>
+            <div className={`${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'} text-foreground`}>{latestProgress}</div>
           </div>
           {nextStep && (
             <div>
               <div className="text-[11px] font-medium uppercase tracking-normal text-muted-foreground">Next step</div>
-              <div className="line-clamp-2 text-foreground">{nextStep}</div>
+              <div className={`${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'} text-foreground`}>{nextStep}</div>
             </div>
+          )}
+          {canExpand && (
+            <button
+              type="button"
+              className="w-fit text-xs font-medium text-primary hover:underline"
+              onClick={() => setExpanded((current) => !current)}
+            >
+              {expanded ? 'Show less' : 'Show more'}
+            </button>
           )}
           {summary?.errorMessage && <div className="text-xs text-red-600">{summary.errorMessage}</div>}
         </div>

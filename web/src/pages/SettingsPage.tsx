@@ -39,6 +39,7 @@ interface LlmCallLogSummary {
   baseUrl: string | null
   requestInput: any
   requestMessages: any
+  rawProviderResponse: string | null
   rawResponse: string | null
   parsedOutput: any
   status: string
@@ -526,7 +527,8 @@ function LlmCallLogsSection({
                     <LogJsonBlock label="Request Input" value={log.requestInput} />
                     <LogJsonBlock label="Request Messages" value={log.requestMessages} />
                     <LogJsonBlock label="Parsed Output" value={log.parsedOutput} />
-                    {log.rawResponse && <LogTextBlock label="Raw Response" value={log.rawResponse} />}
+                    {log.rawProviderResponse && <LogTextBlock label="Provider Raw Response" value={log.rawProviderResponse} />}
+                    {log.rawResponse && <LogTextBlock label="Assistant Message Content" value={log.rawResponse} />}
                     {log.errorMessage && <LogTextBlock label="Error" value={log.errorMessage} />}
                   </div>
                 )}

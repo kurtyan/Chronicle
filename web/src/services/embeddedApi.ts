@@ -737,13 +737,23 @@ The user input may contain HTML rich text. Use both the HTML and plain-text vers
 Return only valid JSON matching the meeting extraction schema.`,
       taskSummaryPrompt: '',
       defaultTaskSummaryPrompt: `Summarize the latest task state.
-Return JSON only:
-{"latestProgress":"string","nextStep":"string"}
-Use the same language as the task logs when possible.
-Base the answer only on the supplied task data.
-Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
-If there is no explicit next step in the supplied logs, return an empty string for nextStep.
-Escape any newline inside JSON string values as \\n.`,
+Return only valid JSON matching this exact shape:
+{
+  "latestProgress": "non-empty string",
+  "nextStep": "string"
+}
+Rules:
+- Return exactly these two keys: latestProgress and nextStep.
+- Do not add, remove, rename, or nest fields.
+- Use the same language as the task logs when possible.
+- Base the answer only on the supplied task data.
+- latestProgress must be a concise summary of the current task state, ideally 1-2 short sentences.
+- latestProgress must not be empty.
+- Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
+- If there is no explicit next step in the supplied logs, nextStep must be an empty string.
+- nextStep must never be null.
+- Escape any newline inside JSON string values as \\n.
+- Do not include markdown fences or prose outside JSON.`,
     }
   }
   async saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings> {

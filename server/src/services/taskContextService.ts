@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { z } from 'zod'
 import { getDb } from '../db'
 import { getTaskById, getTaskEntries, getAllTasks } from './taskService'
 import { DEFAULT_TASK_SUMMARY_PROMPT, getLlmSettings, insertLlmCallLog, linkLlmCallLogToTask } from './llmService'
@@ -29,6 +30,11 @@ interface CacheRow {
   summary_updated_at: number
   error_message: string | null
 }
+
+const summarySchema = z.object({
+  latestProgress: z.string().trim().min(1),
+  nextStep: z.string(),
+}).strict()
 
 function queryAll(sql: string, params: any[] = []): any[] {
   return getDb().prepare(sql).all(...params)
@@ -110,10 +116,19 @@ function extractExplicitNextStep(contents: string[]): string {
 }
 
 function parseLlmJsonObject(raw: string): any {
+  const trimmed = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```$/i, '').trim()
   try {
-    return JSON.parse(raw)
+    return JSON.parse(trimmed)
   } catch {
-    return JSON.parse(escapeControlCharsInsideJsonStrings(raw))
+    const repaired = escapeControlCharsInsideJsonStrings(trimmed)
+    try {
+      return JSON.parse(repaired)
+    } catch {
+      const start = repaired.indexOf('{')
+      const end = repaired.lastIndexOf('}')
+      if (start >= 0 && end > start) return JSON.parse(repaired.slice(start, end + 1))
+      throw new Error('No JSON object found in LLM response')
+    }
   }
 }
 
@@ -191,6 +206,7 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
   ]
   const logId = crypto.randomUUID()
   const started = Date.now()
+  let rawProviderResponse: string | null = null
   let rawResponse: string | null = null
   let parsedOutput: any = null
   let status = 'success'
@@ -215,17 +231,18 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
       }),
     })
     const text = await response.text()
+    rawProviderResponse = text
     if (!response.ok) throw new Error(`LLM request failed (${response.status}): ${text.slice(0, 200)}`)
     const json = JSON.parse(text)
     rawResponse = String(json.choices?.[0]?.message?.content ?? '{}').trim()
-    const parsed = parseLlmJsonObject(rawResponse)
+    const parsed = summarySchema.parse(parseLlmJsonObject(rawResponse))
     parsedOutput = {
-      latestProgress: String(parsed.latestProgress ?? '').trim() || fallbackSummary(taskId).latestProgress,
-      nextStep: String(parsed.nextStep ?? '').trim(),
+      latestProgress: parsed.latestProgress.trim(),
+      nextStep: parsed.nextStep.trim(),
     }
     return parsedOutput
   } catch (err: any) {
-    status = rawResponse ? 'parse_error' : 'error'
+    status = rawResponse || rawProviderResponse ? 'parse_error' : 'error'
     errorMessage = err?.message ?? 'Task summary failed'
     parsedOutput = fallbackSummary(taskId)
     throw err
@@ -239,6 +256,7 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
       baseUrl: settings.baseUrl,
       requestInput: input,
       requestMessages: messages,
+      rawProviderResponse,
       rawResponse,
       parsedOutput,
       status,

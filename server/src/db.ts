@@ -113,6 +113,7 @@ export function initDb() {
       base_url TEXT,
       request_input TEXT NOT NULL,
       request_messages TEXT NOT NULL,
+      raw_provider_response TEXT,
       raw_response TEXT,
       parsed_output TEXT,
       status TEXT NOT NULL,
@@ -123,6 +124,10 @@ export function initDb() {
       linked_entry_id TEXT
     )
   `)
+  const llmCallLogColumns = db.prepare("PRAGMA table_info('llm_call_logs')").all() as Array<{ name: string }>
+  if (!llmCallLogColumns.some((column) => column.name === 'raw_provider_response')) {
+    db.exec('ALTER TABLE llm_call_logs ADD COLUMN raw_provider_response TEXT')
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS day_scripts (

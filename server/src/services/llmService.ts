@@ -25,13 +25,23 @@ Rules:
 - Do not include markdown fences or prose outside JSON.`
 
 export const DEFAULT_TASK_SUMMARY_PROMPT = `Summarize the latest task state.
-Return JSON only:
-{"latestProgress":"string","nextStep":"string"}
-Use the same language as the task logs when possible.
-Base the answer only on the supplied task data.
-Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
-If there is no explicit next step in the supplied logs, return an empty string for nextStep.
-Escape any newline inside JSON string values as \\n.`
+Return only valid JSON matching this exact shape:
+{
+  "latestProgress": "non-empty string",
+  "nextStep": "string"
+}
+Rules:
+- Return exactly these two keys: latestProgress and nextStep.
+- Do not add, remove, rename, or nest fields.
+- Use the same language as the task logs when possible.
+- Base the answer only on the supplied task data.
+- latestProgress must be a concise summary of the current task state, ideally 1-2 short sentences.
+- latestProgress must not be empty.
+- Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
+- If there is no explicit next step in the supplied logs, nextStep must be an empty string.
+- nextStep must never be null.
+- Escape any newline inside JSON string values as \\n.
+- Do not include markdown fences or prose outside JSON.`
 
 export interface LlmSettings {
   baseUrl: string
@@ -52,6 +62,7 @@ export interface LlmCallLog {
   baseUrl: string | null
   requestInput: unknown
   requestMessages: unknown
+  rawProviderResponse: string | null
   rawResponse: string | null
   parsedOutput: unknown
   status: string
@@ -71,6 +82,13 @@ const extractionSchema = z.object({
   tags: z.array(z.string()).optional(),
   warnings: z.array(z.string()).optional(),
 })
+
+class LlmProviderResponseError extends Error {
+  constructor(message: string, readonly providerResponse: string) {
+    super(message)
+    this.name = 'LlmProviderResponseError'
+  }
+}
 
 export function getLlmSettings(): LlmSettings {
   const config = getConfig().llm
@@ -136,18 +154,22 @@ export async function extractMeeting(rawContent: string, mode: 'record' | 'test'
   ]
   const logId = crypto.randomUUID()
   const started = Date.now()
+  let rawProviderResponse: string | null = null
   let rawResponse: string | null = null
   let parsedOutput: any = null
   let status = 'success'
   let errorMessage: string | null = null
 
   try {
-    rawResponse = await callChatCompletions(settings, messages, 1200)
+    const response = await callChatCompletionsWithRaw(settings, messages, 1200)
+    rawProviderResponse = response.providerResponse
+    rawResponse = response.content
     const parsedJson = parseJsonObject(rawResponse)
     const validated = extractionSchema.parse(parsedJson)
     parsedOutput = normalizeExtraction(validated, rawContent)
   } catch (err: any) {
-    status = err?.name === 'ZodError' || rawResponse ? 'parse_error' : 'error'
+    if (err?.providerResponse && !rawProviderResponse) rawProviderResponse = err.providerResponse
+    status = err?.name === 'ZodError' || rawResponse || rawProviderResponse ? 'parse_error' : 'error'
     errorMessage = err?.message ?? 'LLM extraction failed'
     parsedOutput = fallbackExtraction(rawContent, [`LLM extraction failed: ${errorMessage}`])
   } finally {
@@ -159,6 +181,7 @@ export async function extractMeeting(rawContent: string, mode: 'record' | 'test'
       baseUrl: settings.baseUrl,
       requestInput,
       requestMessages: messages,
+      rawProviderResponse,
       rawResponse,
       parsedOutput,
       status,
@@ -175,6 +198,10 @@ export async function extractMeeting(rawContent: string, mode: 'record' | 'test'
 }
 
 async function callChatCompletions(settings: LlmSettings, messages: Array<{ role: string; content: string }>, maxTokens: number): Promise<string> {
+  return (await callChatCompletionsWithRaw(settings, messages, maxTokens)).content
+}
+
+async function callChatCompletionsWithRaw(settings: LlmSettings, messages: Array<{ role: string; content: string }>, maxTokens: number): Promise<{ content: string; providerResponse: string }> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
   try {
@@ -195,8 +222,16 @@ async function callChatCompletions(settings: LlmSettings, messages: Array<{ role
     })
     const text = await res.text()
     if (!res.ok) throw new Error(`LLM request failed (${res.status}): ${text.slice(0, 500)}`)
-    const json = JSON.parse(text)
-    return json.choices?.[0]?.message?.content ?? text
+    let json: any
+    try {
+      json = JSON.parse(text)
+    } catch (err: any) {
+      throw new LlmProviderResponseError(err?.message ?? 'Provider returned invalid JSON', text)
+    }
+    return {
+      content: json.choices?.[0]?.message?.content ?? text,
+      providerResponse: text,
+    }
   } finally {
     clearTimeout(timeout)
   }
@@ -326,6 +361,7 @@ export function insertLlmCallLog(data: {
   baseUrl: string | null
   requestInput: unknown
   requestMessages: unknown
+  rawProviderResponse?: string | null
   rawResponse: string | null
   parsedOutput: unknown
   status: string
@@ -335,8 +371,8 @@ export function insertLlmCallLog(data: {
   getDb().prepare(`
     INSERT INTO llm_call_logs (
       id, feature, prompt_version, model, base_url, request_input, request_messages,
-      raw_response, parsed_output, status, error_message, latency_ms, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_provider_response, raw_response, parsed_output, status, error_message, latency_ms, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     data.id,
     data.feature,
@@ -345,6 +381,7 @@ export function insertLlmCallLog(data: {
     data.baseUrl,
     JSON.stringify(data.requestInput),
     JSON.stringify(data.requestMessages),
+    data.rawProviderResponse ?? null,
     data.rawResponse,
     JSON.stringify(data.parsedOutput),
     data.status,
@@ -380,6 +417,7 @@ function rowToLog(row: any): LlmCallLog {
     baseUrl: row.base_url,
     requestInput: safeJson(row.request_input),
     requestMessages: safeJson(row.request_messages),
+    rawProviderResponse: row.raw_provider_response,
     rawResponse: row.raw_response,
     parsedOutput: safeJson(row.parsed_output),
     status: row.status,
