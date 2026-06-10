@@ -5,7 +5,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
 import { confirmDayScriptProgressSync, getDayScript, saveDayScript } from '@/services/api'
-import type { DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, ProgressSyncConflict, Task } from '@/types'
+import type { DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 
@@ -111,6 +111,62 @@ function FocusStatusBar({ blocks, tasks, scriptDate }: { blocks: DayScriptBlock[
   )
 }
 
+function NextStepsPanel({
+  contexts,
+  updatingIds,
+  insertedIds,
+  onInsert,
+}: {
+  contexts: TaskProgressContext[]
+  updatingIds: Set<string>
+  insertedIds: Set<string>
+  onInsert: (context: TaskProgressContext) => void
+}) {
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('chronicle_next_steps_panel_collapsed') === '1')
+
+  const toggle = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    localStorage.setItem('chronicle_next_steps_panel_collapsed', next ? '1' : '0')
+  }
+
+  if (contexts.length === 0) return null
+
+  return (
+    <div className="absolute left-3 top-3 z-10 w-[min(520px,calc(100%-1.5rem))] rounded-lg border border-border bg-card/95 p-3 shadow-lg backdrop-blur">
+      <button className="flex w-full items-center justify-between gap-3 text-left" onClick={toggle}>
+        <span className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">Next steps</span>
+        <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{contexts.length}</span>
+      </button>
+      {!collapsed && (
+        <div className="mt-2 max-h-56 space-y-2 overflow-y-auto pr-1">
+          {contexts.map((context) => {
+            const inserted = insertedIds.has(context.taskId)
+            return (
+              <div key={context.taskId} className="rounded-md border border-border/70 bg-background/80 px-2.5 py-2">
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-medium text-muted-foreground" title={context.taskTitle}>{context.taskTitle}</div>
+                    <div className="mt-0.5 line-clamp-2 text-sm text-foreground">{context.summary.nextStep}</div>
+                  </div>
+                  <button
+                    className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:cursor-default disabled:opacity-50"
+                    disabled={inserted}
+                    onClick={() => onInsert(context)}
+                  >
+                    {inserted ? 'Inserted' : 'Insert'}
+                  </button>
+                </div>
+                {updatingIds.has(context.taskId) && <div className="mt-1 text-[11px] text-blue-600">Updating summary...</div>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function TodayPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedTaskId = searchParams.get('task')
@@ -120,6 +176,7 @@ export function TodayPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [conflicts, setConflicts] = useState<ProgressSyncConflict[]>([])
+  const [insertedNextStepIds, setInsertedNextStepIds] = useState<Set<string>>(() => new Set())
   const [leftPanePercent, setLeftPanePercent] = useState(() => {
     const saved = Number(localStorage.getItem('chronicle_today_left_pane_percent'))
     return Number.isFinite(saved) && saved >= 25 && saved <= 75 ? saved : 50
@@ -133,13 +190,17 @@ export function TodayPage() {
   const loadCurrentSession = useTaskStore((s) => s.loadCurrentSession)
   const autoTakeOver = useTaskStore((s) => s.autoTakeOver)
   const doAfk = useTaskStore((s) => s.doAfk)
+  const taskContexts = useTaskStore((s) => s.taskContexts)
+  const taskSummaryUpdating = useTaskStore((s) => s.taskSummaryUpdating)
+  const loadTaskContexts = useTaskStore((s) => s.loadTaskContexts)
   const autoTakeOverInFlightRef = useRef<string | null>(null)
   const focusActivityRef = useRef<Map<string, DayScriptFocusActivity>>(loadStoredFocusActivity(displayDate))
 
   useEffect(() => {
     loadTodos()
     loadCurrentSession()
-  }, [loadTodos, loadCurrentSession])
+    loadTaskContexts().catch((error) => console.error('Failed to load task contexts:', error))
+  }, [loadTodos, loadCurrentSession, loadTaskContexts])
 
   useEffect(() => {
     if (selectedTaskId) setActiveTask(selectedTaskId)
@@ -187,6 +248,35 @@ export function TodayPage() {
     () => tasks.filter((task) => task.status === 'PENDING' || task.status === 'DOING').sort((a, b) => b.updatedAt - a.updatedAt),
     [tasks]
   )
+  const nextStepContexts = useMemo(() => {
+    const pendingIds = new Set(pendingTasks.map((task) => task.id))
+    return Object.values(taskContexts)
+      .filter((context) => pendingIds.has(context.taskId) && context.summary.nextStep.trim())
+      .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+  }, [pendingTasks, taskContexts])
+
+  function appendNextStep(context: TaskProgressContext) {
+    if (!script) return
+    const linkAttrs = {
+      href: `/today?task=${encodeURIComponent(context.taskId)}`,
+      taskId: context.taskId,
+    }
+    const nextNode = {
+      type: 'paragraph',
+      content: [
+        { type: 'text', text: 'Next step ' },
+        { type: 'text', text: `@${context.taskTitle}`, marks: [{ type: 'link', attrs: linkAttrs }] },
+        { type: 'text', text: `: ${context.summary.nextStep}` },
+      ],
+    }
+    const document = script.document && script.document.type === 'doc'
+      ? script.document
+      : { type: 'doc', content: [] }
+    const content = Array.isArray(document.content) ? [...document.content] : []
+    const nextDocument = { ...document, content: [...content, nextNode] }
+    setScript({ ...script, document: nextDocument })
+    setInsertedNextStepIds((ids) => new Set(ids).add(context.taskId))
+  }
 
   async function handleSave() {
     if (!script) return
@@ -312,6 +402,12 @@ export function TodayPage() {
                     {saveError}
                   </div>
                 )}
+                <NextStepsPanel
+                  contexts={nextStepContexts}
+                  updatingIds={taskSummaryUpdating}
+                  insertedIds={insertedNextStepIds}
+                  onInsert={appendNextStep}
+                />
                 <DayScriptEditor
                   value={script.document}
                   tasks={pendingTasks}

@@ -87,14 +87,79 @@ function getLastActivityAt(taskId: string, fallbackUpdatedAt: number): number | 
 }
 
 function fallbackSummary(taskId: string): { latestProgress: string; nextStep: string } {
-  const task = getTaskById(taskId)
   const entries = getTaskEntries(taskId)
   const latestLog = [...entries].reverse().find((entry) => entry.type === 'log' || entry.type === 'plan')
-  const body = entries.find((entry) => entry.type === 'body')
+  const explicitNextStep = extractExplicitNextStep(entries.map((entry) => entry.content).reverse())
   return {
     latestProgress: latestLog?.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || 'No recent progress recorded.',
-    nextStep: body?.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180) || `Continue ${task?.title ?? 'this task'}.`,
+    nextStep: explicitNextStep || '',
   }
+}
+
+function stripHtml(content: string): string {
+  return content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function extractExplicitNextStep(contents: string[]): string {
+  for (const content of contents) {
+    const text = stripHtml(content)
+    const match = text.match(/(?:下一步(?:需要|计划)?|接下来(?:的计划)?|next\s*steps?|next\s*step|todo|计划)[:：\-]?\s*(.{1,240})/i)
+    if (match?.[1]) return match[1].trim()
+  }
+  return ''
+}
+
+function parseLlmJsonObject(raw: string): any {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return JSON.parse(escapeControlCharsInsideJsonStrings(raw))
+  }
+}
+
+function escapeControlCharsInsideJsonStrings(raw: string): string {
+  let result = ''
+  let inString = false
+  let escaped = false
+
+  for (const char of raw) {
+    if (escaped) {
+      result += char
+      escaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      result += char
+      escaped = true
+      continue
+    }
+
+    if (char === '"') {
+      result += char
+      inString = !inString
+      continue
+    }
+
+    if (inString) {
+      if (char === '\n') {
+        result += '\\n'
+        continue
+      }
+      if (char === '\r') {
+        result += '\\r'
+        continue
+      }
+      if (char === '\t') {
+        result += '\\t'
+        continue
+      }
+    }
+
+    result += char
+  }
+
+  return result
 }
 
 async function callSummaryModel(taskId: string): Promise<{ latestProgress: string; nextStep: string }> {
@@ -111,8 +176,11 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
     'Summarize the latest task state.',
     'Return JSON only:',
     '{"latestProgress":"string","nextStep":"string"}',
-    'Use concise plain English.',
+    'Use the same language as the task logs when possible.',
     'Base the answer only on the supplied task data.',
+    'Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.',
+    'If there is no explicit next step in the supplied logs, return an empty string for nextStep.',
+    'Escape any newline inside JSON string values as \\n.',
   ].join('\n')
 
   const input = {
@@ -122,7 +190,7 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
     entries: entries.map((entry) => ({
       type: entry.type,
       createdAt: new Date(entry.createdAt).toISOString(),
-      content: entry.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+      content: stripHtml(entry.content),
     })),
   }
 
@@ -151,48 +219,52 @@ async function callSummaryModel(taskId: string): Promise<{ latestProgress: strin
     if (!response.ok) throw new Error(`LLM request failed (${response.status}): ${text.slice(0, 200)}`)
     const json = JSON.parse(text)
     const raw = String(json.choices?.[0]?.message?.content ?? '{}').trim()
-    const parsed = JSON.parse(raw)
+    const parsed = parseLlmJsonObject(raw)
     return {
       latestProgress: String(parsed.latestProgress ?? '').trim() || fallbackSummary(taskId).latestProgress,
-      nextStep: String(parsed.nextStep ?? '').trim() || fallbackSummary(taskId).nextStep,
+      nextStep: String(parsed.nextStep ?? '').trim(),
     }
   } finally {
     clearTimeout(timeout)
   }
 }
 
+function buildTaskContext(taskId: string): TaskProgressContext | null {
+  const task = getTaskById(taskId)
+  if (!task) return null
+  const fingerprint = makeFingerprint(task.id)
+  const cached = readCache(task.id)
+  const summary = cached
+    ? {
+        taskId: task.id,
+        latestProgress: cached.latest_progress,
+        nextStep: cached.next_step,
+        summaryUpdatedAt: cached.summary_updated_at,
+        stale: cached.fingerprint !== fingerprint,
+        errorMessage: cached.error_message,
+      }
+    : {
+        taskId: task.id,
+        latestProgress: 'Summary pending.',
+        nextStep: '',
+        summaryUpdatedAt: null,
+        stale: true,
+        errorMessage: null,
+      }
+
+  return {
+    taskId: task.id,
+    taskTitle: task.title,
+    status: task.status,
+    totalWorkMs: getTotalWorkMs(task.id),
+    lastActivityAt: getLastActivityAt(task.id, task.updatedAt),
+    summary,
+  }
+}
+
 export function getTaskContexts(statuses: string[]): TaskProgressContext[] {
   const tasks = getAllTasks({ status: statuses }).sort((a, b) => b.updatedAt - a.updatedAt)
-  return tasks.map((task) => {
-    const fingerprint = makeFingerprint(task.id)
-    const cached = readCache(task.id)
-    const summary = cached
-      ? {
-          taskId: task.id,
-          latestProgress: cached.latest_progress,
-          nextStep: cached.next_step,
-          summaryUpdatedAt: cached.summary_updated_at,
-          stale: cached.fingerprint !== fingerprint,
-          errorMessage: cached.error_message,
-        }
-      : {
-          taskId: task.id,
-          latestProgress: 'Summary pending.',
-          nextStep: '',
-          summaryUpdatedAt: null,
-          stale: true,
-          errorMessage: null,
-        }
-
-    return {
-      taskId: task.id,
-      taskTitle: task.title,
-      status: task.status,
-      totalWorkMs: getTotalWorkMs(task.id),
-      lastActivityAt: getLastActivityAt(task.id, task.updatedAt),
-      summary,
-    }
-  })
+  return tasks.map((task) => buildTaskContext(task.id)).filter((context): context is TaskProgressContext => Boolean(context))
 }
 
 export async function refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]> {
@@ -249,5 +321,5 @@ export async function refreshTaskContexts(taskIds?: string[]): Promise<TaskProgr
     }
   }
 
-  return getTaskContexts(['PENDING', 'DOING']).filter((context) => targets.includes(context.taskId))
+  return targets.map((taskId) => buildTaskContext(taskId)).filter((context): context is TaskProgressContext => Boolean(context))
 }

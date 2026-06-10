@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
 import { clientId, isTauriEnv, ensureApiReady } from '@/services/httpApi'
+import type { TaskProgressContext } from '@/types'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
@@ -131,6 +132,9 @@ export function useSSE() {
   const setActiveTask = useTaskStore((s) => s.setActiveTask)
   const loadCurrentSession = useTaskStore((s) => s.loadCurrentSession)
   const loadPinnedIds = useTaskStore((s) => s.loadPinnedIds)
+  const markTaskSummaryUpdating = useTaskStore((s) => s.markTaskSummaryUpdating)
+  const receiveTaskSummaryContext = useTaskStore((s) => s.receiveTaskSummaryContext)
+  const receiveTaskSummaryFailure = useTaskStore((s) => s.receiveTaskSummaryFailure)
 
   const activeTaskIdRef = useRef(activeTaskId)
   const sseRef = useRef<AbortController | null>(null)
@@ -186,6 +190,24 @@ export function useSSE() {
         session_ended: () => {
           console.log('[SSE] session_ended')
           loadCurrentSession()
+        },
+        task_summary_refresh_started: (raw) => {
+          try {
+            const data = JSON.parse(raw) as { taskId?: string }
+            if (data.taskId) markTaskSummaryUpdating(data.taskId)
+          } catch { /* ignore malformed event */ }
+        },
+        task_summary_updated: (raw) => {
+          try {
+            const context = JSON.parse(raw) as TaskProgressContext
+            if (context.taskId) receiveTaskSummaryContext(context)
+          } catch { /* ignore malformed event */ }
+        },
+        task_summary_refresh_failed: (raw) => {
+          try {
+            const data = JSON.parse(raw) as { taskId?: string; error?: string }
+            if (data.taskId) receiveTaskSummaryFailure(data.taskId, data.error ?? 'Summary refresh failed')
+          } catch { /* ignore malformed event */ }
         },
         db_imported: () => {
           console.log('[SSE] db_imported')

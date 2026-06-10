@@ -60,6 +60,63 @@ function emitTaskChange(c: any, task: any) {
   if (task) broadcastEvent('task_updated', { id: task.id, status: task.status, title: task.title }, c.get('clientId'))
 }
 
+interface SummaryRefreshRequest {
+  taskId: string
+  dirty: boolean
+}
+
+const summaryRefreshQueues = new Map<string, SummaryRefreshRequest[]>()
+const summaryRefreshRunning = new Map<string, SummaryRefreshRequest>()
+
+function scheduleTaskSummaryRefresh(taskIds: string[]) {
+  const uniqueTaskIds = [...new Set(taskIds.filter(Boolean))]
+  for (const taskId of uniqueTaskIds) {
+    const queue = summaryRefreshQueues.get(taskId) ?? []
+    const running = summaryRefreshRunning.get(taskId)
+    if (running) running.dirty = true
+    for (const request of queue) request.dirty = true
+
+    queue.push({ taskId, dirty: false })
+    summaryRefreshQueues.set(taskId, queue)
+    broadcastEvent('task_summary_refresh_started', { taskId })
+    if (!running) void consumeTaskSummaryRefreshQueue(taskId)
+  }
+}
+
+async function consumeTaskSummaryRefreshQueue(taskId: string) {
+  while (true) {
+    const queue = summaryRefreshQueues.get(taskId)
+    const request = queue?.shift()
+    if (!request) {
+      summaryRefreshQueues.delete(taskId)
+      summaryRefreshRunning.delete(taskId)
+      return
+    }
+
+    if (request.dirty) continue
+    summaryRefreshRunning.set(taskId, request)
+
+    try {
+      const contexts = await service.refreshTaskContexts([taskId])
+      if (request.dirty) continue
+      const context = contexts.find((item) => item.taskId === taskId)
+      if (context) {
+        broadcastEvent('task_summary_updated', context)
+      } else {
+        broadcastEvent('task_summary_refresh_failed', { taskId, error: 'Task not found' })
+      }
+    } catch (err: any) {
+      if (!request.dirty) {
+        broadcastEvent('task_summary_refresh_failed', { taskId, error: err?.message || 'Summary refresh failed' })
+      }
+    } finally {
+      if (summaryRefreshRunning.get(taskId) === request) {
+        summaryRefreshRunning.delete(taskId)
+      }
+    }
+  }
+}
+
 // --- Task API ---
 app.get('/api/tasks', async (c) => {
   const type = c.req.query('type')
@@ -128,6 +185,7 @@ app.post('/api/tasks/:id/logs', async (c) => {
   saveConversationId(c, c.req.param('id'))
   if (!body.silent) {
     broadcastEvent('entry_created', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
+    if (entry.type === 'log') scheduleTaskSummaryRefresh([c.req.param('id')])
   }
   return c.json(entry, 201)
 })
@@ -147,6 +205,9 @@ app.post('/api/tasks/logs/batch', async (c) => {
         broadcastEvent('entry_created', { taskId: entry.taskId, entryId: entry.id, type: entry.type }, c.get('clientId'))
       }
     }
+    if (!body.silent) {
+      scheduleTaskSummaryRefresh(entries.filter((entry) => entry.type === 'log').map((entry) => entry.taskId))
+    }
     return c.json(entries, 201)
   } catch (err: any) {
     const message = err?.message || 'Failed to create entries'
@@ -161,6 +222,7 @@ app.put('/api/tasks/:id/logs/:entryId', async (c) => {
   if (!entry) return c.json({ error: 'Not found' }, 404)
   saveConversationId(c, c.req.param('id'))
   broadcastEvent('entry_updated', { taskId: c.req.param('id'), entryId: entry.id }, c.get('clientId'))
+  if (entry.type === 'log') scheduleTaskSummaryRefresh([c.req.param('id')])
   return c.json(entry)
 })
 
@@ -169,6 +231,7 @@ app.delete('/api/tasks/:id/logs/:entryId', async (c) => {
   if (!ok) return c.json({ error: 'Not found' }, 404)
   saveConversationId(c, c.req.param('id'))
   broadcastEvent('entry_deleted', { taskId: c.req.param('id'), entryId: c.req.param('entryId') }, c.get('clientId'))
+  scheduleTaskSummaryRefresh([c.req.param('id')])
   return c.json({ success: true })
 })
 
@@ -425,6 +488,7 @@ app.put('/api/day-scripts/:date', async (c) => {
       const changedTask = await service.getTaskById(log.taskId)
       emitTaskChange(c, changedTask)
     }
+    scheduleTaskSummaryRefresh(result.createdLogs.map((log) => log.taskId))
     return c.json(result)
   } catch (err: any) {
     if (err?.message === 'REVISION_CONFLICT') {
@@ -443,6 +507,7 @@ app.post('/api/day-scripts/:date/confirm-progress-sync', async (c) => {
     const changedTask = await service.getTaskById(log.taskId)
     emitTaskChange(c, changedTask)
   }
+  scheduleTaskSummaryRefresh(createdLogs.map((log) => log.taskId))
   return c.json({ createdLogs })
 })
 

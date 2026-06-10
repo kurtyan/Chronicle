@@ -16,6 +16,7 @@
 
 - If `nvm` is unavailable in the current shell but `NVM_BIN` is present, `./scripts/with-node.sh` will use `NVM_BIN`. If neither is available, inspect the current environment first instead of hardcoding a user-specific absolute path into repo docs.
 - Do not assume `which node` from an interactive terminal matches the non-interactive build environment. Verify both `type node`/`type npm` and the effective `PATH` when builds behave inconsistently.
+- 新 worktree 可能没有安装依赖；若 `tauri: command not found` 或 Playwright 找不到包，先用 `./scripts/with-node.sh npm install`，并在 `tauri/` 下运行 `../scripts/with-node.sh npm install`。
 
 ## Build & Run
 

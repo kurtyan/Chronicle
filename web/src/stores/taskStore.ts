@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession, SearchResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession, SearchResult, TaskProgressContext } from '@/types'
 import * as api from '@/services/api'
 
 export interface DraftTask {
@@ -36,6 +36,8 @@ interface TaskState {
   searchQuery: string
   searchResults: SearchResult[]
   searchTokens: string[]
+  taskContexts: Record<string, TaskProgressContext>
+  taskSummaryUpdating: Set<string>
 
   loadTodos: () => Promise<void>
   setActiveTask: (id: string | null) => Promise<void>
@@ -67,6 +69,10 @@ interface TaskState {
   // Pinned tasks
   loadPinnedIds: () => Promise<void>
   togglePinned: (taskId: string) => Promise<void>
+  loadTaskContexts: (status?: string) => Promise<TaskProgressContext[]>
+  markTaskSummaryUpdating: (taskId: string) => void
+  receiveTaskSummaryContext: (context: TaskProgressContext) => void
+  receiveTaskSummaryFailure: (taskId: string, error: string) => void
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
@@ -93,6 +99,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   searchQuery: '',
   searchResults: [],
   searchTokens: [],
+  taskContexts: {},
+  taskSummaryUpdating: new Set(),
 
   loadTodos: async () => {
     set({ loading: true, error: null })
@@ -154,6 +162,55 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (pinned) next.add(taskId)
       else next.delete(taskId)
       return { pinnedIds: next }
+    })
+  },
+
+  loadTaskContexts: async (status = 'PENDING,DOING') => {
+    const contexts = await api.fetchTaskContexts(status)
+    set((state) => {
+      const next = { ...state.taskContexts }
+      for (const context of contexts) next[context.taskId] = context
+      return { taskContexts: next }
+    })
+    return contexts
+  },
+
+  markTaskSummaryUpdating: (taskId: string) => {
+    set((state) => {
+      const next = new Set(state.taskSummaryUpdating)
+      next.add(taskId)
+      const context = state.taskContexts[taskId]
+      return {
+        taskSummaryUpdating: next,
+        taskContexts: context
+          ? { ...state.taskContexts, [taskId]: { ...context, summary: { ...context.summary, stale: true, errorMessage: null } } }
+          : state.taskContexts,
+      }
+    })
+  },
+
+  receiveTaskSummaryContext: (context: TaskProgressContext) => {
+    set((state) => {
+      const updating = new Set(state.taskSummaryUpdating)
+      updating.delete(context.taskId)
+      return {
+        taskSummaryUpdating: updating,
+        taskContexts: { ...state.taskContexts, [context.taskId]: context },
+      }
+    })
+  },
+
+  receiveTaskSummaryFailure: (taskId: string, error: string) => {
+    set((state) => {
+      const updating = new Set(state.taskSummaryUpdating)
+      updating.delete(taskId)
+      const context = state.taskContexts[taskId]
+      return {
+        taskSummaryUpdating: updating,
+        taskContexts: context
+          ? { ...state.taskContexts, [taskId]: { ...context, summary: { ...context.summary, stale: true, errorMessage: error } } }
+          : state.taskContexts,
+      }
     })
   },
 
