@@ -255,6 +255,7 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
   const started = Date.now()
   let rawProviderResponse: string | null = null
   let rawResponse: string | null = null
+  let finishReason: string | null = null
   let parsedOutput: any = null
   let status = 'success'
   let errorMessage: string | null = null
@@ -272,7 +273,7 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
       body: JSON.stringify({
         model: settings.model,
         temperature: 0,
-        max_tokens: 300,
+        max_tokens: settings.taskSummaryMaxTokens,
         response_format: { type: 'json_object' },
         messages,
       }),
@@ -281,7 +282,11 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
     rawProviderResponse = text
     if (!response.ok) throw new Error(`LLM request failed (${response.status}): ${text.slice(0, 200)}`)
     const json = JSON.parse(text)
+    finishReason = json.choices?.[0]?.finish_reason ?? null
     rawResponse = String(json.choices?.[0]?.message?.content ?? '{}').trim()
+    if (finishReason === 'length') {
+      throw new Error('LLM output was truncated because finish_reason is length. Increase max tokens and retry.')
+    }
     const parsed = summarySchema.parse(parseLlmJsonObject(rawResponse))
     parsedOutput = {
       latestProgress: normalizeSummaryValue(parsed.latestProgress),
@@ -289,7 +294,7 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
     }
     return { taskId, ...parsedOutput, llmCallLogId: logId }
   } catch (err: any) {
-    status = rawResponse || rawProviderResponse ? 'parse_error' : 'error'
+    status = finishReason === 'length' ? 'truncated' : (rawResponse || rawProviderResponse ? 'parse_error' : 'error')
     errorMessage = err?.message ?? 'Task summary failed'
     parsedOutput = fallbackSummary(taskId)
     throw err
@@ -305,6 +310,7 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
       requestMessages: messages,
       rawProviderResponse,
       rawResponse,
+      finishReason,
       parsedOutput,
       status,
       errorMessage,

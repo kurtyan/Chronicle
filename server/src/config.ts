@@ -25,6 +25,8 @@ export interface ChronicleConfig {
     model: string
     apiKey: string
     timeoutMs: number
+    meetingExtractionMaxTokens: number
+    taskSummaryMaxTokens: number
     meetingExtractionPrompt: string
     taskSummaryPrompt: string
   }
@@ -52,6 +54,8 @@ const defaultConfig: ChronicleConfig = {
     model: 'qwen2.5:7b',
     apiKey: '',
     timeoutMs: 30000,
+    meetingExtractionMaxTokens: 4000,
+    taskSummaryMaxTokens: 1200,
     meetingExtractionPrompt: '',
     taskSummaryPrompt: '',
   },
@@ -111,6 +115,8 @@ export function getConfig(): ChronicleConfig {
       model: envLlmModel ?? fileConfig.llm?.model ?? defaultConfig.llm.model,
       apiKey: envLlmApiKey ?? fileConfig.llm?.apiKey ?? defaultConfig.llm.apiKey,
       timeoutMs: envLlmTimeoutMs ? parseInt(envLlmTimeoutMs, 10) : (fileConfig.llm?.timeoutMs ?? defaultConfig.llm.timeoutMs),
+      meetingExtractionMaxTokens: fileConfig.llm?.meetingExtractionMaxTokens ?? defaultConfig.llm.meetingExtractionMaxTokens,
+      taskSummaryMaxTokens: fileConfig.llm?.taskSummaryMaxTokens ?? defaultConfig.llm.taskSummaryMaxTokens,
       meetingExtractionPrompt: fileConfig.llm?.meetingExtractionPrompt ?? defaultConfig.llm.meetingExtractionPrompt,
       taskSummaryPrompt: fileConfig.llm?.taskSummaryPrompt ?? defaultConfig.llm.taskSummaryPrompt,
     },

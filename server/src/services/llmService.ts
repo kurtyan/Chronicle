@@ -52,6 +52,8 @@ export interface LlmSettings {
   model: string
   apiKey: string
   timeoutMs: number
+  meetingExtractionMaxTokens: number
+  taskSummaryMaxTokens: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string
@@ -68,6 +70,7 @@ export interface LlmCallLog {
   requestMessages: unknown
   rawProviderResponse: string | null
   rawResponse: string | null
+  finishReason: string | null
   parsedOutput: unknown
   status: string
   errorMessage: string | null
@@ -94,6 +97,24 @@ class LlmProviderResponseError extends Error {
   }
 }
 
+class LlmOutputTruncatedError extends Error {
+  constructor(
+    message: string,
+    readonly providerResponse: string,
+    readonly content: string,
+    readonly finishReason: string,
+  ) {
+    super(message)
+    this.name = 'LlmOutputTruncatedError'
+  }
+}
+
+function normalizeMaxTokens(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(16, Math.min(32000, Math.floor(parsed)))
+}
+
 export function getLlmSettings(): LlmSettings {
   const config = getConfig().llm
   return {
@@ -101,6 +122,8 @@ export function getLlmSettings(): LlmSettings {
     model: config.model,
     apiKey: config.apiKey,
     timeoutMs: Number.isFinite(config.timeoutMs) ? config.timeoutMs : 30000,
+    meetingExtractionMaxTokens: normalizeMaxTokens(config.meetingExtractionMaxTokens, 4000),
+    taskSummaryMaxTokens: normalizeMaxTokens(config.taskSummaryMaxTokens, 1200),
     meetingExtractionPrompt: config.meetingExtractionPrompt,
     defaultMeetingExtractionPrompt: DEFAULT_MEETING_EXTRACTION_PROMPT,
     taskSummaryPrompt: config.taskSummaryPrompt,
@@ -111,12 +134,20 @@ export function getLlmSettings(): LlmSettings {
 export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
   const current = getLlmSettings()
   const timeoutMs = input.timeoutMs === undefined ? current.timeoutMs : Math.max(1000, Math.min(300000, Number(input.timeoutMs) || 30000))
+  const meetingExtractionMaxTokens = input.meetingExtractionMaxTokens === undefined
+    ? current.meetingExtractionMaxTokens
+    : normalizeMaxTokens(input.meetingExtractionMaxTokens, 4000)
+  const taskSummaryMaxTokens = input.taskSummaryMaxTokens === undefined
+    ? current.taskSummaryMaxTokens
+    : normalizeMaxTokens(input.taskSummaryMaxTokens, 1200)
   updateConfig({
     llm: {
       baseUrl: input.baseUrl ?? current.baseUrl,
       model: input.model ?? current.model,
       apiKey: input.apiKey ?? current.apiKey,
       timeoutMs,
+      meetingExtractionMaxTokens,
+      taskSummaryMaxTokens,
       meetingExtractionPrompt: input.meetingExtractionPrompt ?? current.meetingExtractionPrompt,
       taskSummaryPrompt: input.taskSummaryPrompt ?? current.taskSummaryPrompt,
     },
@@ -160,20 +191,24 @@ export async function extractMeeting(rawContent: string, mode: 'record' | 'test'
   const started = Date.now()
   let rawProviderResponse: string | null = null
   let rawResponse: string | null = null
+  let finishReason: string | null = null
   let parsedOutput: any = null
   let status = 'success'
   let errorMessage: string | null = null
 
   try {
-    const response = await callChatCompletionsWithRaw(settings, messages, 1200)
+    const response = await callChatCompletionsWithRaw(settings, messages, settings.meetingExtractionMaxTokens)
     rawProviderResponse = response.providerResponse
     rawResponse = response.content
+    finishReason = response.finishReason
     const parsedJson = parseJsonObject(rawResponse)
     const validated = extractionSchema.parse(parsedJson)
     parsedOutput = normalizeExtraction(validated, rawContent)
   } catch (err: any) {
     if (err?.providerResponse && !rawProviderResponse) rawProviderResponse = err.providerResponse
-    status = err?.name === 'ZodError' || rawResponse || rawProviderResponse ? 'parse_error' : 'error'
+    if (err?.content && !rawResponse) rawResponse = err.content
+    if (err?.finishReason && !finishReason) finishReason = err.finishReason
+    status = err?.finishReason === 'length' ? 'truncated' : (err?.name === 'ZodError' || rawResponse || rawProviderResponse ? 'parse_error' : 'error')
     errorMessage = err?.message ?? 'LLM extraction failed'
     parsedOutput = fallbackExtraction(rawContent, [`LLM extraction failed: ${errorMessage}`])
   } finally {
@@ -187,6 +222,7 @@ export async function extractMeeting(rawContent: string, mode: 'record' | 'test'
       requestMessages: messages,
       rawProviderResponse,
       rawResponse,
+      finishReason,
       parsedOutput,
       status,
       errorMessage,
@@ -205,7 +241,7 @@ async function callChatCompletions(settings: LlmSettings, messages: Array<{ role
   return (await callChatCompletionsWithRaw(settings, messages, maxTokens)).content
 }
 
-async function callChatCompletionsWithRaw(settings: LlmSettings, messages: Array<{ role: string; content: string }>, maxTokens: number): Promise<{ content: string; providerResponse: string }> {
+async function callChatCompletionsWithRaw(settings: LlmSettings, messages: Array<{ role: string; content: string }>, maxTokens: number): Promise<{ content: string; providerResponse: string; finishReason: string | null }> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
   try {
@@ -232,10 +268,12 @@ async function callChatCompletionsWithRaw(settings: LlmSettings, messages: Array
     } catch (err: any) {
       throw new LlmProviderResponseError(err?.message ?? 'Provider returned invalid JSON', text)
     }
-    return {
-      content: json.choices?.[0]?.message?.content ?? text,
-      providerResponse: text,
+    const finishReason = json.choices?.[0]?.finish_reason ?? null
+    const content = json.choices?.[0]?.message?.content ?? text
+    if (finishReason === 'length') {
+      throw new LlmOutputTruncatedError('LLM output was truncated because finish_reason is length. Increase max tokens and retry.', text, content, finishReason)
     }
+    return { content, providerResponse: text, finishReason }
   } finally {
     clearTimeout(timeout)
   }
@@ -367,6 +405,7 @@ export function insertLlmCallLog(data: {
   requestMessages: unknown
   rawProviderResponse?: string | null
   rawResponse: string | null
+  finishReason?: string | null
   parsedOutput: unknown
   status: string
   errorMessage: string | null
@@ -375,8 +414,8 @@ export function insertLlmCallLog(data: {
   getDb().prepare(`
     INSERT INTO llm_call_logs (
       id, feature, prompt_version, model, base_url, request_input, request_messages,
-      raw_provider_response, raw_response, parsed_output, status, error_message, latency_ms, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      raw_provider_response, raw_response, finish_reason, parsed_output, status, error_message, latency_ms, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     data.id,
     data.feature,
@@ -387,6 +426,7 @@ export function insertLlmCallLog(data: {
     JSON.stringify(data.requestMessages),
     data.rawProviderResponse ?? null,
     data.rawResponse,
+    data.finishReason ?? null,
     JSON.stringify(data.parsedOutput),
     data.status,
     data.errorMessage,
@@ -423,6 +463,7 @@ function rowToLog(row: any): LlmCallLog {
     requestMessages: safeJson(row.request_messages),
     rawProviderResponse: row.raw_provider_response,
     rawResponse: row.raw_response,
+    finishReason: row.finish_reason,
     parsedOutput: safeJson(row.parsed_output),
     status: row.status,
     errorMessage: row.error_message,

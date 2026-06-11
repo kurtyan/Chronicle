@@ -144,6 +144,8 @@ export interface LlmSettings {
   model: string
   apiKey: string
   timeoutMs: number
+  meetingExtractionMaxTokens: number
+  taskSummaryMaxTokens: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string

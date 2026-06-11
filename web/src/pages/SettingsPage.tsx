@@ -43,6 +43,7 @@ interface LlmCallLogSummary {
   requestMessages: any
   rawProviderResponse: string | null
   rawResponse: string | null
+  finishReason: string | null
   parsedOutput: any
   status: string
   errorMessage: string | null
@@ -89,6 +90,11 @@ function formatTimestamp(ts: number | null): string {
   return new Date(ts).toLocaleString()
 }
 
+function normalizeMaxTokens(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.max(16, Math.min(32000, Math.floor(value)))
+}
+
 function LogJsonBlock({ label, value }: { label: string; value: unknown }) {
   return (
     <div className="space-y-1">
@@ -133,6 +139,8 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
     model: settings.model,
     apiKey: settings.apiKey,
     timeoutMs: settings.timeoutMs,
+    meetingExtractionMaxTokens: normalizeMaxTokens(settings.meetingExtractionMaxTokens, 4000),
+    taskSummaryMaxTokens: normalizeMaxTokens(settings.taskSummaryMaxTokens, 1200),
     meetingExtractionPrompt: meetingPrompt === defaultMeetingPrompt ? '' : settings.meetingExtractionPrompt,
     taskSummaryPrompt: taskSummaryPrompt === defaultTaskSummaryPrompt ? '' : settings.taskSummaryPrompt,
   }
@@ -446,6 +454,30 @@ function LlmProviderSettingsSection({
             onChange={(e) => onUpdate({ timeoutMs: parseInt(e.target.value, 10) || 30000 })}
           />
         </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Meeting Max Tokens</span>
+          <input
+            type="number"
+            min={16}
+            max={32000}
+            step={100}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={settings.meetingExtractionMaxTokens}
+            onChange={(e) => onUpdate({ meetingExtractionMaxTokens: normalizeMaxTokens(parseInt(e.target.value, 10), 4000) })}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Task Summary Max Tokens</span>
+          <input
+            type="number"
+            min={16}
+            max={32000}
+            step={100}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={settings.taskSummaryMaxTokens}
+            onChange={(e) => onUpdate({ taskSummaryMaxTokens: normalizeMaxTokens(parseInt(e.target.value, 10), 1200) })}
+          />
+        </label>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         <button onClick={onSave} disabled={saving} className="dialog-button-primary">
@@ -497,6 +529,7 @@ function LlmCallLogsSection({
           {logs.map((log) => {
             const mode = log.requestInput?.mode ?? 'unknown'
             const expanded = expandedLogId === log.id
+            const isTruncated = log.finishReason === 'length' || log.status === 'truncated'
             return (
               <div key={log.id} className="rounded-md border border-border/70 bg-muted/10">
                 <button
@@ -516,6 +549,18 @@ function LlmCallLogsSection({
                           {log.status}
                         </span>
                         <span className="text-xs text-muted-foreground">{mode}</span>
+                        {log.finishReason && (
+                          <span className={`rounded px-1.5 py-0.5 text-xs ${
+                            isTruncated ? 'bg-red-500/10 text-red-600' : 'bg-muted text-muted-foreground'
+                          }`}>
+                            finish: {log.finishReason}
+                          </span>
+                        )}
+                        {isTruncated && (
+                          <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-xs text-red-600">
+                            output truncated
+                          </span>
+                        )}
                         <span className="truncate text-xs text-muted-foreground">{log.promptVersion}</span>
                       </div>
                       <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
@@ -530,8 +575,15 @@ function LlmCallLogsSection({
                 </button>
                 {expanded && (
                   <div className="space-y-3 border-t border-border/70 p-3">
+                    {isTruncated && (
+                      <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <div>LLM output was truncated because finish_reason is length. Increase max tokens and retry.</div>
+                      </div>
+                    )}
                     <LogJsonBlock label="Request Input" value={log.requestInput} />
                     <LogJsonBlock label="Request Messages" value={log.requestMessages} />
+                    {log.finishReason && <LogTextBlock label="Finish Reason" value={log.finishReason} />}
                     <LogJsonBlock label="Parsed Output" value={log.parsedOutput} />
                     {log.rawProviderResponse && <LogTextBlock label="Provider Raw Response" value={log.rawProviderResponse} />}
                     {log.rawResponse && <LogTextBlock label="Assistant Message Content" value={log.rawResponse} />}
@@ -1018,6 +1070,8 @@ export function SettingsPage() {
     model: '',
     apiKey: '',
     timeoutMs: 30000,
+    meetingExtractionMaxTokens: 4000,
+    taskSummaryMaxTokens: 1200,
     meetingExtractionPrompt: '',
     defaultMeetingExtractionPrompt: '',
     taskSummaryPrompt: '',
