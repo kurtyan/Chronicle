@@ -3,7 +3,7 @@ import { Extension } from '@tiptap/core'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
-import { Plugin, PluginKey } from '@tiptap/pm/state'
+import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -50,6 +50,11 @@ type LineMapping = {
   from: number
   to: number
   topIndex: number
+}
+
+type LineNodePosition = {
+  pos: number
+  node: ProseMirrorNode
 }
 
 const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock', 'horizontalRule', 'image', 'imageResize'])
@@ -153,6 +158,87 @@ function getSelectionLineIndex(editor: Editor): number {
   return 0
 }
 
+function collectLineNodePositions(doc: ProseMirrorNode): LineNodePosition[] {
+  const positions: LineNodePosition[] = []
+  doc.descendants((node, pos) => {
+    if (!isLineNode(node)) return true
+    positions.push({ pos, node })
+    return false
+  })
+  return positions
+}
+
+function findSelectionLinePositionIndex(editor: Editor, lines: LineNodePosition[]): number {
+  const selectionPos = editor.state.selection.$anchor.pos
+  const containingIndex = lines.findIndex(({ pos, node }) => selectionPos >= pos && selectionPos <= pos + node.nodeSize)
+  if (containingIndex >= 0) return containingIndex
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (selectionPos >= lines[index].pos) return index
+  }
+  return 0
+}
+
+function findTextSelectionInsideLine(doc: ProseMirrorNode, line: LineNodePosition, edge: 'start' | 'end'): TextSelection | null {
+  if (line.node.isTextblock) {
+    const pos = edge === 'start' ? line.pos + 1 : line.pos + line.node.nodeSize - 1
+    return TextSelection.create(doc, pos)
+  }
+
+  let targetPos: number | null = null
+  line.node.descendants((node, pos) => {
+    if (!node.isTextblock) return true
+    targetPos = edge === 'start'
+      ? line.pos + pos + 1
+      : line.pos + pos + node.nodeSize - 1
+    return false
+  })
+
+  return targetPos === null ? null : TextSelection.create(doc, targetPos)
+}
+
+function moveSelectionToTextblockBoundary(editor: Editor, edge: 'start' | 'end'): boolean {
+  const { state, view } = editor
+  const { $anchor } = state.selection
+  if (!$anchor.parent.isTextblock) return false
+
+  const pos = edge === 'start' ? $anchor.start() : $anchor.end()
+  view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, pos)).scrollIntoView())
+  return true
+}
+
+function moveSelectionAcrossSeparator(editor: Editor, direction: 'up' | 'down'): boolean {
+  const { state, view } = editor
+  const lines = collectLineNodePositions(state.doc)
+  if (lines.length === 0) return false
+
+  const currentIndex = findSelectionLinePositionIndex(editor, lines)
+  const step = direction === 'down' ? 1 : -1
+  const currentLine = lines[currentIndex]
+  const adjacentLine = lines[currentIndex + step]
+  const separatorIndex = currentLine?.node.type.name === 'horizontalRule'
+    ? currentIndex
+    : adjacentLine?.node.type.name === 'horizontalRule'
+      ? currentIndex + step
+      : -1
+  if (separatorIndex < 0) return false
+
+  for (let index = separatorIndex + step; index >= 0 && index < lines.length; index += step) {
+    if (lines[index].node.type.name === 'horizontalRule') continue
+    const selection = findTextSelectionInsideLine(state.doc, lines[index], direction === 'down' ? 'start' : 'end')
+    if (selection) {
+      view.dispatch(state.tr.setSelection(selection).scrollIntoView())
+      return true
+    }
+
+    const fallbackPos = direction === 'down' ? lines[index].pos : lines[index].pos + lines[index].node.nodeSize
+    view.dispatch(state.tr.setSelection(Selection.near(state.doc.resolve(fallbackPos), step)).scrollIntoView())
+    return true
+  }
+
+  return false
+}
+
 export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
   const [mentionState, setMentionState] = useState<MentionState>(null)
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
@@ -209,6 +295,10 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           scheduleClipboardImageFallback()
           return false
         }
+        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && (event.key === 'Home' || event.key === 'End')) {
+          event.preventDefault()
+          return moveSelectionToTextblockBoundary(editorRef.current!, event.key === 'Home' ? 'start' : 'end')
+        }
         if (mentionState) {
           if (event.key === 'ArrowDown') {
             event.preventDefault()
@@ -230,6 +320,12 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           }
           if (event.key === 'Escape') {
             setMentionState(null)
+            return true
+          }
+        }
+        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+          if (moveSelectionAcrossSeparator(editorRef.current!, event.key === 'ArrowDown' ? 'down' : 'up')) {
+            event.preventDefault()
             return true
           }
         }

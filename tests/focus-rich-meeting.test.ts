@@ -17,22 +17,38 @@ async function createTask(page: Page, title: string) {
   return res.json()
 }
 
+async function saveDayScript(page: Page, date: string, document: Record<string, any>) {
+  const currentRes = await page.request.get(`/api/day-scripts/${date}`)
+  expect(currentRes.ok()).toBeTruthy()
+  const current = await currentRes.json()
+  const saveRes = await page.request.put(`/api/day-scripts/${date}`, {
+    data: {
+      expectedRevision: current.revision ?? 0,
+      document,
+    },
+  })
+  expect(saveRes.ok()).toBeTruthy()
+  return saveRes.json()
+}
+
+async function clearFocusEditor(page: Page) {
+  const editor = page.locator('.day-script-editor.ProseMirror')
+  await editor.click()
+  await page.keyboard.press('ControlOrMeta+A')
+  await page.keyboard.press('Backspace')
+  return editor
+}
+
 test.describe('Focus rich editor and meeting task mentions', () => {
   test('focus editor supports list and code block input rules', async ({ page }) => {
     const date = uniqueScriptDate(Date.now() % 20 + 1)
 
-    await page.request.put(`/api/day-scripts/${date}`, {
-      data: {
-        expectedRevision: 0,
-        document: { type: 'doc', content: [{ type: 'paragraph' }] },
-      },
-    })
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
 
     await page.goto(`/today?date=${date}&lang=en`)
     await page.waitForLoadState('load')
 
-    const editor = page.locator('.day-script-editor.ProseMirror')
-    await editor.click()
+    const editor = await clearFocusEditor(page)
     await page.keyboard.type('- list item')
     await page.keyboard.press('Enter')
     await page.keyboard.press('Enter')
@@ -47,21 +63,58 @@ test.describe('Focus rich editor and meeting task mentions', () => {
   test('focus editor converts three dashes to a separator', async ({ page }) => {
     const date = uniqueScriptDate(Date.now() % 20 + 40)
 
-    await page.request.put(`/api/day-scripts/${date}`, {
-      data: {
-        expectedRevision: 0,
-        document: { type: 'doc', content: [{ type: 'paragraph' }] },
-      },
-    })
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
 
     await page.goto(`/today?date=${date}&lang=en`)
     await page.waitForLoadState('load')
 
-    const editor = page.locator('.day-script-editor.ProseMirror')
-    await editor.click()
+    const editor = await clearFocusEditor(page)
     await page.keyboard.type('---')
 
     await expect(editor.locator('hr')).toBeVisible()
+  })
+
+  test('focus editor Home and End move within the current line', async ({ page }) => {
+    const date = uniqueScriptDate(Date.now() % 20 + 45)
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type('abc')
+    await page.keyboard.press('Home')
+    await page.keyboard.type('X')
+    await page.keyboard.press('End')
+    await page.keyboard.type('Y')
+
+    await expect(editor.locator('p').first()).toContainText('XabcY')
+  })
+
+  test('focus editor ArrowDown moves past a separator', async ({ page }) => {
+    const date = uniqueScriptDate(Date.now() % 20 + 50)
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type('10:00-10:10 before')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('---')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('after')
+    await expect(editor.locator('hr')).toBeVisible()
+
+    await editor.getByText('before').click()
+    await page.keyboard.press('End')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.type('X')
+
+    await expect(editor.locator('p').nth(1)).toContainText('X')
+    await expect(editor.locator('p').nth(2)).toContainText('after')
   })
 
   test('selecting a focus task mention opens that task detail immediately', async ({ page }) => {
