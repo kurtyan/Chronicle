@@ -756,10 +756,13 @@ Rules:
 - latestProgress should include important progress, decisions, feedback, and current outcome from the full entry history.
 - latestProgress must be concise, ideally 1-2 short sentences.
 - latestProgress must not be empty.
-- Only fill nextStep when the supplied logs explicitly mention a next step, next action, follow-up plan, or equivalent wording.
-- For nextStep only: if multiple entries mention next steps, use the next-step description from the entry with the latest Submitted At among those next-step entries.
+- nextStep must represent the latest explicit next step that is still pending at the end of the supplied entry timeline.
+- For nextStep, read entries in Submitted At order and reason about whether later entries completed, solved, canceled, replaced, or superseded earlier next-step items.
+- If a later entry clearly completes, solves, cancels, replaces, or supersedes an earlier next step, do not return that earlier next step.
+- If a later entry records unrelated progress but does not complete, solve, cancel, replace, or supersede an earlier next step, keep that earlier next step.
+- If a later entry states a new explicit next step, that new next step replaces earlier next steps unless it is itself completed, canceled, or replaced by an even later entry.
 - Do not use the latest entry as the sole basis for latestProgress unless it is the only supplied entry.
-- If there is no explicit next step in the supplied logs, nextStep must be an empty string.
+- If there is no explicit next step still pending at the end of the timeline, nextStep must be an empty string.
 - nextStep must never be null.
 - Keep both JSON string values on one line. Replace any line breaks with spaces.
 - Do not include markdown fences or prose outside JSON.`,
