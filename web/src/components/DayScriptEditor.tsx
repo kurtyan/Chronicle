@@ -1,9 +1,9 @@
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
-import { Extension } from '@tiptap/core'
+import { Extension, Node, mergeAttributes } from '@tiptap/core'
 import Link from '@tiptap/extension-link'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
-import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -17,6 +17,7 @@ interface DayScriptEditorProps {
   value: DayScriptDocument['document']
   tasks: Task[]
   scriptDate: string
+  todayScriptDate: string
   onChange: (document: Record<string, any>) => void
   onSave: () => void
   onNavigateTask: (taskId: string) => void
@@ -37,6 +38,40 @@ const TaskLink = Link.extend({
   },
 })
 
+const NewTaskBadge = Node.create({
+  name: 'newTaskBadge',
+  group: 'inline',
+  inline: true,
+  atom: true,
+  selectable: false,
+
+  addAttributes() {
+    return {
+      label: {
+        default: 'new',
+        parseHTML: (element) => element.getAttribute('data-label') || 'new',
+        renderHTML: (attributes) => ({ 'data-label': attributes.label || 'new' }),
+      },
+    }
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-day-script-new-task]' }]
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return [
+      'span',
+      mergeAttributes(HTMLAttributes, {
+        'data-day-script-new-task': 'true',
+        contenteditable: 'false',
+        class: 'day-script-new-task-badge',
+      }),
+      'new',
+    ]
+  },
+})
+
 type MentionState = {
   query: string
   from: number
@@ -52,15 +87,20 @@ type LineMapping = {
   topIndex: number
 }
 
-type LineNodePosition = {
-  pos: number
-  node: ProseMirrorNode
-}
-
 const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock', 'horizontalRule', 'image', 'imageResize'])
 const LINE_ELEMENT_SELECTOR = 'p, h1, h2, h3, h4, blockquote, li, pre, hr, img'
 const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
 const TIME_HEADER_RE = new RegExp(`^${TIME_VALUE_PATTERN}\\s*-\\s*${TIME_VALUE_PATTERN}(?:\\s+|$)`)
+
+function hasTaskLinkNode(node: ProseMirrorNode): boolean {
+  let found = false
+  node.descendants((child) => {
+    if (found || !child.isText) return !found
+    found = child.marks.some((mark) => mark.type.name === 'link' && typeof mark.attrs.taskId === 'string' && mark.attrs.taskId)
+    return !found
+  })
+  return found
+}
 
 const FocusLineDecorations = Extension.create({
   name: 'focusLineDecorations',
@@ -74,7 +114,7 @@ const FocusLineDecorations = Extension.create({
             state.doc.descendants((node, pos) => {
               if (!LINE_NODE_TYPES.has(node.type.name)) return true
               const text = node.textBetween(0, node.content.size, '\n', '\n').replace(/\u00a0/g, ' ').trimEnd()
-              if (!TIME_HEADER_RE.test(text)) return true
+              if (!TIME_HEADER_RE.test(text) && !hasTaskLinkNode(node)) return true
               const classes = ['day-script-line-header']
               if (text.includes('✅')) classes.push('day-script-line-complete')
               decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: classes.join(' ') }))
@@ -87,15 +127,6 @@ const FocusLineDecorations = Extension.create({
     ]
   },
 })
-
-function isTodayDate(date: string): boolean {
-  const now = new Date()
-  return date === [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-  ].join('-')
-}
 
 function isLineNode(node: ProseMirrorNode): boolean {
   return LINE_NODE_TYPES.has(node.type.name)
@@ -158,45 +189,6 @@ function getSelectionLineIndex(editor: Editor): number {
   return 0
 }
 
-function collectLineNodePositions(doc: ProseMirrorNode): LineNodePosition[] {
-  const positions: LineNodePosition[] = []
-  doc.descendants((node, pos) => {
-    if (!isLineNode(node)) return true
-    positions.push({ pos, node })
-    return false
-  })
-  return positions
-}
-
-function findSelectionLinePositionIndex(editor: Editor, lines: LineNodePosition[]): number {
-  const selectionPos = editor.state.selection.$anchor.pos
-  const containingIndex = lines.findIndex(({ pos, node }) => selectionPos >= pos && selectionPos <= pos + node.nodeSize)
-  if (containingIndex >= 0) return containingIndex
-
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (selectionPos >= lines[index].pos) return index
-  }
-  return 0
-}
-
-function findTextSelectionInsideLine(doc: ProseMirrorNode, line: LineNodePosition, edge: 'start' | 'end'): TextSelection | null {
-  if (line.node.isTextblock) {
-    const pos = edge === 'start' ? line.pos + 1 : line.pos + line.node.nodeSize - 1
-    return TextSelection.create(doc, pos)
-  }
-
-  let targetPos: number | null = null
-  line.node.descendants((node, pos) => {
-    if (!node.isTextblock) return true
-    targetPos = edge === 'start'
-      ? line.pos + pos + 1
-      : line.pos + pos + node.nodeSize - 1
-    return false
-  })
-
-  return targetPos === null ? null : TextSelection.create(doc, targetPos)
-}
-
 function moveSelectionToTextblockBoundary(editor: Editor, edge: 'start' | 'end'): boolean {
   const { state, view } = editor
   const { $anchor } = state.selection
@@ -205,38 +197,6 @@ function moveSelectionToTextblockBoundary(editor: Editor, edge: 'start' | 'end')
   const pos = edge === 'start' ? $anchor.start() : $anchor.end()
   view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, pos)).scrollIntoView())
   return true
-}
-
-function moveSelectionAcrossSeparator(editor: Editor, direction: 'up' | 'down'): boolean {
-  const { state, view } = editor
-  const lines = collectLineNodePositions(state.doc)
-  if (lines.length === 0) return false
-
-  const currentIndex = findSelectionLinePositionIndex(editor, lines)
-  const step = direction === 'down' ? 1 : -1
-  const currentLine = lines[currentIndex]
-  const adjacentLine = lines[currentIndex + step]
-  const separatorIndex = currentLine?.node.type.name === 'horizontalRule'
-    ? currentIndex
-    : adjacentLine?.node.type.name === 'horizontalRule'
-      ? currentIndex + step
-      : -1
-  if (separatorIndex < 0) return false
-
-  for (let index = separatorIndex + step; index >= 0 && index < lines.length; index += step) {
-    if (lines[index].node.type.name === 'horizontalRule') continue
-    const selection = findTextSelectionInsideLine(state.doc, lines[index], direction === 'down' ? 'start' : 'end')
-    if (selection) {
-      view.dispatch(state.tr.setSelection(selection).scrollIntoView())
-      return true
-    }
-
-    const fallbackPos = direction === 'down' ? lines[index].pos : lines[index].pos + lines[index].node.nodeSize
-    view.dispatch(state.tr.setSelection(Selection.near(state.doc.resolve(fallbackPos), step)).scrollIntoView())
-    return true
-  }
-
-  return false
 }
 
 function splitAfterLink(editor: Editor): boolean {
@@ -258,11 +218,49 @@ function splitAfterLink(editor: Editor): boolean {
   return true
 }
 
-export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
+function findTaskMentionRangeInCurrentLine(editor: Editor): { from: number; to: number } | null {
+  const { state } = editor
+  const { $anchor } = state.selection
+  if (!$anchor.parent.isTextblock) return null
+
+  let range: { from: number; to: number } | null = null
+  state.doc.nodesBetween($anchor.start(), $anchor.end(), (node, pos) => {
+    if (range || !node.isText) return true
+    const hasTaskLink = node.marks.some((mark) => mark.type.name === 'link' && typeof mark.attrs.taskId === 'string' && mark.attrs.taskId)
+    if (!hasTaskLink) return true
+    range = { from: pos, to: pos + node.nodeSize }
+    return false
+  })
+  return range
+}
+
+function getMentionStateFromSelection(editor: Editor): MentionState {
+  const { state, view } = editor
+  const { from } = state.selection
+  const textBefore = state.doc.textBetween(Math.max(0, from - 80), from, '\n', '\n')
+  const match = textBefore.match(/(?:^|\s)@([^\s@]*)$/)
+  if (!match) return null
+  const query = match[1] ?? ''
+  const coords = view.coordsAtPos(from)
+  return {
+    query,
+    from: from - query.length - 1,
+    to: from,
+    anchorTop: coords.top,
+    anchorBottom: coords.bottom,
+    left: coords.left,
+  }
+}
+
+export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onChange, onSave, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
   const [mentionState, setMentionState] = useState<MentionState>(null)
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
+  const mentionStateRef = useRef<MentionState>(null)
+  const filteredTasksRef = useRef<Task[]>([])
+  const tasksRef = useRef<Task[]>(tasks)
+  const selectedMentionIndexRef = useRef(0)
   const suppressEditingNotificationRef = useRef(false)
   const lastCursorTaskIdRef = useRef<string | null>(null)
   const currentValueRef = useRef(JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] }))
@@ -276,6 +274,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
         codeBlock: false,
       }),
       WrappedCodeBlock,
+      NewTaskBadge,
       ChronicleImage.configure({
         inline: false,
       }),
@@ -304,6 +303,16 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
         }
         return false
       },
+      handleTextInput: (view, from, to, text) => {
+        if (text !== '-') return false
+        const { state } = view
+        const { $from } = state.selection
+        if (!$from.parent.isTextblock) return false
+        const textBefore = state.doc.textBetween($from.start(), from, '\n', '\n')
+        if (textBefore !== '--') return false
+        view.dispatch(state.tr.insertText(text, from, to))
+        return true
+      },
       handleKeyDown: (_view, event) => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
           event.preventDefault()
@@ -318,10 +327,10 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           event.preventDefault()
           return moveSelectionToTextblockBoundary(editorRef.current!, event.key === 'Home' ? 'start' : 'end')
         }
-        if (mentionState) {
+        if (mentionStateRef.current) {
           if (event.key === 'ArrowDown') {
             event.preventDefault()
-            setSelectedMentionIndex((index) => Math.min(index + 1, filteredTasks.length - 1))
+            setSelectedMentionIndex((index) => Math.min(index + 1, filteredTasksRef.current.length - 1))
             return true
           }
           if (event.key === 'ArrowUp') {
@@ -330,10 +339,10 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
             return true
           }
           if (event.key === 'Enter' || event.key === 'Tab') {
-            const task = filteredTasks[selectedMentionIndex]
+            const task = getMentionTasks()[selectedMentionIndexRef.current]
             if (task) {
               event.preventDefault()
-              insertMention(task.id, task.title)
+              insertMention(task.id, task.title, mentionStateRef.current)
               return true
             }
           }
@@ -344,12 +353,6 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
         }
         if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === 'Enter') {
           if (splitAfterLink(editorRef.current!)) {
-            event.preventDefault()
-            return true
-          }
-        }
-        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-          if (moveSelectionAcrossSeparator(editorRef.current!, event.key === 'ArrowDown' ? 'down' : 'up')) {
             event.preventDefault()
             return true
           }
@@ -399,6 +402,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
       },
     },
     onCreate: ({ editor: nextEditor }) => {
+      editorRef.current = nextEditor
       scheduleApplyBlockClasses(nextEditor)
     },
     onUpdate: ({ editor: nextEditor }) => {
@@ -433,7 +437,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
   useEffect(() => {
     if (!editor) return
     scheduleApplyBlockClasses(editor)
-  }, [editor, scriptDate])
+  }, [editor, scriptDate, todayScriptDate])
 
   useEffect(() => {
     if (!editor) return
@@ -445,6 +449,42 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     return () => cancelClipboardImageFallback()
   }, [])
 
+  useEffect(() => {
+    const handleMentionKeyDown = (event: KeyboardEvent) => {
+      if (!mentionStateRef.current) return
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        event.stopPropagation()
+        setSelectedMentionIndex((index) => Math.min(index + 1, filteredTasksRef.current.length - 1))
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        event.stopPropagation()
+        setSelectedMentionIndex((index) => Math.max(index - 1, 0))
+        return
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const task = getMentionTasks()[selectedMentionIndexRef.current]
+        if (!task) return
+        event.preventDefault()
+        event.stopPropagation()
+        insertMention(task.id, task.title, mentionStateRef.current)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopPropagation()
+        mentionStateRef.current = null
+        setMentionState(null)
+      }
+    }
+
+    document.addEventListener('keydown', handleMentionKeyDown, true)
+    return () => document.removeEventListener('keydown', handleMentionKeyDown, true)
+  }, [])
+
   const filteredTasks = useMemo(() => {
     const query = mentionState?.query.trim().toLowerCase() ?? ''
     const pool = tasks.filter((task) => task.status === 'PENDING' || task.status === 'DOING')
@@ -453,6 +493,9 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
       task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)
     ).slice(0, 8)
   }, [mentionState?.query, tasks])
+  tasksRef.current = tasks
+  filteredTasksRef.current = filteredTasks
+  selectedMentionIndexRef.current = selectedMentionIndex
 
   useEffect(() => {
     setSelectedMentionIndex(0)
@@ -464,42 +507,74 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     const textBefore = state.doc.textBetween(Math.max(0, from - 80), from, '\n', '\n')
     const match = textBefore.match(/(?:^|\s)@([^\s@]*)$/)
     if (!match) {
+      mentionStateRef.current = null
       setMentionState(null)
       return
     }
     const query = match[1] ?? ''
     const mentionFrom = from - query.length - 1
     const coords = view.coordsAtPos(from)
-    setMentionState({
+    const nextMentionState = {
       query,
       from: mentionFrom,
       to: from,
       anchorTop: coords.top,
       anchorBottom: coords.bottom,
       left: coords.left,
-    })
+    }
+    mentionStateRef.current = nextMentionState
+    setMentionState(nextMentionState)
   }
 
-  function insertMention(taskId: string, title: string) {
-    if (!editor || !mentionState) return
-    editor.chain().focus().insertContentAt(
-      { from: mentionState.from, to: mentionState.to },
-      {
-        type: 'text',
-        text: `@${title}`,
-        marks: [
-          {
-            type: 'link',
-            attrs: {
-              href: `/today?task=${encodeURIComponent(taskId)}`,
-              taskId,
+  function insertMention(taskId: string, title: string, activeMention?: NonNullable<MentionState> | null) {
+    const activeEditor = editorRef.current
+    const activeMentionState = activeMention ?? mentionStateRef.current ?? (activeEditor ? getMentionStateFromSelection(activeEditor) : null)
+    if (!activeEditor || !activeMentionState) return
+    const taskMention = activeEditor.schema.text(`@${title}`, [
+      activeEditor.schema.marks.link.create({
+        href: `/today?task=${encodeURIComponent(taskId)}`,
+        taskId,
+      }),
+    ])
+    const existingRange = findTaskMentionRangeInCurrentLine(activeEditor)
+    if (existingRange && (existingRange.from !== activeMentionState.from || existingRange.to !== activeMentionState.to)) {
+      let tr = activeEditor.state.tr.replaceWith(existingRange.from, existingRange.to, taskMention)
+      const mappedMentionFrom = tr.mapping.map(activeMentionState.from)
+      const mappedMentionTo = tr.mapping.map(activeMentionState.to)
+      if (mappedMentionFrom < mappedMentionTo) tr = tr.delete(mappedMentionFrom, mappedMentionTo)
+      tr = tr.insertText(' ', tr.selection.from)
+      activeEditor.view.dispatch(tr.scrollIntoView())
+      activeEditor.commands.focus()
+    } else {
+      activeEditor.chain().focus().insertContentAt(
+        { from: activeMentionState.from, to: activeMentionState.to },
+        {
+          type: 'text',
+          text: `@${title}`,
+          marks: [
+            {
+              type: 'link',
+              attrs: {
+                href: `/today?task=${encodeURIComponent(taskId)}`,
+                taskId,
+              },
             },
-          },
-        ],
-      }
-    ).insertContent(' ').run()
+          ],
+        }
+      ).insertContent(' ').run()
+    }
+    mentionStateRef.current = null
     setMentionState(null)
     onNavigateTask(taskId)
+  }
+
+  function getMentionTasks(): Task[] {
+    const query = mentionStateRef.current?.query.trim().toLowerCase() ?? ''
+    const pool = tasksRef.current.filter((task) => task.status === 'PENDING' || task.status === 'DOING')
+    if (!query) return pool.slice(0, 8)
+    return pool.filter((task) =>
+      task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)
+    ).slice(0, 8)
   }
 
   async function pasteClipboardImage(nextEditor: Editor | null) {
@@ -567,11 +642,14 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
     if (!root) return
     const lineElements = collectLineElements(root)
     const blocks = parseDayScriptDocument(nextEditor.getJSON())
-    const currentIndex = isTodayDate(scriptDate) ? findActiveBlock(blocks, new Date()) : -1
+    const currentIndex = scriptDate === todayScriptDate ? findActiveBlock(blocks, new Date()) : -1
 
     lineElements.forEach((child) => {
       child.classList.remove('day-script-line-header', 'day-script-line-active', 'day-script-line-complete')
-      if (TIME_HEADER_RE.test((child.textContent ?? '').replace(/\u00a0/g, ' ').trimEnd())) {
+      if (
+        TIME_HEADER_RE.test((child.textContent ?? '').replace(/\u00a0/g, ' ').trimEnd())
+        || Boolean(child.querySelector('a[data-task-id]'))
+      ) {
         child.classList.add('day-script-line-header')
       }
     })
@@ -612,19 +690,23 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
             className="fixed max-h-72 w-80 overflow-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
             style={{ top, left, zIndex: 2147483647 }}
           >
-            {filteredTasks.map((task, index) => (
+            {filteredTasks.map((task, index) => {
+              const activeMentionState = mentionState
+              return (
               <button
                 key={task.id}
                 className={`flex w-full items-start justify-between rounded-lg px-3 py-2 text-left ${index === selectedMentionIndex ? 'bg-primary/10 text-foreground' : 'hover:bg-muted'}`}
-                onMouseDown={(event) => {
+                onPointerDown={(event) => {
                   event.preventDefault()
-                  insertMention(task.id, task.title)
+                  event.stopPropagation()
+                  insertMention(task.id, task.title, activeMentionState)
                 }}
               >
                 <span className="pr-3">{task.title}</span>
                 <span className="text-xs text-muted-foreground">{task.status}</span>
               </button>
-            ))}
+              )
+            })}
           </div>
         )
       })(),
@@ -724,7 +806,9 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           background: hsl(var(--muted));
           border-radius: 0.5rem;
           margin: 0.5rem 0;
-          overflow-x: auto;
+          min-height: calc(1.5em + 1.3rem);
+          max-height: calc(15em + 1.3rem);
+          overflow: auto;
           padding: 0.65rem 1rem;
           display: block;
         }
@@ -761,6 +845,20 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           text-decoration: underline;
           text-underline-offset: 3px;
           cursor: pointer;
+        }
+        .day-script-editor.ProseMirror .day-script-new-task-badge {
+          display: inline-flex;
+          align-items: center;
+          margin-right: 0.35rem;
+          border: 1px solid hsl(var(--primary) / 0.35);
+          background: hsl(var(--primary) / 0.12);
+          color: hsl(var(--primary));
+          border-radius: 0.25rem;
+          padding: 0 0.35rem;
+          font-size: 0.72em;
+          font-weight: 700;
+          line-height: 1.45;
+          user-select: none;
         }
         .day-script-editor.ProseMirror .day-script-line-header {
           border-left: 3px solid hsl(var(--primary));

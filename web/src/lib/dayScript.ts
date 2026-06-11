@@ -11,7 +11,6 @@ type JsonNode = {
 export interface ParsedDayScriptLine {
   text: string
   taskIds: string[]
-  separator?: boolean
 }
 
 export interface ParsedDayScriptBlock extends Omit<DayScriptBlock, 'id'> {
@@ -21,7 +20,6 @@ export interface ParsedDayScriptBlock extends Omit<DayScriptBlock, 'id'> {
 
 const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
 const TIME_HEADER_RE = new RegExp(`^(${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN})(?:\\s+|$)(.*)$`)
-const SEPARATOR_RE = /^-{4,}$/
 
 export function buildDayScriptActivityKey(block: Pick<DayScriptBlock, 'sortOrder' | 'startTime' | 'endTime' | 'headerText'>, taskId: string): string {
   return [
@@ -58,6 +56,7 @@ function collectInline(nodes: JsonNode[]): ParsedDayScriptLine {
       }
       return
     }
+    if (node.type === 'newTaskBadge') return
     for (const child of node.content ?? []) visit(child)
   }
 
@@ -90,7 +89,7 @@ export function extractDayScriptLines(document: JsonNode | null | undefined): Pa
   const visit = (node: JsonNode) => {
     const type = node.type ?? ''
     if (type === 'horizontalRule') {
-      lines.push({ text: '----', taskIds: [], separator: true })
+      lines.push({ text: '----', taskIds: [] })
       return
     }
     if (type === 'image' || type === 'imageResize') {
@@ -116,21 +115,18 @@ export function parseDayScriptDocument(document: JsonNode | null | undefined): P
 
   lines.forEach((line, index) => {
     const visible = line.text.trimEnd()
-    if (line.separator || SEPARATOR_RE.test(visible.trim())) {
-      current = null
-      return
-    }
 
     const header = parseTimeHeader(visible)
-    if (header) {
+    if (header || line.taskIds.length > 0) {
+      const bodyText = (header?.bodyText ?? visible).trim()
       current = {
         sortOrder: blocks.length,
-        startTime: header.startTime,
-        endTime: header.endTime,
-        headerText: header.bodyText.replace(/\s*✅\s*/g, ' ').trim(),
+        startTime: header?.startTime ?? '',
+        endTime: header?.endTime ?? '',
+        headerText: bodyText.replace(/\s*✅\s*/g, ' ').trim(),
         progressText: '',
-        completed: header.bodyText.includes('✅'),
-        taskIds: line.taskIds,
+        completed: bodyText.includes('✅'),
+        taskIds: line.taskIds.slice(0, 1),
         lineStart: index,
         lineEnd: index,
       }
@@ -149,6 +145,7 @@ export function parseDayScriptDocument(document: JsonNode | null | undefined): P
 export function findActiveBlock(blocks: Array<Pick<DayScriptBlock, 'startTime' | 'endTime'>>, now: Date): number {
   const currentMinutes = now.getHours() * 60 + now.getMinutes()
   return blocks.findIndex((block) => {
+    if (!block.startTime || !block.endTime) return false
     const [startH, startM] = block.startTime.split(':').map(Number)
     const [endH, endM] = block.endTime.split(':').map(Number)
     const start = startH * 60 + startM

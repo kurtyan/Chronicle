@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
-import { confirmDayScriptProgressSync, getDayScript, saveDayScript } from '@/services/api'
+import { confirmDayScriptProgressSync, fetchStartOfDayOffset, getDayScript, saveDayScript } from '@/services/api'
 import type { DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
@@ -33,13 +33,16 @@ function formatDate(dateStr: string): string {
   })
 }
 
-function todayDate(): string {
-  const now = new Date()
+function calendarDate(date = new Date()): string {
   return [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
   ].join('-')
+}
+
+function workdayDate(offsetHours: number, date = new Date()): string {
+  return calendarDate(new Date(date.getTime() - offsetHours * 3600_000))
 }
 
 function activityStorageKey(date: string): string {
@@ -87,7 +90,7 @@ function getMinutesUntil(endTime: string, now: Date): number {
   return endHour * 60 + endMinute - (now.getHours() * 60 + now.getMinutes())
 }
 
-function FocusStatusBar({ blocks, tasks, scriptDate }: { blocks: DayScriptBlock[]; tasks: Task[]; scriptDate: string }) {
+function FocusStatusBar({ blocks, tasks, scriptDate, todayScriptDate }: { blocks: DayScriptBlock[]; tasks: Task[]; scriptDate: string; todayScriptDate: string }) {
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -96,7 +99,7 @@ function FocusStatusBar({ blocks, tasks, scriptDate }: { blocks: DayScriptBlock[
   }, [])
 
   const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks])
-  const activeIndex = useMemo(() => scriptDate === todayDate() ? findActiveBlock(blocks, now) : -1, [blocks, now, scriptDate])
+  const activeIndex = useMemo(() => scriptDate === todayScriptDate ? findActiveBlock(blocks, now) : -1, [blocks, now, scriptDate, todayScriptDate])
   const activeBlock = activeIndex >= 0 ? blocks[activeIndex] : null
 
   if (!activeBlock) {
@@ -174,7 +177,10 @@ function NextStepsPanel({
 export function TodayPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedTaskId = searchParams.get('task')
-  const [displayDate, setDisplayDate] = useState(() => searchParams.get('date') || todayDate())
+  const explicitDateParam = searchParams.get('date')
+  const [startOfDayOffset, setStartOfDayOffset] = useState(5)
+  const todayScriptDate = useMemo(() => workdayDate(startOfDayOffset), [startOfDayOffset])
+  const [displayDate, setDisplayDate] = useState(() => explicitDateParam || workdayDate(5))
   const [script, setScript] = useState<DayScriptDocument | null>(null)
   const [loadingScript, setLoadingScript] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -207,6 +213,20 @@ export function TodayPage() {
   }, [loadTodos, loadCurrentSession, loadTaskContexts])
 
   useEffect(() => {
+    let cancelled = false
+    fetchStartOfDayOffset()
+      .then((offset) => {
+        if (cancelled) return
+        setStartOfDayOffset(offset)
+        if (!explicitDateParam) setDisplayDate(workdayDate(offset))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (selectedTaskId) setActiveTask(selectedTaskId)
   }, [selectedTaskId, setActiveTask])
 
@@ -214,17 +234,17 @@ export function TodayPage() {
     if (!activeTaskId) return
     const next = new URLSearchParams(searchParams)
     next.set('task', activeTaskId)
-    if (displayDate !== todayDate()) next.set('date', displayDate)
+    if (displayDate !== todayScriptDate) next.set('date', displayDate)
     else next.delete('date')
     setSearchParams(next, { replace: true })
-  }, [activeTaskId])
+  }, [activeTaskId, displayDate, todayScriptDate])
 
   useEffect(() => {
     const next = new URLSearchParams(searchParams)
-    if (displayDate !== todayDate()) next.set('date', displayDate)
+    if (displayDate !== todayScriptDate) next.set('date', displayDate)
     else next.delete('date')
     setSearchParams(next, { replace: true })
-  }, [displayDate])
+  }, [displayDate, todayScriptDate])
 
   useEffect(() => {
     let cancelled = false
@@ -277,11 +297,7 @@ export function TodayPage() {
       ? script.document
       : { type: 'doc', content: [] }
     const content = Array.isArray(document.content) ? [...document.content] : []
-    const lastNode = content[content.length - 1]
-    const separatorNode = { type: 'horizontalRule' }
-    const nextContent = lastNode?.type === 'horizontalRule'
-      ? [...content, nextNode]
-      : [...content, separatorNode, nextNode]
+    const nextContent = [...content, nextNode]
     const nextDocument = { ...document, content: nextContent }
     setScript({ ...script, document: nextDocument })
     setInsertedNextStepIds((ids) => new Set(ids).add(context.taskId))
@@ -395,7 +411,7 @@ export function TodayPage() {
               </button>
             </div>
             <div className="flex min-w-0 flex-1 items-center justify-end">
-              {script ? <FocusStatusBar blocks={script.blocks} tasks={tasks} scriptDate={displayDate} /> : null}
+              {script ? <FocusStatusBar blocks={script.blocks} tasks={tasks} scriptDate={displayDate} todayScriptDate={todayScriptDate} /> : null}
             </div>
           </div>
 
@@ -421,6 +437,7 @@ export function TodayPage() {
                   value={script.document}
                   tasks={pendingTasks}
                   scriptDate={displayDate}
+                  todayScriptDate={todayScriptDate}
                   onChange={(document) => {
                     setSaveError(null)
                     setScript((prev) => prev ? { ...prev, document } : prev)

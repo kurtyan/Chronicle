@@ -9,6 +9,15 @@ function uniqueScriptDate(dayOffset: number): string {
   ].join('-')
 }
 
+function formatZhDate(date: Date): string {
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  })
+}
+
 async function createTask(page: Page, title: string) {
   const res = await page.request.post('/api/tasks', {
     data: { title, type: 'TODO', priority: 'MEDIUM' },
@@ -60,7 +69,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('pre code')).toContainText('const value = 1')
   })
 
-  test('focus editor converts three dashes to a separator', async ({ page }) => {
+  test('focus editor keeps three dashes as ordinary text', async ({ page }) => {
     const date = uniqueScriptDate(Date.now() % 20 + 40)
 
     await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
@@ -71,7 +80,8 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const editor = await clearFocusEditor(page)
     await page.keyboard.type('---')
 
-    await expect(editor.locator('hr')).toBeVisible()
+    await expect(editor.locator('hr')).toHaveCount(0)
+    await expect(editor.locator('p').first()).toContainText('---')
   })
 
   test('focus editor Home and End move within the current line', async ({ page }) => {
@@ -92,7 +102,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('p').first()).toContainText('XabcY')
   })
 
-  test('focus editor ArrowDown moves past a separator', async ({ page }) => {
+  test('focus editor code block grows from one line up to ten visible lines', async ({ page }) => {
     const date = uniqueScriptDate(Date.now() % 20 + 50)
 
     await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
@@ -101,20 +111,35 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await page.waitForLoadState('load')
 
     const editor = await clearFocusEditor(page)
-    await page.keyboard.type('10:00-10:10 before')
+    await page.keyboard.type('```')
     await page.keyboard.press('Enter')
-    await page.keyboard.type('---')
-    await page.keyboard.press('Enter')
-    await page.keyboard.type('after')
-    await expect(editor.locator('hr')).toBeVisible()
 
-    await editor.getByText('before').click()
-    await page.keyboard.press('End')
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.type('X')
+    const code = editor.locator('pre code').first()
+    await expect(code).toBeVisible()
+    const emptyMetrics = await code.evaluate((element) => {
+      const pre = element.closest('pre')!
+      const preStyle = window.getComputedStyle(pre)
+      return {
+        height: pre.getBoundingClientRect().height,
+        overflowY: preStyle.overflowY,
+      }
+    })
+    expect(emptyMetrics.height).toBeLessThan(120)
 
-    await expect(editor.locator('p').nth(1)).toContainText('X')
-    await expect(editor.locator('p').nth(2)).toContainText('after')
+    await page.keyboard.type(Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join('\n'))
+    const fullMetrics = await code.evaluate((element) => {
+      const pre = element.closest('pre')!
+      const preStyle = window.getComputedStyle(pre)
+      return {
+        height: pre.getBoundingClientRect().height,
+        overflowY: preStyle.overflowY,
+        scrollHeight: pre.scrollHeight,
+      }
+    })
+    expect(fullMetrics.height).toBeGreaterThan(emptyMetrics.height * 4)
+    expect(fullMetrics.height).toBeLessThan(360)
+    expect(fullMetrics.scrollHeight).toBeGreaterThan(fullMetrics.height)
+    expect(['auto', 'scroll']).toContain(fullMetrics.overflowY)
   })
 
   test('focus editor creates a new line after pasting a link with one Enter', async ({ page, context }) => {
@@ -139,6 +164,31 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('p').nth(1).locator('a')).toHaveCount(0)
   })
 
+  test('focus editor renders new task badge as non-editable', async ({ page }) => {
+    const task = await createTask(page, `NewBadgeTask-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 58)
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [
+          { type: 'newTaskBadge', attrs: { label: 'new' } },
+          { type: 'text', text: ' ' },
+          { type: 'text', text: `@${task.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }] },
+        ],
+      }],
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const badge = page.locator('.day-script-editor.ProseMirror [data-day-script-new-task]').first()
+    await expect(badge).toBeVisible()
+    await expect(badge).toHaveText('new')
+    await expect(badge).toHaveAttribute('contenteditable', 'false')
+  })
+
   test('selecting a focus task mention opens that task detail immediately', async ({ page }) => {
     const task = await createTask(page, `MentionOpensDetail-${Date.now()}`)
     const date = uniqueScriptDate(Date.now() % 20 + 60)
@@ -156,10 +206,37 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const editor = page.locator('.day-script-editor.ProseMirror')
     await editor.click()
     await page.keyboard.type(`10:00-11:00 @${task.title.slice(0, 12)}`)
-    await expect(page.getByRole('button', { name: new RegExp(task.title) }).first()).toBeVisible()
-    await page.keyboard.press('Enter')
+    const option = page.getByRole('button', { name: new RegExp(task.title) }).first()
+    await expect(option).toBeVisible()
+    await option.click()
 
     await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
+  })
+
+  test('selecting another task mention replaces the existing mention on the focus line', async ({ page }) => {
+    const taskA = await createTask(page, `ReplaceMentionA-${Date.now()}`)
+    const taskB = await createTask(page, `ReplaceMentionB-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 65)
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type(`10:00-10:30 @${taskA.title.slice(0, 12)}`)
+    const optionA = page.getByRole('button', { name: new RegExp(taskA.title) }).first()
+    await expect(optionA).toBeVisible()
+    await optionA.click()
+    await page.keyboard.type(` follow up @${taskB.title.slice(0, 12)}`)
+    const optionB = page.getByRole('button', { name: new RegExp(taskB.title) }).first()
+    await expect(optionB).toBeVisible()
+    await optionB.click()
+
+    await expect(editor.locator('a[data-task-id]')).toHaveCount(1)
+    await expect(editor.locator(`a[data-task-id="${taskB.id}"]`)).toContainText(`@${taskB.title}`)
+    await expect(editor).not.toContainText(`@${taskA.title}`)
+    await expect(editor.locator('p').first()).toContainText('follow up')
   })
 
   test('moving cursor across focus headers switches task detail', async ({ page }) => {
@@ -306,5 +383,21 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     expect(afterTasksRes.ok()).toBeTruthy()
     const tasks = await afterTasksRes.json()
     expect(tasks.some((item: { title: string }) => item.title === 'Mentioned task sync')).toBeFalsy()
+  })
+
+  test('focus page default date follows configured workday offset', async ({ page }) => {
+    const offset = 23
+    const now = new Date()
+    const expected = formatZhDate(new Date(now.getTime() - offset * 3600_000))
+
+    const saveOffset = await page.request.put('/api/settings/start-of-day-offset', { data: { offset } })
+    expect(saveOffset.ok()).toBeTruthy()
+
+    await page.goto('/today?lang=en')
+    await page.waitForLoadState('load')
+
+    await expect(page.getByText(expected)).toBeVisible()
+
+    await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 5 } })
   })
 })

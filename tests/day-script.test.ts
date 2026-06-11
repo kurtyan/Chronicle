@@ -22,6 +22,12 @@ function addMinutes(date: Date, minutes: number): Date {
   return new Date(date.getTime() + minutes * 60_000)
 }
 
+function localTimestamp(date: string, time: string): number {
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  return new Date(year, month - 1, day, hour, minute, 0, 0).getTime()
+}
+
 function formatTime(date: Date): string {
   return [
     String(date.getHours()).padStart(2, '0'),
@@ -252,6 +258,44 @@ test.describe('Day Script progress sync', () => {
     expect(await appendedRecordsRes.json()).toHaveLength(2)
   })
 
+  test('workday offset maps early planned times to the next natural day', async ({ page }) => {
+    const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
+    expect(offsetRes.ok()).toBeTruthy()
+    const originalOffset = (await offsetRes.json()).offset
+    const task = await createTask(page, `DayScript-OffsetExecution-${Date.now()}`)
+    const date = uniqueScriptDate(18)
+    const firstEditedAt = Date.now() - 60_000
+
+    try {
+      const saveOffset = await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 5 } })
+      expect(saveOffset.ok()).toBeTruthy()
+
+      const save = await page.request.put(`/api/day-scripts/${date}`, {
+        data: {
+          expectedRevision: 0,
+          document: doc([
+            { text: `01:10-01:40 @${task.title} ✅`, taskId: task.id },
+            { text: 'Early workday progress' },
+          ]),
+          focusActivity: [{
+            blockKey: `0|01:10|01:40|@${task.title}|${task.id}`,
+            taskId: task.id,
+            firstEditedAt,
+          }],
+        },
+      })
+      expect(save.ok()).toBeTruthy()
+      const saved = await save.json()
+      expect(saved.executionRecords).toHaveLength(1)
+
+      const nextNaturalDate = uniqueScriptDate(19)
+      expect(saved.executionRecords[0].plannedStartAt).toBe(localTimestamp(nextNaturalDate, '01:10'))
+      expect(saved.executionRecords[0].plannedEndAt).toBe(localTimestamp(nextNaturalDate, '01:40'))
+    } finally {
+      await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
+    }
+  })
+
   test('completed focus line preserves rich progress formatting in task log', async ({ page }) => {
     const task = await createTask(page, `DayScript-Rich-${Date.now()}`)
     const date = uniqueScriptDate(4)
@@ -300,12 +344,64 @@ test.describe('Day Script progress sync', () => {
 
     const entries = await getEntries(page, task.id)
     expect(entries).toHaveLength(1)
+    expect(entries[0].content).toContain('<p>Day Script progress · 2099-01-04 · 10:00-10:30</p>')
+    expect(entries[0].content).not.toContain(`<p>@${task.title}</p>`)
     expect(entries[0].content).toContain('<strong>Bold progress</strong>')
     expect(entries[0].content).toContain('<ul>')
     expect(entries[0].content).toContain('List progress')
     expect(entries[0].content).toContain('<pre data-code-wrap="off"><code>const value = 1</code></pre>')
     expect(entries[0].content).toContain('<img')
     expect(entries[0].content).toContain('day-script-image.png')
+  })
+
+  test('formatting changes in already synced progress create a conflict instead of slicing invalid html', async ({ page }) => {
+    const task = await createTask(page, `DayScript-HtmlDelta-${Date.now()}`)
+    const date = uniqueScriptDate(20)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Done', marks: [{ type: 'bold' }] }],
+            },
+          ],
+        },
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect(first.createdLogs).toHaveLength(1)
+
+    const secondSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: {
+          type: 'doc',
+          content: [
+            paragraph(`10:00-10:30 @${task.title} ✅`, task.id),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Done' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'Next' }] },
+          ],
+        },
+      },
+    })
+    expect(secondSave.ok()).toBeTruthy()
+    const second = await secondSave.json()
+    expect(second.createdLogs).toHaveLength(0)
+    expect(second.conflicts).toHaveLength(1)
+    expect(second.conflicts[0]).toMatchObject({
+      taskId: task.id,
+      existingProgress: 'Done',
+      currentProgress: 'Done\nNext',
+    })
+
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(1)
   })
 
   test('completed focus line appends image-only progress delta', async ({ page }) => {
@@ -571,6 +667,57 @@ test.describe('Day Script progress sync', () => {
     expect(entries[0].content).toContain('Compact time progress')
   })
 
+  test('completed focus line includes header remainder as the second log line', async ({ page }) => {
+    const task = await createTask(page, `DayScript-HeaderRemainder-${Date.now()}`)
+    const date = uniqueScriptDate(14)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} Diagnose login spike ✅`, taskId: task.id },
+          { text: 'Checked dashboards' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    expect((await save.json()).createdLogs).toHaveLength(1)
+
+    const entries = await getEntries(page, task.id)
+    expect(entries[0].content).toContain('Day Script progress · 2099-01-14 · 10:00-10:30')
+    expect(entries[0].content).toContain('<p>Diagnose login spike</p>')
+    expect(entries[0].content.match(/Diagnose login spike/g)).toHaveLength(1)
+    expect(entries[0].content).not.toContain('Diagnose login spike ✅')
+    expect(entries[0].content).toContain('Checked dashboards')
+  })
+
+  test('untimed completed task mention line syncs a day script log', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Untimed-${Date.now()}`)
+    const date = uniqueScriptDate(15)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `@${task.title} Draft rollout checklist ✅`, taskId: task.id },
+          { text: 'List affected services' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toHaveLength(0)
+    expect(saved.createdLogs).toHaveLength(1)
+    expect(saved.executionRecords).toHaveLength(0)
+    expect(saved.script.blocks[0]).toMatchObject({ startTime: '', endTime: '' })
+
+    const entries = await getEntries(page, task.id)
+    expect(entries[0].content).toContain('Day Script progress · 2099-01-15')
+    expect(entries[0].content).not.toContain(' · -')
+    expect(entries[0].content).toContain('<p>Draft rollout checklist</p>')
+    expect(entries[0].content).toContain('List affected services')
+  })
+
   test('new task focus line creates ktlo task and rewrites the header mention', async ({ page }) => {
     const date = uniqueScriptDate(5)
     const title = `Inline KTLO ${Date.now()}`
@@ -597,7 +744,8 @@ test.describe('Day Script progress sync', () => {
     expect(saved.script.blocks[0].taskIds).toEqual([saved.createdTasks[0].id])
 
     const header = saved.script.document.content[0].content
-    expect(header[1]).toMatchObject({
+    expect(header[1]).toMatchObject({ type: 'newTaskBadge' })
+    expect(header[3]).toMatchObject({
       type: 'text',
       text: `@${title}`,
       marks: [{ type: 'link', attrs: { taskId: saved.createdTasks[0].id } }],
@@ -605,7 +753,8 @@ test.describe('Day Script progress sync', () => {
 
     const entries = await getEntries(page, saved.createdTasks[0].id)
     expect(entries).toHaveLength(1)
-    expect(entries[0].content).toContain('Investigated production incident')
+    expect(entries.some((entry: { type: string; content: string }) => entry.type === 'body' && entry.content.includes('Investigated production incident'))).toBeTruthy()
+    expect(entries.some((entry: { type: string }) => entry.type === 'log')).toBeFalsy()
 
     const repeat = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -615,6 +764,76 @@ test.describe('Day Script progress sync', () => {
     })
     expect(repeat.ok()).toBeTruthy()
     expect((await repeat.json()).createdTasks).toHaveLength(0)
+  })
+
+  test('new task body baseline allows later completed deltas to become task logs', async ({ page }) => {
+    const date = uniqueScriptDate(22)
+    const title = `Inline KTLO Delta ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 new task ${title} ✅` },
+          { text: 'Initial incident context' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    const taskId = saved.createdTasks[0].id
+    expect(saved.createdLogs).toHaveLength(0)
+
+    const append = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: saved.script.revision,
+        document: {
+          ...saved.script.document,
+          content: [
+            ...saved.script.document.content,
+            { type: 'paragraph', content: [{ type: 'text', text: 'New investigation finding' }] },
+          ],
+        },
+      },
+    })
+    expect(append.ok()).toBeTruthy()
+    const appended = await append.json()
+    expect(appended.createdTasks).toHaveLength(0)
+    expect(appended.createdLogs).toHaveLength(1)
+
+    const entries = await getEntries(page, taskId)
+    expect(entries).toHaveLength(2)
+    expect(entries.some((entry: { type: string; content: string }) => entry.type === 'body' && entry.content.includes('Initial incident context'))).toBeTruthy()
+    const logEntry = entries.find((entry: { type: string }) => entry.type === 'log')
+    expect(logEntry.content).toContain('New investigation finding')
+    expect(logEntry.content).not.toContain('Initial incident context')
+  })
+
+  test('new task text inside code blocks does not create or rewrite tasks', async ({ page }) => {
+    const date = uniqueScriptDate(21)
+    const title = `Code KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            {
+              type: 'codeBlock',
+              content: [{ type: 'text', text: `new task ${title}` }],
+            },
+          ],
+        },
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdTasks).toHaveLength(0)
+    expect(saved.script.document.content[0]).toMatchObject({
+      type: 'codeBlock',
+      content: [{ type: 'text', text: `new task ${title}` }],
+    })
   })
 
   test('compact time new task line creates ktlo task and normalizes the header', async ({ page }) => {
@@ -638,14 +857,49 @@ test.describe('Day Script progress sync', () => {
       endTime: '15:00',
     })
     expect(saved.script.document.content[0].content[0].text).toBe('14:43-15:00 ')
+    expect(saved.script.document.content[0].content[1]).toMatchObject({ type: 'newTaskBadge' })
 
     const entries = await getEntries(page, saved.createdTasks[0].id)
     expect(entries).toHaveLength(1)
-    expect(entries[0].content).toContain('Day Script progress · 2099-01-11 · 14:43-15:00')
-    expect(entries[0].content).toContain('Investigated compact-time production incident')
+    expect(entries.some((entry: { type: string; content: string }) => entry.type === 'body' && entry.content.includes('Investigated compact-time production incident'))).toBeTruthy()
+    expect(entries.some((entry: { type: string }) => entry.type === 'log')).toBeFalsy()
   })
 
-  test('strict separator stops loose notes from becoming previous task progress', async ({ page }) => {
+  test('untimed new task line creates ktlo task and rewrites the header mention', async ({ page }) => {
+    const date = uniqueScriptDate(17)
+    const title = `Untimed KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `new task ${title} ✅` },
+          { text: 'Untimed production incident context' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdTasks).toHaveLength(1)
+    expect(saved.script.blocks[0]).toMatchObject({
+      startTime: '',
+      endTime: '',
+      taskIds: [saved.createdTasks[0].id],
+    })
+    expect(saved.script.document.content[0].content[0]).toMatchObject({ type: 'newTaskBadge' })
+    expect(saved.script.document.content[0].content[2]).toMatchObject({
+      type: 'text',
+      text: `@${title}`,
+      marks: [{ type: 'link', attrs: { taskId: saved.createdTasks[0].id } }],
+    })
+
+    const entries = await getEntries(page, saved.createdTasks[0].id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ type: 'body' })
+    expect(entries[0].content).toContain('Untimed production incident context')
+  })
+
+  test('dash lines stay ordinary progress instead of separating focus blocks', async ({ page }) => {
     const task = await createTask(page, `DayScript-Separator-${Date.now()}`)
     const date = uniqueScriptDate(6)
 
@@ -663,12 +917,12 @@ test.describe('Day Script progress sync', () => {
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
     expect(saved.validationErrors).toHaveLength(0)
-    expect(saved.script.blocks[0].progressText).toBe('Synced progress')
+    expect(saved.script.blocks[0].progressText).toBe('Synced progress\n----\nDetached daily note')
 
     const entries = await getEntries(page, task.id)
     expect(entries).toHaveLength(1)
     expect(entries[0].content).toContain('Synced progress')
-    expect(entries[0].content).not.toContain('Detached daily note')
+    expect(entries[0].content).toContain('Detached daily note')
 
     const invalidSeparator = await page.request.put(`/api/day-scripts/${uniqueScriptDate(7)}`, {
       data: {
@@ -683,6 +937,34 @@ test.describe('Day Script progress sync', () => {
     expect(invalidSeparator.ok()).toBeTruthy()
     const invalidSaved = await invalidSeparator.json()
     expect(invalidSaved.script.blocks[0].progressText).toBe('---\nStill progress')
+  })
+
+  test('focus line with multiple task mentions is rejected', async ({ page }) => {
+    const taskA = await createTask(page, `DayScript-MultiA-${Date.now()}`)
+    const taskB = await createTask(page, `DayScript-MultiB-${Date.now()}`)
+    const date = uniqueScriptDate(16)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [{
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '10:00-10:30 ' },
+              { type: 'text', text: `@${taskA.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskA.id)}`, taskId: taskA.id } }] },
+              { type: 'text', text: ' and ' },
+              { type: 'text', text: `@${taskB.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskB.id)}`, taskId: taskB.id } }] },
+            ],
+          }],
+        },
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toEqual([{ lineIndex: 0, message: 'Focus line can reference only one task.' }])
+    expect(saved.createdLogs).toHaveLength(0)
   })
 
   test('Day Script editor only takes over after actual progress editing', async ({ page }) => {
@@ -710,7 +992,7 @@ test.describe('Day Script progress sync', () => {
       }
     })
 
-    await page.goto('/today?lang=zh-CN')
+    await page.goto(`/today?date=${date}&lang=zh-CN`)
     await page.waitForLoadState('load')
     const editor = page.locator('.day-script-editor.ProseMirror')
     await expect(editor).toContainText('Existing progress')
