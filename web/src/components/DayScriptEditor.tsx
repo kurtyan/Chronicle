@@ -239,6 +239,25 @@ function moveSelectionAcrossSeparator(editor: Editor, direction: 'up' | 'down'):
   return false
 }
 
+function splitAfterLink(editor: Editor): boolean {
+  const { state, view } = editor
+  const { selection, schema } = state
+  const linkType = schema.marks.link
+  if (!linkType || !selection.empty) return false
+
+  const { $from } = selection
+  if (!$from.parent.isTextblock) return false
+  const nodeBefore = $from.nodeBefore
+  const nodeAfter = $from.nodeAfter
+  const hasLinkBefore = !!nodeBefore?.marks.some((mark) => mark.type === linkType)
+  const continuesLinkAfter = !!nodeAfter?.marks.some((mark) => mark.type === linkType)
+  if (!hasLinkBefore || continuesLinkAfter) return false
+
+  const tr = state.tr.split(selection.from).removeStoredMark(linkType).scrollIntoView()
+  view.dispatch(tr)
+  return true
+}
+
 export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
   const [mentionState, setMentionState] = useState<MentionState>(null)
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
@@ -320,6 +339,12 @@ export function DayScriptEditor({ value, tasks, scriptDate, onChange, onSave, on
           }
           if (event.key === 'Escape') {
             setMentionState(null)
+            return true
+          }
+        }
+        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === 'Enter') {
+          if (splitAfterLink(editorRef.current!)) {
+            event.preventDefault()
             return true
           }
         }

@@ -117,6 +117,28 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('p').nth(2)).toContainText('after')
   })
 
+  test('focus editor creates a new line after pasting a link with one Enter', async ({ page, context }) => {
+    const date = uniqueScriptDate(Date.now() % 20 + 55)
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+    await page.evaluate(() => navigator.clipboard.writeText('https://example.com/runbook'))
+    await page.keyboard.press('ControlOrMeta+V')
+    await expect(editor.locator('a[href="https://example.com/runbook"]')).toBeVisible()
+
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('next line')
+
+    await expect(editor.locator('p').nth(0)).toContainText('https://example.com/runbook')
+    await expect(editor.locator('p').nth(1)).toContainText('next line')
+    await expect(editor.locator('p').nth(1).locator('a')).toHaveCount(0)
+  })
+
   test('selecting a focus task mention opens that task detail immediately', async ({ page }) => {
     const task = await createTask(page, `MentionOpensDetail-${Date.now()}`)
     const date = uniqueScriptDate(Date.now() % 20 + 60)
