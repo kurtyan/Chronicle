@@ -121,7 +121,8 @@ function stripHtml(content: string): string {
 }
 
 function stripHtmlWithoutCodeBlocks(content: string): string {
-  const withoutPre = content.replace(/<pre>[\s\S]*?<\/pre>/gi, '')
+  // Match <pre> with or without attributes, non-greedily across newlines
+  const withoutPre = content.replace(/<pre[^>]*>[\s\S]*?<\/pre>/gi, '')
   return stripHtml(withoutPre)
 }
 
