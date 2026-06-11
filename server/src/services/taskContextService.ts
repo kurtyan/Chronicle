@@ -97,9 +97,9 @@ function getLastActivityAt(taskId: string, fallbackUpdatedAt: number): number | 
 function fallbackSummary(taskId: string): { latestProgress: string; nextStep: string } {
   const entries = getTaskEntries(taskId)
   const latestLog = [...entries].reverse().find((entry) => entry.type === 'log' || entry.type === 'plan')
-  const explicitNextStep = extractExplicitNextStep(entries.map((entry) => stripHtml(entry.content)).reverse())
+  const explicitNextStep = extractExplicitNextStep(entries.map((entry) => stripHtmlWithoutCodeBlocks(entry.content)).reverse())
   return {
-    latestProgress: latestLog ? normalizeSummaryValue(stripHtml(latestLog.content)) : 'No recent progress recorded.',
+    latestProgress: latestLog ? normalizeSummaryValue(stripHtmlWithoutCodeBlocks(latestLog.content)) : 'No recent progress recorded.',
     nextStep: explicitNextStep || '',
   }
 }
@@ -118,6 +118,11 @@ function stripHtml(content: string): string {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim()
+}
+
+function stripHtmlWithoutCodeBlocks(content: string): string {
+  const withoutPre = content.replace(/<pre>[\s\S]*?<\/pre>/gi, '')
+  return stripHtml(withoutPre)
 }
 
 function normalizeSummaryValue(value: string): string {
@@ -243,7 +248,7 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
     entries: entries.map((entry) => ({
       type: entry.type,
       createdAt: new Date(entry.createdAt).toISOString(),
-      content: stripHtml(entry.content),
+      content: stripHtmlWithoutCodeBlocks(entry.content),
     })),
   }
   const inputText = buildSummaryInputText(input)

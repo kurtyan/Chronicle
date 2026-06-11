@@ -11,6 +11,6 @@
     "release": "node clean.js && node scripts/generate-version.js --write && node build.js && node publish.js --local-publish && cd tauri && npm install && node scripts/update-version.js && npx tauri build && git checkout -- tauri/src-tauri/Cargo.toml tauri/src-tauri/tauri.conf.json tauri/src-tauri/Cargo.lock"
   },
   "devDependencies": {
-    "@playwright/test": "^1.59.1"
+    "@playwright/test": "^1.60.0"
   }
 }
