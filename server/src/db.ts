@@ -40,6 +40,15 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS task_log_drafts (
+      task_id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    )
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS work_sessions (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -246,6 +255,9 @@ function cleanupOrphans(): void {
   getDb().exec(`
     DELETE FROM plan_item_details
     WHERE entry_id NOT IN (SELECT id FROM task_entries);
+
+    DELETE FROM task_log_drafts
+    WHERE task_id NOT IN (SELECT id FROM tasks);
 
     DELETE FROM work_sessions
     WHERE task_id NOT IN (SELECT id FROM tasks);

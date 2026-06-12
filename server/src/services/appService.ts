@@ -1,10 +1,11 @@
 import {
   getAllTasks, getTaskById, createTask, updateTask, deleteTask,
   getTaskEntries, createTaskEntry, createTaskEntries, updateTaskEntry, deleteTaskEntry as deleteTaskEntryImpl, markTaskDone,
+  getTaskLogDraft, saveTaskLogDraft, deleteTaskLogDraft,
   startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
   setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
   createAfkEvent, updateAfkEvent, getAfkEvents, getNextTaskId,
-  type Task, type TaskEntry, type WorkSession, type TaskExtraInfo, type AfkEvent,
+  type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent,
 } from './taskService'
 import {
   batchCreatePlanItems, getPlanItems, updatePlanItem, hasPlanForDate,
@@ -89,6 +90,18 @@ export class AppService {
 
   async deleteTaskEntry(taskId: string, entryId: string): Promise<boolean> {
     return deleteTaskEntryImpl(taskId, entryId)
+  }
+
+  async getTaskLogDraft(taskId: string): Promise<TaskLogDraft | null> {
+    return getTaskLogDraft(taskId)
+  }
+
+  async saveTaskLogDraft(taskId: string, content: string): Promise<TaskLogDraft | null> {
+    return saveTaskLogDraft(taskId, content)
+  }
+
+  async deleteTaskLogDraft(taskId: string): Promise<boolean> {
+    return deleteTaskLogDraft(taskId)
   }
 
   // --- Work Sessions ---

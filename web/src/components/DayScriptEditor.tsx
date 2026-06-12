@@ -264,7 +264,6 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
   const suppressEditingNotificationRef = useRef(false)
   const lastCursorTaskIdRef = useRef<string | null>(null)
   const currentValueRef = useRef(JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] }))
-  const pendingClipboardImageFallbackRef = useRef<number | null>(null)
 
   const editor = useEditor({
     extensions: [
@@ -318,10 +317,6 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           event.preventDefault()
           onSave()
           return true
-        }
-        if (isTauri() && event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'v') {
-          scheduleClipboardImageFallback()
-          return false
         }
         if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && (event.key === 'Home' || event.key === 'End')) {
           event.preventDefault()
@@ -381,7 +376,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           const activeEditor = editorRef.current
           for (const file of Array.from(files)) {
             if (file.type.startsWith('image/')) {
-              uploadAndInsertImage(activeEditor, getUploadTaskId(activeEditor), file)
+              uploadAndInsertImage(activeEditor, getUploadTaskId(activeEditor), file, activeEditor?.state.selection.from)
             }
           }
           return true
@@ -395,9 +390,8 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
         const file = event.clipboardData!.files[0]
         if (!file?.type.startsWith('image/')) return false
         event.preventDefault()
-        cancelClipboardImageFallback()
         const activeEditor = editorRef.current
-        uploadAndInsertImage(activeEditor, getUploadTaskId(activeEditor), file)
+        uploadAndInsertImage(activeEditor, getUploadTaskId(activeEditor), file, activeEditor?.state.selection.from)
         return true
       },
     },
@@ -444,10 +438,6 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
     const timer = window.setTimeout(resolveImageSrcsInEditor, 50)
     return () => window.clearTimeout(timer)
   }, [editor, value])
-
-  useEffect(() => {
-    return () => cancelClipboardImageFallback()
-  }, [])
 
   useEffect(() => {
     const handleMentionKeyDown = (event: KeyboardEvent) => {
@@ -575,38 +565,6 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
     return pool.filter((task) =>
       task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)
     ).slice(0, 8)
-  }
-
-  async function pasteClipboardImage(nextEditor: Editor | null) {
-    if (!nextEditor || !navigator.clipboard?.read) return
-    try {
-      const items = await navigator.clipboard.read()
-      for (const item of items) {
-        const imageType = item.types.find((type) => type.startsWith('image/'))
-        if (!imageType) continue
-        const blob = await item.getType(imageType)
-        const extension = imageType.split('/')[1] || 'png'
-        const file = new File([blob], `clipboard-image.${extension}`, { type: imageType })
-        uploadAndInsertImage(nextEditor, getUploadTaskId(nextEditor), file)
-        return
-      }
-    } catch {
-      // Native paste may still handle clipboard content; ignore permission/read failures.
-    }
-  }
-
-  function cancelClipboardImageFallback() {
-    if (pendingClipboardImageFallbackRef.current === null) return
-    window.clearTimeout(pendingClipboardImageFallbackRef.current)
-    pendingClipboardImageFallbackRef.current = null
-  }
-
-  function scheduleClipboardImageFallback() {
-    cancelClipboardImageFallback()
-    pendingClipboardImageFallbackRef.current = window.setTimeout(() => {
-      pendingClipboardImageFallbackRef.current = null
-      pasteClipboardImage(editorRef.current)
-    }, 80)
   }
 
   function getUploadTaskId(nextEditor: Editor | null): string {

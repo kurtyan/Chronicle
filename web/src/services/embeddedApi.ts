@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -29,6 +29,14 @@ function entryRowToTaskEntry(row: any): TaskEntry {
     content: row.content,
     type: row.type as 'body' | 'log' | 'plan',
     createdAt: row.created_at,
+  }
+}
+
+function draftRowToTaskLogDraft(row: any): TaskLogDraft {
+  return {
+    taskId: row.task_id,
+    content: row.content,
+    updatedAt: row.updated_at,
   }
 }
 
@@ -93,6 +101,14 @@ export class EmbeddedApiProvider implements ApiInterface {
           )
         `)
         this.db.run(`
+          CREATE TABLE IF NOT EXISTS task_log_drafts (
+            task_id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(id)
+          )
+        `)
+        this.db.run(`
           CREATE TABLE IF NOT EXISTS work_sessions (
             id TEXT PRIMARY KEY,
             task_id TEXT NOT NULL,
@@ -128,6 +144,14 @@ export class EmbeddedApiProvider implements ApiInterface {
           this.db.run('UPDATE tasks SET updated_at = created_at WHERE updated_at = 0')
           await this.persist()
         } catch { /* Column exists or no tasks table */ }
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS task_log_drafts (
+            task_id TEXT PRIMARY KEY,
+            content TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES tasks(id)
+          )
+        `)
       }
     })()
 
@@ -353,6 +377,33 @@ export class EmbeddedApiProvider implements ApiInterface {
   async deleteTaskEntry(_taskId: string, entryId: string): Promise<void> {
     await this.ensureDb()
     await this.runAndPersist('DELETE FROM task_entries WHERE id = ?', [entryId])
+  }
+
+  async fetchTaskLogDraft(taskId: string): Promise<TaskLogDraft | null> {
+    await this.ensureDb()
+    const row = this.queryOne('SELECT * FROM task_log_drafts WHERE task_id = ?', [taskId])
+    return row ? draftRowToTaskLogDraft(row) : null
+  }
+
+  async saveTaskLogDraft(taskId: string, content: string): Promise<TaskLogDraft | null> {
+    await this.ensureDb()
+    if (!content.trim()) {
+      await this.deleteTaskLogDraft(taskId)
+      return null
+    }
+    const now = Date.now()
+    await this.runAndPersist(
+      `INSERT INTO task_log_drafts (task_id, content, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(task_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+      [taskId, content, now]
+    )
+    return { taskId, content, updatedAt: now }
+  }
+
+  async deleteTaskLogDraft(taskId: string): Promise<void> {
+    await this.ensureDb()
+    await this.runAndPersist('DELETE FROM task_log_drafts WHERE task_id = ?', [taskId])
   }
 
   // --- Work Sessions ---

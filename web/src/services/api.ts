@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -51,6 +51,15 @@ export async function updateTaskEntry(taskId: string, entryId: string, content: 
 }
 export async function deleteTaskEntry(taskId: string, entryId: string): Promise<void> {
   return (await getApi()).deleteTaskEntry(taskId, entryId)
+}
+export async function fetchTaskLogDraft(taskId: string): Promise<TaskLogDraft | null> {
+  return (await getApi()).fetchTaskLogDraft(taskId)
+}
+export async function saveTaskLogDraft(taskId: string, content: string): Promise<TaskLogDraft | null> {
+  return (await getApi()).saveTaskLogDraft(taskId, content)
+}
+export async function deleteTaskLogDraft(taskId: string): Promise<void> {
+  return (await getApi()).deleteTaskLogDraft(taskId)
 }
 export async function takeOverTask(taskId: string): Promise<WorkSession> {
   return (await getApi()).takeOverTask(taskId)

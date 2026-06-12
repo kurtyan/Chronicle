@@ -50,6 +50,12 @@ export interface TaskEntry {
   planEstimatedEnd?: string
 }
 
+export interface TaskLogDraft {
+  taskId: string
+  content: string
+  updatedAt: number
+}
+
 export interface WorkSession {
   id: string
   taskId: string

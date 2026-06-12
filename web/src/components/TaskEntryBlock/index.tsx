@@ -189,6 +189,10 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     }
   }, [draftContent, isNewEntry])
 
+  useEffect(() => {
+    if (isNewEntry) hasFiredFirstMeaningfulEditRef.current = false
+  }, [isNewEntry, newEntryVersion])
+
   // When not editing, sync draft content from entry (external updates) or clear localStorage
   useEffect(() => {
     if (!editing && entry) {
@@ -276,6 +280,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
 
   const handleSubmit = async () => {
     if (isHtmlEmpty(draftContent)) return
+    hasFiredFirstMeaningfulEditRef.current = false
     await onSubmit?.(draftContent.trim())
     hasFiredFirstMeaningfulEditRef.current = false
     if (draftKey) localStorage.removeItem(draftKey)

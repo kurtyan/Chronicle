@@ -38,6 +38,12 @@ export interface TaskEntry {
   planEstimatedEnd?: string
 }
 
+export interface TaskLogDraft {
+  taskId: string
+  content: string
+  updatedAt: number
+}
+
 function rowToTask(row: any): Task {
   return {
     id: row.id,
@@ -66,6 +72,14 @@ function rowToTaskEntry(row: any): TaskEntry {
     planEstimatedMinutes: row.plan_estimated_minutes ?? undefined,
     planEstimatedStart: row.plan_estimated_start ?? undefined,
     planEstimatedEnd: row.plan_estimated_end ?? undefined,
+  }
+}
+
+function rowToTaskLogDraft(row: any): TaskLogDraft {
+  return {
+    taskId: row.task_id,
+    content: row.content,
+    updatedAt: row.updated_at,
   }
 }
 
@@ -332,6 +346,37 @@ export function deleteTaskEntry(taskId: string, entryId: string): boolean {
 
   transaction()
   return true
+}
+
+// --- Task Log Drafts ---
+
+export function getTaskLogDraft(taskId: string): TaskLogDraft | null {
+  const row = queryOne('SELECT * FROM task_log_drafts WHERE task_id = ?', [taskId])
+  return row ? rowToTaskLogDraft(row) : null
+}
+
+export function saveTaskLogDraft(taskId: string, content: string): TaskLogDraft | null {
+  const task = getTaskById(taskId)
+  if (!task) throw new Error('Task not found')
+
+  if (!content.trim()) {
+    deleteTaskLogDraft(taskId)
+    return null
+  }
+
+  const now = Date.now()
+  run(
+    `INSERT INTO task_log_drafts (task_id, content, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(task_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+    [taskId, content, now]
+  )
+  return { taskId, content, updatedAt: now }
+}
+
+export function deleteTaskLogDraft(taskId: string): boolean {
+  const result = run('DELETE FROM task_log_drafts WHERE task_id = ?', [taskId])
+  return result.changes > 0
 }
 
 // --- Work Sessions ---

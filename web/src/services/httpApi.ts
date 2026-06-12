@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -123,6 +123,20 @@ export const httpApi: ApiInterface = {
 
   async deleteTaskEntry(taskId: string, entryId: string): Promise<void> {
     await (await withClientId()).delete(`/api/tasks/${taskId}/logs/${entryId}`)
+  },
+
+  async fetchTaskLogDraft(taskId: string): Promise<TaskLogDraft | null> {
+    const { data } = await (await withClientId()).get<TaskLogDraft | null>(`/api/tasks/${taskId}/log-draft`)
+    return data
+  },
+
+  async saveTaskLogDraft(taskId: string, content: string): Promise<TaskLogDraft | null> {
+    const { data } = await (await withClientId()).put<TaskLogDraft | null>(`/api/tasks/${taskId}/log-draft`, { content })
+    return data
+  },
+
+  async deleteTaskLogDraft(taskId: string): Promise<void> {
+    await (await withClientId()).delete(`/api/tasks/${taskId}/log-draft`)
   },
 
   async takeOverTask(taskId: string): Promise<WorkSession> {

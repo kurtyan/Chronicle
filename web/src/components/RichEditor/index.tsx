@@ -1,6 +1,6 @@
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
 import type { NodeViewRenderer, NodeViewRendererProps } from '@tiptap/core'
-import { TextSelection } from '@tiptap/pm/state'
+import { Selection, TextSelection } from '@tiptap/pm/state'
 import StarterKit from '@tiptap/starter-kit'
 import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
@@ -18,7 +18,8 @@ export function isTauri(): boolean {
 }
 
 /** Insert image with a default width */
-export function insertImageWithAttrs(ed: Editor, filePath: string, filename?: string) {
+export function insertImageWithAttrs(ed: Editor, filePath: string, filename?: string, insertionPosition?: number) {
+  if ((ed as any).isDestroyed) return
   const src = isTauri()
     ? (window as any).__TAURI__.core.convertFileSrc(filePath)
     : `file://${filePath}`
@@ -31,17 +32,36 @@ export function insertImageWithAttrs(ed: Editor, filePath: string, filename?: st
     filename,
   })
   const paragraphNode = ed.schema.nodes.paragraph.create()
-  const insertPos = state.selection.from
-  let tr = state.tr.replaceSelectionWith(imageNode, false)
-  const paragraphPos = insertPos + imageNode.nodeSize
-  tr = tr.insert(paragraphPos, paragraphNode)
-  tr = tr.setSelection(TextSelection.create(tr.doc, paragraphPos + 1))
-  ed.view.dispatch(tr)
-  ed.commands.focus()
+  const insertPos = insertionPosition === undefined
+    ? state.selection.from
+    : Math.max(1, Math.min(insertionPosition, state.doc.content.size))
+  try {
+    let tr = state.tr.setSelection(Selection.near(state.doc.resolve(insertPos)))
+    tr = tr.replaceSelectionWith(imageNode, false)
+    const paragraphPos = Math.min(insertPos + imageNode.nodeSize, tr.doc.content.size)
+    tr = tr.insert(paragraphPos, paragraphNode)
+    tr = tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(paragraphPos + 1, tr.doc.content.size))))
+    ed.view.dispatch(tr)
+    ed.commands.focus()
+    window.requestAnimationFrame(resolveImageSrcsInEditor)
+  } catch (err) {
+    console.error('Failed to insert image at captured position, falling back to current selection:', err)
+    ed.chain().focus().insertContent({
+      type: 'imageResize',
+      attrs: {
+        src,
+        width: 500,
+        containerStyle: `width: 500px; height: auto; cursor: pointer;`,
+        fullpath: filePath,
+        filename,
+      },
+    }).run()
+    window.requestAnimationFrame(resolveImageSrcsInEditor)
+  }
 }
 
 /** Upload image via Tauri invoke and insert into editor */
-export async function uploadAndInsertImage(ed: Editor | null, taskId: string, file: File) {
+export async function uploadAndInsertImage(ed: Editor | null, taskId: string, file: File, insertionPosition?: number) {
   if (!ed || !isTauri()) return
   try {
     const arrayBuffer = await file.arrayBuffer()
@@ -56,10 +76,28 @@ export async function uploadAndInsertImage(ed: Editor | null, taskId: string, fi
       console.error('Invalid response from save_editor_image:', result)
       return
     }
-    insertImageWithAttrs(ed, result.filePath, result.fileName)
+    insertImageWithAttrs(ed, result.filePath, result.fileName, insertionPosition)
   } catch (err) {
     console.error('Failed to save editor image:', err)
   }
+}
+
+function getClipboardImageFiles(data: DataTransfer | null): File[] {
+  if (!data) return []
+
+  const files = Array.from(data.files ?? []).filter((file) => file.type.startsWith('image/'))
+  if (files.length > 0) return files
+
+  return Array.from(data.items ?? [])
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item, index) => {
+      const file = item.getAsFile()
+      if (!file) return null
+      if (file.name) return file
+      const extension = item.type.split('/')[1] || 'png'
+      return new File([file], `clipboard-image-${index + 1}.${extension}`, { type: item.type })
+    })
+    .filter((file): file is File => Boolean(file))
 }
 
 interface RichEditorProps {
@@ -293,7 +331,7 @@ function RichEditorInner({
                 // Image: save to filesystem via Tauri (only in Tauri env)
                 if (canSaveImage) {
                   const ed = editorRef.current
-                  if (ed) uploadAndInsertImage(ed, taskId!, file)
+                  if (ed) uploadAndInsertImage(ed, taskId!, file, ed.state.selection.from)
                 }
                 // Non-Tauri: silently ignore image drops
               } else if (taskId) {
@@ -396,16 +434,16 @@ function RichEditorInner({
         return false
       },
       handlePaste: (_view, event) => {
-        // Check for image paste using types/files (doesn't consume clipboard data)
         if (canSaveImage) {
-          const types = event.clipboardData?.types || []
-          const hasImageFile = types.includes('Files') && (event.clipboardData?.files?.length ?? 0) > 0
-          if (hasImageFile) {
+          const imageFiles = getClipboardImageFiles(event.clipboardData)
+          if (imageFiles.length > 0) {
             event.preventDefault()
-            const file = event.clipboardData!.files[0]
-            if (file?.type.startsWith('image/')) {
-              const ed = editorRef.current
-              if (ed) uploadAndInsertImage(ed, taskId!, file)
+            const ed = editorRef.current
+            const insertionPosition = ed?.state.selection.from
+            if (ed) {
+              for (const file of imageFiles) {
+                uploadAndInsertImage(ed, taskId!, file, insertionPosition)
+              }
             }
             return true
           }
@@ -793,7 +831,7 @@ function RichEditorInner({
                     const file = input.files?.[0]
                     if (file) {
                       const ed = editorRef.current
-                      if (ed) uploadAndInsertImage(ed, taskId!, file)
+                      if (ed) uploadAndInsertImage(ed, taskId!, file, ed.state.selection.from)
                     }
                   }
                   input.click()

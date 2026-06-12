@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -13,6 +13,9 @@ export interface ApiInterface {
   submitTaskEntries(taskIds: string[], content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry[]>
   updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null>
   deleteTaskEntry(taskId: string, entryId: string): Promise<void>
+  fetchTaskLogDraft(taskId: string): Promise<TaskLogDraft | null>
+  saveTaskLogDraft(taskId: string, content: string): Promise<TaskLogDraft | null>
+  deleteTaskLogDraft(taskId: string): Promise<void>
   takeOverTask(taskId: string): Promise<WorkSession>
   doAfk(): Promise<void>
   getCurrentSession(): Promise<WorkSession | null>

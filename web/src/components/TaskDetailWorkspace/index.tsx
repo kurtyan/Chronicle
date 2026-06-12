@@ -3,7 +3,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import { useI18n } from '@/i18n/context'
 import type { TaskEntry, WorkSession, Task, TaskProgressContext } from '@/types'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
-import { getTaskExtraInfoValue, submitTaskEntry } from '@/services/api'
+import { deleteTaskLogDraft, fetchTaskLogDraft, getTaskExtraInfoValue, saveTaskLogDraft } from '@/services/api'
 import { updatePlanItem, takeOverTask } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
@@ -50,13 +50,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
   const workspaceScrollRef = useRef<HTMLDivElement | null>(null)
 
-  // Track the entry ID from silent saves (Cmd+S, auto-save) so subsequent saves
-  // update the same entry instead of creating duplicate entries on every press.
-  const silentEntryIdRef = useRef<Record<string, string | null>>({})
-
-  // Serialize silent saves per taskId — each save waits for the previous one to finish
-  // before checking for entry ID. Prevents race condition where two rapid Cmd+S
-  // both find no entryId and create duplicate entries.
+  // Serialize draft saves per taskId so rapid Cmd+S presses cannot race.
   const silentSaveLockRef = useRef<Record<string, Promise<void> | null>>({})
 
   const DRAFT_ID = '__draft__'
@@ -83,27 +77,11 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const handleCompleteTask = async () => {
     if (!activeTaskId || isDraftActive) return
     if (!isHtmlEmpty(logContent)) {
-      // Check for existing draft entry from Cmd+S
-      let existingId = silentEntryIdRef.current[activeTaskId]
-      if (!existingId) {
-        existingId = localStorage.getItem(`chronicle:draft_entry_id:${activeTaskId}`)
-      }
-      if (existingId) {
-        await (await import('@/services/api')).updateTaskEntry(activeTaskId, existingId, logContent.trim())
-        const { fetchTaskEntries } = await import('@/services/api')
-        const freshEntries = await fetchTaskEntries(activeTaskId)
-        useTaskStore.setState({ entries: freshEntries })
-      } else {
-        await submitEntry(activeTaskId, logContent.trim(), 'log')
-      }
+      await submitEntry(activeTaskId, logContent.trim(), 'log')
+      await deleteTaskLogDraft(activeTaskId).catch((err) => console.error('Failed to delete log draft:', err))
       clearLogContentDraft(activeTaskId)
-      silentEntryIdRef.current[activeTaskId] = null
-      localStorage.removeItem(`chronicle:draft_entry_id:${activeTaskId}`)
       localStorage.removeItem(`chronicle:editing_entry_id:${activeTaskId}`)
       localStorage.removeItem(`chronicle:entry_draft:${activeTaskId}:__new__`)
-      if (existingId) {
-        localStorage.removeItem(`chronicle:entry_draft:${activeTaskId}:${existingId}`)
-      }
       setEditingEntryId(null)
     }
     await markDone(activeTaskId)
@@ -197,38 +175,15 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     const toSubmit = content ?? useTaskStore.getState().logContentDraft[activeTaskId] ?? ''
     if (isHtmlEmpty(toSubmit)) return
 
-    // Check if there's already a draft entry from Cmd+S
-    let existingId = silentEntryIdRef.current[activeTaskId]
-    if (!existingId) {
-      existingId = localStorage.getItem(`chronicle:draft_entry_id:${activeTaskId}`)
-    }
-
-    if (existingId) {
-      // Update the existing draft entry instead of creating a new one
-      await (await import('@/services/api')).updateTaskEntry(activeTaskId, existingId, toSubmit.trim())
-      // Re-fetch entries so the entry becomes visible
-      const { fetchTaskEntries } = await import('@/services/api')
-      const freshEntries = await fetchTaskEntries(activeTaskId)
-      useTaskStore.setState({ entries: freshEntries })
-    } else {
-      // No prior draft — create new entry
-      await submitEntry(activeTaskId, toSubmit.trim(), 'log')
-    }
-
+    await submitEntry(activeTaskId, toSubmit.trim(), 'log')
+    await deleteTaskLogDraft(activeTaskId).catch((err) => console.error('Failed to delete log draft:', err))
     clearLogContentDraft(activeTaskId)
-    silentEntryIdRef.current[activeTaskId] = null
-    localStorage.removeItem(`chronicle:draft_entry_id:${activeTaskId}`)
     localStorage.removeItem(`chronicle:editing_entry_id:${activeTaskId}`)
     localStorage.removeItem(`chronicle:entry_draft:${activeTaskId}:__new__`)
-    if (existingId) {
-      localStorage.removeItem(`chronicle:entry_draft:${activeTaskId}:${existingId}`)
-    }
     setEditingEntryId(null)
   }
 
-  // Save new entry draft silently and refresh entries without broadcasting SSE noise.
-  // Entry ID is tracked in localStorage so subsequent saves update the same entry.
-  // Uses a per-taskId lock to serialize saves and prevent race conditions.
+  // Save the new-entry working draft without creating a formal task log.
   const handleSilentSave = useCallback(async (content: string) => {
     if (!activeTaskId || isDraftActive) return
     if (isHtmlEmpty(content)) return
@@ -236,41 +191,48 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     const chain = silentSaveLockRef.current[activeTaskId] ?? Promise.resolve()
     silentSaveLockRef.current[activeTaskId] = chain.then(async () => {
       try {
-        let existingId = silentEntryIdRef.current[activeTaskId]
-        const lsId = localStorage.getItem(`chronicle:draft_entry_id:${activeTaskId}`)
-        if (!existingId) {
-          existingId = lsId
-          if (existingId) silentEntryIdRef.current[activeTaskId] = existingId
-        }
-        if (existingId) {
-          await (await import('@/services/api')).updateTaskEntry(activeTaskId, existingId, content)
-        } else {
-          const entry = await submitTaskEntry(activeTaskId, content, 'log', true /* silent */)
-          silentEntryIdRef.current[activeTaskId] = entry.id
-          localStorage.setItem(`chronicle:draft_entry_id:${activeTaskId}`, entry.id)
-          // New entry creation updated task.updated_at — refresh list so task re-sorts to top
-          await useTaskStore.getState().loadTodos()
-        }
-        const freshEntries = await (await import('@/services/api')).fetchTaskEntries(activeTaskId)
-        useTaskStore.setState({ entries: freshEntries })
+        await saveTaskLogDraft(activeTaskId, content)
       } catch (err) {
-        console.error('Silent save failed:', err)
+        console.error('Draft save failed:', err)
       }
     })
     return silentSaveLockRef.current[activeTaskId]
   }, [activeTaskId, isDraftActive])
 
-  // Restore editing state from localStorage when task changes
+  // Restore editing state and the new-entry working draft when task changes.
   useEffect(() => {
-    if (activeTaskId) {
-      // Priority: draft entry ID (Cmd+S new entry) > editing entry ID (existing entry edit)
-      const draftId = localStorage.getItem(`chronicle:draft_entry_id:${activeTaskId}`)
-      const editingId = localStorage.getItem(`chronicle:editing_entry_id:${activeTaskId}`)
-      setEditingEntryId(draftId ?? editingId)
-    } else {
+    if (!activeTaskId || activeTaskId === DRAFT_ID) {
       setEditingEntryId(null)
+      return
     }
-  }, [activeTaskId])
+
+    let cancelled = false
+    const restore = async () => {
+      const editingId = localStorage.getItem(`chronicle:editing_entry_id:${activeTaskId}`)
+      setEditingEntryId(editingId)
+
+      const draftKey = `chronicle:entry_draft:${activeTaskId}:__new__`
+      const localDraft = localStorage.getItem(draftKey)
+      if (localDraft !== null) {
+        setLogContentDraft(activeTaskId, localDraft)
+        return
+      }
+
+      try {
+        const savedDraft = await fetchTaskLogDraft(activeTaskId)
+        if (cancelled) return
+        if (savedDraft?.content) {
+          setLogContentDraft(activeTaskId, savedDraft.content)
+        } else {
+          clearLogContentDraft(activeTaskId)
+        }
+      } catch (err) {
+        console.error('Failed to restore log draft:', err)
+      }
+    }
+    restore()
+    return () => { cancelled = true }
+  }, [activeTaskId, clearLogContentDraft, setLogContentDraft])
 
   useEffect(() => {
     if (!activeTaskId || activeTaskId === DRAFT_ID || entryLoading) return
@@ -298,26 +260,11 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
         if (state.activeTaskId) {
           const storeLog = state.logContentDraft[state.activeTaskId] || ''
           if (!isHtmlEmpty(storeLog)) {
-            // Check for existing draft entry from Cmd+S
-            let existingId = silentEntryIdRef.current[state.activeTaskId]
-            if (!existingId) {
-              existingId = localStorage.getItem(`chronicle:draft_entry_id:${state.activeTaskId}`)
-            }
-            if (existingId) {
-              await (await import('@/services/api')).updateTaskEntry(state.activeTaskId, existingId, storeLog.trim())
-              const freshEntries = await (await import('@/services/api')).fetchTaskEntries(state.activeTaskId)
-              useTaskStore.setState({ entries: freshEntries })
-            } else {
-              await submitEntry(state.activeTaskId, storeLog.trim(), 'log')
-            }
+            await submitEntry(state.activeTaskId, storeLog.trim(), 'log')
+            await deleteTaskLogDraft(state.activeTaskId).catch((err) => console.error('Failed to delete log draft:', err))
             clearLogContentDraft(state.activeTaskId)
-            silentEntryIdRef.current[state.activeTaskId] = null
-            localStorage.removeItem(`chronicle:draft_entry_id:${state.activeTaskId}`)
             localStorage.removeItem(`chronicle:editing_entry_id:${state.activeTaskId}`)
             localStorage.removeItem(`chronicle:entry_draft:${state.activeTaskId}:__new__`)
-            if (existingId) {
-              localStorage.removeItem(`chronicle:entry_draft:${state.activeTaskId}:${existingId}`)
-            }
             setEditingEntryId(null)
           }
         }
@@ -591,15 +538,6 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
                       if (activeTaskId) {
                         localStorage.removeItem(`chronicle:editing_entry_id:${activeTaskId}`)
                         localStorage.removeItem(`chronicle:entry_draft:${activeTaskId}:${entry.id}`)
-                        // If this was a draft entry from Cmd+S, clear all draft-specific state
-                        const draftId = silentEntryIdRef.current[activeTaskId]
-                          ?? localStorage.getItem(`chronicle:draft_entry_id:${activeTaskId}`)
-                        if (draftId === entry.id) {
-                          silentEntryIdRef.current[activeTaskId] = null
-                          localStorage.removeItem(`chronicle:draft_entry_id:${activeTaskId}`)
-                          localStorage.removeItem(`chronicle:entry_draft:${activeTaskId}:__new__`)
-                          clearLogContentDraft(activeTaskId)
-                        }
                       }
                     }
                   }}

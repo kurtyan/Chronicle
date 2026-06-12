@@ -5,7 +5,7 @@ test.describe('Cmd+S Draft Entry', () => {
     await page.request.post('/api/afk').catch(() => {})
   })
 
-  test('Cmd+S saves one draft entry and updates it on repeated saves', async ({ page }) => {
+  test('Cmd+S saves a working draft without creating a formal log', async ({ page }) => {
     const uniqueName = `DraftSave-${Date.now()}`
     const res = await page.request.post('/api/tasks', {
       data: { title: uniqueName, type: 'TODO', priority: 'MEDIUM' }
@@ -17,40 +17,45 @@ test.describe('Cmd+S Draft Entry', () => {
     await page.locator('h4').filter({ hasText: uniqueName }).first().click()
     await page.waitForTimeout(500)
 
-    // Type content and Cmd+S
     await page.locator('.ProseMirror').fill('Hello draft content')
     await page.waitForTimeout(300)
     await page.keyboard.press('Meta+s')
     await page.waitForTimeout(1000)
 
-    // Entry list should show the draft entry
-    const entryCount = await page.getByTestId('task-entry-block').count()
-    expect(entryCount).toBe(1)
+    await expect(page.locator('.ProseMirror')).toContainText('Hello draft content')
+    expect(await page.getByTestId('task-entry-block').count()).toBe(0)
 
-    // But verify the entry was saved to DB
     const entries = await page.request.get(`/api/tasks/${task.id}/logs`)
     const entriesJson = await entries.json()
-    expect(entriesJson.length).toBe(1)
-    expect(entriesJson[0].content).toContain('Hello draft content')
+    expect(entriesJson.length).toBe(0)
 
-    // Continue editing and Cmd+S again
+    const draft = await page.request.get(`/api/tasks/${task.id}/log-draft`)
+    const draftJson = await draft.json()
+    expect(draftJson.content).toContain('Hello draft content')
+
     await page.locator('.ProseMirror').fill('Hello draft content updated')
     await page.waitForTimeout(300)
     await page.keyboard.press('Meta+s')
     await page.waitForTimeout(1000)
 
-    // Still one entry in UI
-    const entryCount2 = await page.getByTestId('task-entry-block').count()
-    expect(entryCount2).toBe(1)
+    expect(await page.getByTestId('task-entry-block').count()).toBe(0)
 
-    // Verify DB has only 1 entry (updated, not duplicated)
     const entries2 = await page.request.get(`/api/tasks/${task.id}/logs`)
     const entriesJson2 = await entries2.json()
-    expect(entriesJson2.length).toBe(1)
-    expect(entriesJson2[0].content).toContain('Hello draft content updated')
+    expect(entriesJson2.length).toBe(0)
+
+    const draft2 = await page.request.get(`/api/tasks/${task.id}/log-draft`)
+    const draftJson2 = await draft2.json()
+    expect(draftJson2.content).toContain('Hello draft content updated')
+
+    await page.reload()
+    await page.waitForLoadState('load')
+    await page.locator('h4').filter({ hasText: uniqueName }).first().click()
+    await page.waitForTimeout(500)
+    await expect(page.locator('.ProseMirror')).toContainText('Hello draft content updated')
   })
 
-  test('Submit Log shows entry in list and clears draft binding', async ({ page }) => {
+  test('Submit Log creates one formal log and clears the working draft', async ({ page }) => {
     const uniqueName = `DraftSubmit-${Date.now()}`
     const res = await page.request.post('/api/tasks', {
       data: { title: uniqueName, type: 'TODO', priority: 'MEDIUM' }
@@ -62,42 +67,42 @@ test.describe('Cmd+S Draft Entry', () => {
     await page.locator('h4').filter({ hasText: uniqueName }).first().click()
     await page.waitForTimeout(500)
 
-    // Type and Cmd+S — creates a draft entry
     await page.locator('.ProseMirror').fill('Draft before submit')
     await page.waitForTimeout(300)
     await page.keyboard.press('Meta+s')
     await page.waitForTimeout(1000)
 
-    // Verify entry in DB and UI
     let entries = await page.request.get(`/api/tasks/${task.id}/logs`)
     let entriesJson = await entries.json()
-    expect(entriesJson.length).toBe(1)
-    expect(await page.getByTestId('task-entry-block').count()).toBe(1)
+    expect(entriesJson.length).toBe(0)
+    expect(await page.getByTestId('task-entry-block').count()).toBe(0)
 
-    // Type new content and Submit Log
     await page.locator('.ProseMirror').fill('Submit log content')
     await page.waitForTimeout(300)
     await page.getByRole('button', { name: '提交' }).click()
     await page.waitForTimeout(1000)
 
-    // Submit updates the draft entry instead of duplicating it
     expect(await page.getByTestId('task-entry-block').count()).toBe(1)
 
-    // Verify DB still has 1 entry
     entries = await page.request.get(`/api/tasks/${task.id}/logs`)
     entriesJson = await entries.json()
     expect(entriesJson.length).toBe(1)
     expect(entriesJson[0].content).toContain('Submit log content')
 
-    // Cmd+S after submit should create a NEW entry (binding was cleared)
+    const draftAfterSubmit = await page.request.get(`/api/tasks/${task.id}/log-draft`)
+    expect(await draftAfterSubmit.json()).toBeNull()
+
     await page.locator('.ProseMirror').fill('New draft after submit')
     await page.waitForTimeout(300)
     await page.keyboard.press('Meta+s')
     await page.waitForTimeout(1000)
 
-    // DB should have 2 entries now
     entries = await page.request.get(`/api/tasks/${task.id}/logs`)
     entriesJson = await entries.json()
-    expect(entriesJson.length).toBe(2)
+    expect(entriesJson.length).toBe(1)
+
+    const draftAfterNewSave = await page.request.get(`/api/tasks/${task.id}/log-draft`)
+    const draftAfterNewSaveJson = await draftAfterNewSave.json()
+    expect(draftAfterNewSaveJson.content).toContain('New draft after submit')
   })
 })

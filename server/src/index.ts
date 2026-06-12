@@ -217,6 +217,27 @@ app.post('/api/tasks/logs/batch', async (c) => {
   }
 })
 
+app.get('/api/tasks/:id/log-draft', async (c) => {
+  return c.json(await service.getTaskLogDraft(c.req.param('id')))
+})
+
+app.put('/api/tasks/:id/log-draft', async (c) => {
+  const body = await c.req.json()
+  if (typeof body.content !== 'string') return c.json({ error: 'content is required' }, 400)
+  try {
+    return c.json(await service.saveTaskLogDraft(c.req.param('id'), body.content))
+  } catch (err: any) {
+    const message = err?.message || 'Failed to save draft'
+    const status = message.includes('Task not found') ? 404 : 400
+    return c.json({ error: message }, status)
+  }
+})
+
+app.delete('/api/tasks/:id/log-draft', async (c) => {
+  await service.deleteTaskLogDraft(c.req.param('id'))
+  return c.json({ success: true })
+})
+
 app.put('/api/tasks/:id/logs/:entryId', async (c) => {
   const body = await c.req.json()
   const entry = await service.updateTaskEntry(c.req.param('id'), c.req.param('entryId'), body.content)
