@@ -793,6 +793,7 @@ export class EmbeddedApiProvider implements ApiInterface {
       timeoutMs: 30000,
       meetingExtractionMaxTokens: 4000,
       taskSummaryMaxTokens: 1200,
+      dailySummaryMaxTokens: 4000,
       meetingExtractionPrompt: '',
       defaultMeetingExtractionPrompt: `You extract meeting notes from raw user input.
 The user input may contain HTML rich text. Use both the HTML and plain-text versions when provided.

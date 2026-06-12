@@ -474,24 +474,24 @@ export function TodayPage() {
                 <ChevronRight className="h-4 w-4" />
               </button>
             </div>
-            <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-2 overflow-hidden">
               <button
-                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-60"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border hover:bg-muted disabled:opacity-60"
                 onClick={handlePlanToday}
                 disabled={planDraftLoading || loadingScript || !script}
-                title="Use task summaries and unfinished focus lines to plan today"
+                title="Plan Today with LLM task context"
+                aria-label="Plan Today with LLM task context"
               >
                 {planDraftLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarPlus className="h-4 w-4" />}
-                Plan Today
               </button>
               <button
-                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-60"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border hover:bg-muted disabled:opacity-60"
                 onClick={handleDailySummary}
                 disabled={dailySummaryLoading || loadingScript || !script}
-                title="Use LLM to summarize focus work and work sessions"
+                title="Generate Daily Summary with LLM"
+                aria-label="Generate Daily Summary with LLM"
               >
                 {dailySummaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Daily Summary
               </button>
               {script ? <FocusStatusBar blocks={script.blocks} tasks={tasks} scriptDate={displayDate} todayScriptDate={todayScriptDate} /> : null}
             </div>

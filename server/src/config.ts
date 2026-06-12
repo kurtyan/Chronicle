@@ -27,6 +27,7 @@ export interface ChronicleConfig {
     timeoutMs: number
     meetingExtractionMaxTokens: number
     taskSummaryMaxTokens: number
+    dailySummaryMaxTokens: number
     meetingExtractionPrompt: string
     taskSummaryPrompt: string
     dailySummaryPrompt: string
@@ -57,6 +58,7 @@ const defaultConfig: ChronicleConfig = {
     timeoutMs: 30000,
     meetingExtractionMaxTokens: 4000,
     taskSummaryMaxTokens: 1200,
+    dailySummaryMaxTokens: 4000,
     meetingExtractionPrompt: '',
     taskSummaryPrompt: '',
     dailySummaryPrompt: '',
@@ -119,6 +121,7 @@ export function getConfig(): ChronicleConfig {
       timeoutMs: envLlmTimeoutMs ? parseInt(envLlmTimeoutMs, 10) : (fileConfig.llm?.timeoutMs ?? defaultConfig.llm.timeoutMs),
       meetingExtractionMaxTokens: fileConfig.llm?.meetingExtractionMaxTokens ?? defaultConfig.llm.meetingExtractionMaxTokens,
       taskSummaryMaxTokens: fileConfig.llm?.taskSummaryMaxTokens ?? defaultConfig.llm.taskSummaryMaxTokens,
+      dailySummaryMaxTokens: fileConfig.llm?.dailySummaryMaxTokens ?? defaultConfig.llm.dailySummaryMaxTokens,
       meetingExtractionPrompt: fileConfig.llm?.meetingExtractionPrompt ?? defaultConfig.llm.meetingExtractionPrompt,
       taskSummaryPrompt: fileConfig.llm?.taskSummaryPrompt ?? defaultConfig.llm.taskSummaryPrompt,
       dailySummaryPrompt: fileConfig.llm?.dailySummaryPrompt ?? defaultConfig.llm.dailySummaryPrompt,

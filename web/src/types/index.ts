@@ -152,6 +152,7 @@ export interface LlmSettings {
   timeoutMs: number
   meetingExtractionMaxTokens: number
   taskSummaryMaxTokens: number
+  dailySummaryMaxTokens: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string

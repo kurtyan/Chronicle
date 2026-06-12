@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'crypto'
-import { getDb } from '../db'
+import { getDb, getMetaValue } from '../db'
 import { getDayScript } from './dayScriptService'
-import { getAllTasks, getSessionsForRange, getTaskById, getTaskEntries, type Task, type WorkSession } from './taskService'
+import { getAllTasks, getSessionsForRange, getTaskEntries, type Task, type WorkSession } from './taskService'
 import {
   callChatCompletionsWithRaw,
   DEFAULT_DAILY_SUMMARY_PROMPT,
@@ -82,8 +82,14 @@ function addDays(date: string, offset: number): string {
   ].join('-')
 }
 
+function getStartOfDayOffset(): number {
+  const offset = Number(getMetaValue('start_of_day_offset') ?? 5)
+  if (!Number.isFinite(offset)) return 5
+  return Math.max(0, Math.min(23, Math.trunc(offset)))
+}
+
 function workdayRange(date: string): { start: number; end: number } {
-  const start = localDateAt(date, 5).getTime()
+  const start = localDateAt(date, getStartOfDayOffset()).getTime()
   return { start, end: start + 24 * 60 * 60 * 1000 }
 }
 
@@ -136,6 +142,24 @@ function text(value: string): JsonNode {
 
 function normalizeDoc(nodes: JsonNode[]): JsonNode {
   return { type: 'doc', content: nodes.length > 0 ? nodes : [paragraph([text('')])] }
+}
+
+function carriedBlockHeader(block: { startTime: string; endTime: string; headerText: string; taskIds: string[] }, tasksById: Map<string, Task>): JsonNode[] {
+  const prefix = block.startTime && block.endTime ? `${block.startTime}-${block.endTime} ` : ''
+  const taskId = block.taskIds[0]
+  const task = taskId ? tasksById.get(taskId) : null
+  if (!task) return [text(`${prefix}${block.headerText}`)]
+  const mention = `@${task.title}`
+  const mentionIndex = block.headerText.indexOf(mention)
+  const before = mentionIndex >= 0 ? block.headerText.slice(0, mentionIndex).trim() : ''
+  const remainder = mentionIndex >= 0
+    ? block.headerText.slice(mentionIndex + mention.length).trim()
+    : block.headerText.trim()
+  return [
+    text(`${prefix}${before ? `${before} ` : ''}`),
+    makeTaskMention(task),
+    ...(remainder ? [text(` ${remainder}`)] : []),
+  ]
 }
 
 function extractDocText(node: JsonNode | null | undefined): string {
@@ -264,6 +288,7 @@ function buildSummaryInput(date: string): { inputText: string; fingerprintData: 
 }
 
 export async function generateDailySummary(date: string, options: { refresh?: boolean; mode?: 'record' | 'test' } = {}): Promise<DailySummaryResult> {
+  const mode = options.mode ?? 'record'
   const settings = getLlmSettings()
   if (!settings.baseUrl || !settings.model) throw new Error('LLM is not configured')
   const prompt = settings.dailySummaryPrompt.trim() || DEFAULT_DAILY_SUMMARY_PROMPT
@@ -271,7 +296,7 @@ export async function generateDailySummary(date: string, options: { refresh?: bo
   const input = buildSummaryInput(date)
   const fingerprint = createHash('sha1').update(JSON.stringify({ prompt, input: input.fingerprintData })).digest('hex')
   const cached = queryOne('SELECT * FROM day_script_daily_summaries WHERE script_date = ?', [date]) as { fingerprint: string; summary_markdown: string; llm_call_log_id: string | null } | null
-  if (!options.refresh && cached?.fingerprint === fingerprint) {
+  if (mode === 'record' && !options.refresh && cached?.fingerprint === fingerprint) {
     return { date, summaryMarkdown: cached.summary_markdown, cached: true, llmCallLogId: cached.llm_call_log_id }
   }
 
@@ -290,7 +315,7 @@ export async function generateDailySummary(date: string, options: { refresh?: bo
   let summaryMarkdown = ''
 
   try {
-    const response = await callChatCompletionsWithRaw(settings, messages, settings.meetingExtractionMaxTokens, { jsonResponse: false })
+    const response = await callChatCompletionsWithRaw(settings, messages, settings.dailySummaryMaxTokens, { jsonResponse: false })
     rawProviderResponse = response.providerResponse
     summaryMarkdown = response.content.trim()
     rawResponse = summaryMarkdown
@@ -311,7 +336,7 @@ export async function generateDailySummary(date: string, options: { refresh?: bo
       promptVersion,
       model: settings.model,
       baseUrl: settings.baseUrl,
-      requestInput: { date, mode: options.mode ?? 'record', inputText: input.inputText, sessionCount: input.sessionCount },
+      requestInput: { date, mode, inputText: input.inputText, sessionCount: input.sessionCount },
       requestMessages: messages,
       rawProviderResponse,
       rawResponse,
@@ -323,16 +348,18 @@ export async function generateDailySummary(date: string, options: { refresh?: bo
     })
   }
 
-  run(
-    `INSERT INTO day_script_daily_summaries (script_date, fingerprint, summary_markdown, llm_call_log_id, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(script_date) DO UPDATE SET
-       fingerprint = excluded.fingerprint,
-       summary_markdown = excluded.summary_markdown,
-       llm_call_log_id = excluded.llm_call_log_id,
-       updated_at = excluded.updated_at`,
-    [date, fingerprint, escapeJson(summaryMarkdown), logId, Date.now()]
-  )
+  if (mode === 'record') {
+    run(
+      `INSERT INTO day_script_daily_summaries (script_date, fingerprint, summary_markdown, llm_call_log_id, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(script_date) DO UPDATE SET
+         fingerprint = excluded.fingerprint,
+         summary_markdown = excluded.summary_markdown,
+         llm_call_log_id = excluded.llm_call_log_id,
+         updated_at = excluded.updated_at`,
+      [date, fingerprint, escapeJson(summaryMarkdown), logId, Date.now()]
+    )
+  }
   return { date, summaryMarkdown, cached: false, llmCallLogId: logId }
 }
 
@@ -364,7 +391,7 @@ export function buildPlanTodayDraft(date: string): PlanTodayDraftResult {
   const unfinished = previous.blocks.filter((block) => !block.completed)
   if (nodes.length > 0 && unfinished.length > 0) nodes.push({ type: 'horizontalRule' })
   for (const block of unfinished) {
-    nodes.push(paragraph([text(`${block.startTime}-${block.endTime} ${block.headerText}`)]))
+    nodes.push(paragraph(carriedBlockHeader(block, tasksById)))
     if (block.progressText.trim()) nodes.push(paragraph([text(block.progressText.trim())]))
   }
 

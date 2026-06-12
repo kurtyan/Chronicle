@@ -93,6 +93,7 @@ export interface LlmSettings {
   timeoutMs: number
   meetingExtractionMaxTokens: number
   taskSummaryMaxTokens: number
+  dailySummaryMaxTokens: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string
@@ -165,6 +166,7 @@ export function getLlmSettings(): LlmSettings {
     timeoutMs: Number.isFinite(config.timeoutMs) ? config.timeoutMs : 30000,
     meetingExtractionMaxTokens: normalizeMaxTokens(config.meetingExtractionMaxTokens, 4000),
     taskSummaryMaxTokens: normalizeMaxTokens(config.taskSummaryMaxTokens, 1200),
+    dailySummaryMaxTokens: normalizeMaxTokens(config.dailySummaryMaxTokens, 4000),
     meetingExtractionPrompt: config.meetingExtractionPrompt,
     defaultMeetingExtractionPrompt: DEFAULT_MEETING_EXTRACTION_PROMPT,
     taskSummaryPrompt: config.taskSummaryPrompt,
@@ -183,6 +185,9 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
   const taskSummaryMaxTokens = input.taskSummaryMaxTokens === undefined
     ? current.taskSummaryMaxTokens
     : normalizeMaxTokens(input.taskSummaryMaxTokens, 1200)
+  const dailySummaryMaxTokens = input.dailySummaryMaxTokens === undefined
+    ? current.dailySummaryMaxTokens
+    : normalizeMaxTokens(input.dailySummaryMaxTokens, 4000)
   updateConfig({
     llm: {
       baseUrl: input.baseUrl ?? current.baseUrl,
@@ -191,6 +196,7 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
       timeoutMs,
       meetingExtractionMaxTokens,
       taskSummaryMaxTokens,
+      dailySummaryMaxTokens,
       meetingExtractionPrompt: input.meetingExtractionPrompt ?? current.meetingExtractionPrompt,
       taskSummaryPrompt: input.taskSummaryPrompt ?? current.taskSummaryPrompt,
       dailySummaryPrompt: input.dailySummaryPrompt ?? current.dailySummaryPrompt,

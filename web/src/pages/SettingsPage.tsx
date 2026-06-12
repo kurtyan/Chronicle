@@ -145,6 +145,7 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
     timeoutMs: settings.timeoutMs,
     meetingExtractionMaxTokens: normalizeMaxTokens(settings.meetingExtractionMaxTokens, 4000),
     taskSummaryMaxTokens: normalizeMaxTokens(settings.taskSummaryMaxTokens, 1200),
+    dailySummaryMaxTokens: normalizeMaxTokens(settings.dailySummaryMaxTokens, 4000),
     meetingExtractionPrompt: meetingPrompt === defaultMeetingPrompt ? '' : settings.meetingExtractionPrompt,
     taskSummaryPrompt: taskSummaryPrompt === defaultTaskSummaryPrompt ? '' : settings.taskSummaryPrompt,
     dailySummaryPrompt: dailySummaryPrompt === defaultDailySummaryPrompt ? '' : settings.dailySummaryPrompt,
@@ -481,6 +482,18 @@ function LlmProviderSettingsSection({
             className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
             value={settings.taskSummaryMaxTokens}
             onChange={(e) => onUpdate({ taskSummaryMaxTokens: normalizeMaxTokens(parseInt(e.target.value, 10), 1200) })}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Daily Summary Max Tokens</span>
+          <input
+            type="number"
+            min={16}
+            max={32000}
+            step={100}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={settings.dailySummaryMaxTokens}
+            onChange={(e) => onUpdate({ dailySummaryMaxTokens: normalizeMaxTokens(parseInt(e.target.value, 10), 4000) })}
           />
         </label>
       </div>
@@ -1236,6 +1249,7 @@ export function SettingsPage() {
     timeoutMs: 30000,
     meetingExtractionMaxTokens: 4000,
     taskSummaryMaxTokens: 1200,
+    dailySummaryMaxTokens: 4000,
     meetingExtractionPrompt: '',
     defaultMeetingExtractionPrompt: '',
     taskSummaryPrompt: '',
