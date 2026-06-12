@@ -29,6 +29,7 @@ export interface ChronicleConfig {
     taskSummaryMaxTokens: number
     meetingExtractionPrompt: string
     taskSummaryPrompt: string
+    dailySummaryPrompt: string
   }
 }
 
@@ -58,6 +59,7 @@ const defaultConfig: ChronicleConfig = {
     taskSummaryMaxTokens: 1200,
     meetingExtractionPrompt: '',
     taskSummaryPrompt: '',
+    dailySummaryPrompt: '',
   },
 }
 
@@ -119,6 +121,7 @@ export function getConfig(): ChronicleConfig {
       taskSummaryMaxTokens: fileConfig.llm?.taskSummaryMaxTokens ?? defaultConfig.llm.taskSummaryMaxTokens,
       meetingExtractionPrompt: fileConfig.llm?.meetingExtractionPrompt ?? defaultConfig.llm.meetingExtractionPrompt,
       taskSummaryPrompt: fileConfig.llm?.taskSummaryPrompt ?? defaultConfig.llm.taskSummaryPrompt,
+      dailySummaryPrompt: fileConfig.llm?.dailySummaryPrompt ?? defaultConfig.llm.dailySummaryPrompt,
     },
   }
 }

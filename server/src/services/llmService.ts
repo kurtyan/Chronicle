@@ -28,10 +28,11 @@ export const DEFAULT_TASK_SUMMARY_PROMPT = `Summarize the latest task state.
 Return only valid JSON matching this exact shape:
 {
   "latestProgress": "non-empty string",
-  "nextStep": "string"
+  "nextStep": "string",
+  "recommendedNextStep": "string"
 }
 Rules:
-- Return exactly these two keys: latestProgress and nextStep.
+- Return exactly these three keys: latestProgress, nextStep, and recommendedNextStep.
 - Do not add, remove, rename, or nest fields.
 - Use the same language as the task logs when possible.
 - Base the answer only on the supplied task data.
@@ -47,8 +48,43 @@ Rules:
 - Do not use the latest entry as the sole basis for latestProgress unless it is the only supplied entry.
 - If there is no explicit next step still pending at the end of the timeline, nextStep must be an empty string.
 - nextStep must never be null.
-- Keep both JSON string values on one line. Replace any line breaks with spaces.
+- recommendedNextStep must only be filled when nextStep is an empty string.
+- recommendedNextStep should suggest one concise next action based on the current task state and supplied task logs.
+- recommendedNextStep must not invent external facts or commitments; it should be a practical recommendation inferred from the task history.
+- For PENDING or DOING tasks, prefer providing a recommendedNextStep when nextStep is empty and the logs contain enough context for a useful recommendation.
+- If the task appears complete or there is no useful recommendation, recommendedNextStep must be an empty string.
+- recommendedNextStep must never be null.
+- Keep all JSON string values on one line. Replace any line breaks with spaces.
 - Do not include markdown fences or prose outside JSON.`
+
+export const DEFAULT_DAILY_SUMMARY_PROMPT = `You generate a daily work review from Chronicle focus data and work sessions.
+Return Markdown only. Do not wrap the answer in code fences.
+
+Required sections:
+## Daily Summary
+Briefly summarize the day in 2-4 bullets.
+
+## Sessions Timeline
+List chronological sessions as HH:MM-HH:MM [duration] task title.
+
+## AFK & Time Analysis
+Include AFK gaps longer than 1 minute, focus ratio, total active work time, total AFK, and notable patterns.
+
+## Hourly Activity
+Analyze each hour in the workday. Use text bars where one block is about 3 minutes of active work.
+
+## Task Review
+Review important completed and in-progress tasks. Mention concrete progress and efficiency observations.
+
+## Suggestions for Tomorrow
+Give practical, prioritized suggestions for tomorrow based only on the supplied focus lines, task logs, task summaries, and time utilization.
+
+Rules:
+- Be specific about time usage and AFK/work patterns.
+- Call out long breaks, dead zones, context switching, and strong focus blocks.
+- Use the same language as the supplied data when possible.
+- Do not invent external facts or commitments.
+- Keep the result concise but useful.`
 
 export interface LlmSettings {
   baseUrl: string
@@ -61,6 +97,8 @@ export interface LlmSettings {
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string
   defaultTaskSummaryPrompt: string
+  dailySummaryPrompt: string
+  defaultDailySummaryPrompt: string
 }
 
 export interface LlmCallLog {
@@ -131,6 +169,8 @@ export function getLlmSettings(): LlmSettings {
     defaultMeetingExtractionPrompt: DEFAULT_MEETING_EXTRACTION_PROMPT,
     taskSummaryPrompt: config.taskSummaryPrompt,
     defaultTaskSummaryPrompt: DEFAULT_TASK_SUMMARY_PROMPT,
+    dailySummaryPrompt: config.dailySummaryPrompt,
+    defaultDailySummaryPrompt: DEFAULT_DAILY_SUMMARY_PROMPT,
   }
 }
 
@@ -153,6 +193,7 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
       taskSummaryMaxTokens,
       meetingExtractionPrompt: input.meetingExtractionPrompt ?? current.meetingExtractionPrompt,
       taskSummaryPrompt: input.taskSummaryPrompt ?? current.taskSummaryPrompt,
+      dailySummaryPrompt: input.dailySummaryPrompt ?? current.dailySummaryPrompt,
     },
   } as any)
   return getLlmSettings()
@@ -244,7 +285,12 @@ async function callChatCompletions(settings: LlmSettings, messages: Array<{ role
   return (await callChatCompletionsWithRaw(settings, messages, maxTokens)).content
 }
 
-async function callChatCompletionsWithRaw(settings: LlmSettings, messages: Array<{ role: string; content: string }>, maxTokens: number): Promise<{ content: string; providerResponse: string; finishReason: string | null }> {
+export async function callChatCompletionsWithRaw(
+  settings: LlmSettings,
+  messages: Array<{ role: string; content: string }>,
+  maxTokens: number,
+  options: { jsonResponse?: boolean } = { jsonResponse: true },
+): Promise<{ content: string; providerResponse: string; finishReason: string | null }> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
   try {
@@ -260,7 +306,7 @@ async function callChatCompletionsWithRaw(settings: LlmSettings, messages: Array
         messages,
         temperature: 0,
         max_tokens: maxTokens,
-        response_format: { type: 'json_object' },
+        ...(options.jsonResponse === false ? {} : { response_format: { type: 'json_object' } }),
       }),
     })
     const text = await res.text()

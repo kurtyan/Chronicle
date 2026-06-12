@@ -571,7 +571,15 @@ function TaskSummaryWidget({ context, updating }: { context?: TaskProgressContex
   const summary = context?.summary
   const latestProgress = summary?.latestProgress || 'Summary pending.'
   const nextStep = summary?.nextStep.trim() ?? ''
-  const canExpand = latestProgress.length > 160 || nextStep.length > 120 || latestProgress.includes('\n') || nextStep.includes('\n')
+  const recommendedNextStep = summary?.recommendedNextStep.trim() ?? ''
+  const visibleRecommendedNextStep = nextStep ? '' : recommendedNextStep
+  const canExpand =
+    latestProgress.length > 160 ||
+    nextStep.length > 120 ||
+    visibleRecommendedNextStep.length > 120 ||
+    latestProgress.includes('\n') ||
+    nextStep.includes('\n') ||
+    visibleRecommendedNextStep.includes('\n')
   const stateLabel = updating
     ? 'Updating'
     : summary?.errorMessage
@@ -597,7 +605,7 @@ function TaskSummaryWidget({ context, updating }: { context?: TaskProgressContex
 
   useEffect(() => {
     setExpanded(false)
-  }, [context?.taskId, latestProgress, nextStep])
+  }, [context?.taskId, latestProgress, nextStep, visibleRecommendedNextStep])
 
   return (
     <div className="ml-auto w-full max-w-[560px] rounded-lg border border-border bg-card/95 px-3 py-2 shadow-sm">
@@ -615,6 +623,12 @@ function TaskSummaryWidget({ context, updating }: { context?: TaskProgressContex
             <div>
               <div className="text-[11px] font-medium uppercase tracking-normal text-muted-foreground">Next step</div>
               <div className={`${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'} text-foreground`}>{nextStep}</div>
+            </div>
+          )}
+          {!nextStep && visibleRecommendedNextStep && (
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-normal text-muted-foreground">Recommended next step</div>
+              <div className={`${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'} text-muted-foreground`}>{visibleRecommendedNextStep}</div>
             </div>
           )}
           {canExpand && (

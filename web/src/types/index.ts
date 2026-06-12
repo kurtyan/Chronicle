@@ -156,6 +156,8 @@ export interface LlmSettings {
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string
   defaultTaskSummaryPrompt: string
+  dailySummaryPrompt: string
+  defaultDailySummaryPrompt: string
 }
 
 export interface MeetingExtractionResult {
@@ -248,10 +250,28 @@ export interface SaveDayScriptResult {
   conflicts: ProgressSyncConflict[]
 }
 
+export interface DailySummaryResult {
+  date: string
+  summaryMarkdown: string
+  cached: boolean
+  llmCallLogId: string | null
+}
+
+export interface PlanTodayDraftResult {
+  date: string
+  document: Record<string, any>
+  sources: {
+    taskCount: number
+    recommendedTaskCount: number
+    carriedBlockCount: number
+  }
+}
+
 export interface TaskProgressSummary {
   taskId: string
   latestProgress: string
   nextStep: string
+  recommendedNextStep: string
   summaryUpdatedAt: number | null
   stale: boolean
   errorMessage: string | null
@@ -270,5 +290,6 @@ export interface TaskSummaryTestResult {
   taskId: string
   latestProgress: string
   nextStep: string
+  recommendedNextStep: string
   llmCallLogId: string | null
 }

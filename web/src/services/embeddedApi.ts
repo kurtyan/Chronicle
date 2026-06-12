@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, PlanTodayDraftResult } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -770,6 +770,12 @@ export class EmbeddedApiProvider implements ApiInterface {
   async getDayScriptExecutionRecords(): Promise<DayScriptExecutionRecord[]> {
     return []
   }
+  async generateDailySummary(date: string): Promise<DailySummaryResult> {
+    return { date, summaryMarkdown: 'Daily summary is not supported in embedded mode.', cached: false, llmCallLogId: null }
+  }
+  async buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult> {
+    return { date, document: { type: 'doc', content: [{ type: 'paragraph' }] }, sources: { taskCount: 0, recommendedTaskCount: 0, carriedBlockCount: 0 } }
+  }
   async getTaskContexts(): Promise<TaskProgressContext[]> {
     return []
   }
@@ -796,10 +802,11 @@ Return only valid JSON matching the meeting extraction schema.`,
 Return only valid JSON matching this exact shape:
 {
   "latestProgress": "non-empty string",
-  "nextStep": "string"
+  "nextStep": "string",
+  "recommendedNextStep": "string"
 }
 Rules:
-- Return exactly these two keys: latestProgress and nextStep.
+- Return exactly these three keys: latestProgress, nextStep, and recommendedNextStep.
 - Do not add, remove, rename, or nest fields.
 - Use the same language as the task logs when possible.
 - Base the answer only on the supplied task data.
@@ -815,8 +822,17 @@ Rules:
 - Do not use the latest entry as the sole basis for latestProgress unless it is the only supplied entry.
 - If there is no explicit next step still pending at the end of the timeline, nextStep must be an empty string.
 - nextStep must never be null.
-- Keep both JSON string values on one line. Replace any line breaks with spaces.
+- recommendedNextStep must only be filled when nextStep is an empty string.
+- recommendedNextStep should suggest one concise next action based on the current task state and supplied task logs.
+- recommendedNextStep must not invent external facts or commitments; it should be a practical recommendation inferred from the task history.
+- For PENDING or DOING tasks, prefer providing a recommendedNextStep when nextStep is empty and the logs contain enough context for a useful recommendation.
+- If the task appears complete or there is no useful recommendation, recommendedNextStep must be an empty string.
+- recommendedNextStep must never be null.
+- Keep all JSON string values on one line. Replace any line breaks with spaces.
 - Do not include markdown fences or prose outside JSON.`,
+      dailySummaryPrompt: '',
+      defaultDailySummaryPrompt: `You generate a daily work review from Chronicle focus data and work sessions.
+Return Markdown only. Include sessions timeline, AFK/time analysis, hourly activity, task review, and suggestions for tomorrow.`,
     }
   }
   async saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings> {

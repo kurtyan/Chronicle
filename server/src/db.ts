@@ -228,9 +228,25 @@ export function initDb() {
       fingerprint TEXT NOT NULL,
       latest_progress TEXT NOT NULL,
       next_step TEXT NOT NULL,
+      recommended_next_step TEXT NOT NULL DEFAULT '',
       summary_updated_at INTEGER NOT NULL,
       error_message TEXT,
       FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    )
+  `)
+  const taskProgressSummaryColumns = db.prepare("PRAGMA table_info('task_progress_summaries')").all() as Array<{ name: string }>
+  if (!taskProgressSummaryColumns.some((column) => column.name === 'recommended_next_step')) {
+    db.exec("ALTER TABLE task_progress_summaries ADD COLUMN recommended_next_step TEXT NOT NULL DEFAULT ''")
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS day_script_daily_summaries (
+      script_date TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL,
+      summary_markdown TEXT NOT NULL,
+      llm_call_log_id TEXT,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (llm_call_log_id) REFERENCES llm_call_logs(id) ON DELETE SET NULL
     )
   `)
 

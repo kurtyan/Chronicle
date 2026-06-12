@@ -8,6 +8,7 @@ export interface TaskProgressSummary {
   taskId: string
   latestProgress: string
   nextStep: string
+  recommendedNextStep: string
   summaryUpdatedAt: number | null
   stale: boolean
   errorMessage: string | null
@@ -26,6 +27,7 @@ export interface TaskSummaryTestResult {
   taskId: string
   latestProgress: string
   nextStep: string
+  recommendedNextStep: string
   llmCallLogId: string | null
 }
 
@@ -34,6 +36,7 @@ interface CacheRow {
   fingerprint: string
   latest_progress: string
   next_step: string
+  recommended_next_step: string
   summary_updated_at: number
   error_message: string | null
 }
@@ -41,6 +44,7 @@ interface CacheRow {
 const summarySchema = z.object({
   latestProgress: z.string().trim().min(1),
   nextStep: z.string(),
+  recommendedNextStep: z.string().optional().default(''),
 }).strict()
 
 function queryAll(sql: string, params: any[] = []): any[] {
@@ -94,13 +98,14 @@ function getLastActivityAt(taskId: string, fallbackUpdatedAt: number): number | 
   return Math.max(fallbackUpdatedAt, entry?.value ?? 0, session?.value ?? 0) || null
 }
 
-function fallbackSummary(taskId: string): { latestProgress: string; nextStep: string } {
+function fallbackSummary(taskId: string): { latestProgress: string; nextStep: string; recommendedNextStep: string } {
   const entries = getTaskEntries(taskId)
   const latestLog = [...entries].reverse().find((entry) => entry.type === 'log' || entry.type === 'plan')
   const explicitNextStep = extractExplicitNextStep(entries.map((entry) => stripHtmlWithoutCodeBlocks(entry.content)).reverse())
   return {
     latestProgress: latestLog ? normalizeSummaryValue(stripHtmlWithoutCodeBlocks(latestLog.content)) : 'No recent progress recorded.',
     nextStep: explicitNextStep || '',
+    recommendedNextStep: '',
   }
 }
 
@@ -294,9 +299,11 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
       throw new Error('LLM output was truncated because finish_reason is length. Increase max tokens and retry.')
     }
     const parsed = summarySchema.parse(parseLlmJsonObject(rawResponse))
+    const normalizedNextStep = normalizeSummaryValue(parsed.nextStep)
     parsedOutput = {
       latestProgress: normalizeSummaryValue(parsed.latestProgress),
-      nextStep: normalizeSummaryValue(parsed.nextStep),
+      nextStep: normalizedNextStep,
+      recommendedNextStep: normalizedNextStep ? '' : normalizeSummaryValue(parsed.recommendedNextStep),
     }
     return { taskId, ...parsedOutput, llmCallLogId: logId }
   } catch (err: any) {
@@ -342,6 +349,7 @@ function buildTaskContext(taskId: string): TaskProgressContext | null {
         taskId: task.id,
         latestProgress: cached.latest_progress,
         nextStep: cached.next_step,
+        recommendedNextStep: cached.recommended_next_step ?? '',
         summaryUpdatedAt: cached.summary_updated_at,
         stale: cached.fingerprint !== fingerprint,
         errorMessage: cached.error_message,
@@ -350,6 +358,7 @@ function buildTaskContext(taskId: string): TaskProgressContext | null {
         taskId: task.id,
         latestProgress: 'Summary pending.',
         nextStep: '',
+        recommendedNextStep: '',
         summaryUpdatedAt: null,
         stale: true,
         errorMessage: null,
@@ -383,12 +392,13 @@ export async function refreshTaskContexts(taskIds?: string[]): Promise<TaskProgr
       const summary = await callSummaryModel(taskId)
       run(
         `INSERT INTO task_progress_summaries (
-          task_id, fingerprint, latest_progress, next_step, summary_updated_at, error_message
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          task_id, fingerprint, latest_progress, next_step, recommended_next_step, summary_updated_at, error_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
           fingerprint = excluded.fingerprint,
           latest_progress = excluded.latest_progress,
           next_step = excluded.next_step,
+          recommended_next_step = excluded.recommended_next_step,
           summary_updated_at = excluded.summary_updated_at,
           error_message = excluded.error_message`,
         [
@@ -396,6 +406,7 @@ export async function refreshTaskContexts(taskIds?: string[]): Promise<TaskProgr
           fingerprint,
           escapeJson(summary.latestProgress),
           escapeJson(summary.nextStep),
+          escapeJson(summary.recommendedNextStep),
           Date.now(),
           null,
         ]
@@ -404,12 +415,13 @@ export async function refreshTaskContexts(taskIds?: string[]): Promise<TaskProgr
       const fallback = fallbackSummary(taskId)
       run(
         `INSERT INTO task_progress_summaries (
-          task_id, fingerprint, latest_progress, next_step, summary_updated_at, error_message
-        ) VALUES (?, ?, ?, ?, ?, ?)
+          task_id, fingerprint, latest_progress, next_step, recommended_next_step, summary_updated_at, error_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
           fingerprint = excluded.fingerprint,
           latest_progress = excluded.latest_progress,
           next_step = excluded.next_step,
+          recommended_next_step = excluded.recommended_next_step,
           summary_updated_at = excluded.summary_updated_at,
           error_message = excluded.error_message`,
         [
@@ -417,6 +429,7 @@ export async function refreshTaskContexts(taskIds?: string[]): Promise<TaskProgr
           fingerprint,
           escapeJson(fallback.latestProgress),
           escapeJson(fallback.nextStep),
+          escapeJson(fallback.recommendedNextStep),
           Date.now(),
           String(error?.message ?? 'Summary refresh failed'),
         ]

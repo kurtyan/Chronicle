@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react'
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
-import { confirmDayScriptProgressSync, fetchStartOfDayOffset, getDayScript, saveDayScript } from '@/services/api'
-import type { DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
+import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchStartOfDayOffset, generateDailySummary, getDayScript, saveDayScript } from '@/services/api'
+import type { DailySummaryResult, DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 
@@ -77,6 +77,27 @@ function saveStoredFocusActivity(date: string, activity: Map<string, DayScriptFo
     return
   }
   localStorage.setItem(activityStorageKey(date), JSON.stringify(items))
+}
+
+function isEmptyDoc(document: Record<string, any> | null | undefined): boolean {
+  const content = Array.isArray(document?.content) ? document.content : []
+  return content.length === 0 || content.every((node: any) => {
+    if (node.type === 'paragraph') {
+      const text = (node.content ?? []).map((child: any) => child.text ?? '').join('').trim()
+      return !text
+    }
+    return false
+  })
+}
+
+function appendDocument(base: Record<string, any>, addition: Record<string, any>): Record<string, any> {
+  const baseContent = Array.isArray(base?.content) ? base.content : []
+  const addContent = Array.isArray(addition?.content) ? addition.content : []
+  if (addContent.length === 0) return base
+  if (isEmptyDoc(base)) return { type: 'doc', content: addContent }
+  const lastNode = baseContent[baseContent.length - 1]
+  const separator = lastNode?.type === 'horizontalRule' ? [] : [{ type: 'horizontalRule' }]
+  return { type: 'doc', content: [...baseContent, ...separator, ...addContent] }
 }
 
 function getBlockTitle(block: DayScriptBlock, tasksById: Map<string, Task>): string {
@@ -186,6 +207,13 @@ export function TodayPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [conflicts, setConflicts] = useState<ProgressSyncConflict[]>([])
+  const [dailySummary, setDailySummary] = useState<DailySummaryResult | null>(null)
+  const [dailySummaryError, setDailySummaryError] = useState('')
+  const [dailySummaryLoading, setDailySummaryLoading] = useState(false)
+  const [planDraft, setPlanDraft] = useState<PlanTodayDraftResult | null>(null)
+  const [planDraftDoc, setPlanDraftDoc] = useState<Record<string, any> | null>(null)
+  const [planDraftError, setPlanDraftError] = useState('')
+  const [planDraftLoading, setPlanDraftLoading] = useState(false)
   const [insertedNextStepIds, setInsertedNextStepIds] = useState<Set<string>>(() => new Set())
   const [leftPanePercent, setLeftPanePercent] = useState(() => {
     const saved = Number(localStorage.getItem(TODAY_LEFT_PANE_PERCENT_KEY))
@@ -363,6 +391,42 @@ export function TodayPage() {
     }
   }
 
+  async function handleDailySummary() {
+    setDailySummaryLoading(true)
+    setDailySummaryError('')
+    setDailySummary(null)
+    try {
+      const result = await generateDailySummary(displayDate)
+      setDailySummary(result)
+    } catch (error: any) {
+      setDailySummaryError(error?.response?.data?.error || error?.message || 'Failed to generate daily summary.')
+    } finally {
+      setDailySummaryLoading(false)
+    }
+  }
+
+  async function handlePlanToday() {
+    setPlanDraftLoading(true)
+    setPlanDraftError('')
+    try {
+      await loadTaskContexts()
+      const result = await buildPlanTodayDraft(displayDate)
+      setPlanDraft(result)
+      setPlanDraftDoc(result.document)
+    } catch (error: any) {
+      setPlanDraftError(error?.response?.data?.error || error?.message || 'Failed to build plan.')
+    } finally {
+      setPlanDraftLoading(false)
+    }
+  }
+
+  function applyPlanToday() {
+    if (!script || !planDraftDoc) return
+    setScript({ ...script, document: appendDocument(script.document, planDraftDoc) })
+    setPlanDraft(null)
+    setPlanDraftDoc(null)
+  }
+
   const updatePanePercent = useCallback((nextPercent: number) => {
     const clamped = Math.min(TODAY_LEFT_PANE_MAX_PERCENT, Math.max(TODAY_LEFT_PANE_MIN_PERCENT, nextPercent))
     setLeftPanePercent(clamped)
@@ -410,7 +474,25 @@ export function TodayPage() {
                 <ChevronRight className="h-4 w-4" />
               </button>
             </div>
-            <div className="flex min-w-0 flex-1 items-center justify-end">
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+              <button
+                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-60"
+                onClick={handlePlanToday}
+                disabled={planDraftLoading || loadingScript || !script}
+                title="Use task summaries and unfinished focus lines to plan today"
+              >
+                {planDraftLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarPlus className="h-4 w-4" />}
+                Plan Today
+              </button>
+              <button
+                className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted disabled:opacity-60"
+                onClick={handleDailySummary}
+                disabled={dailySummaryLoading || loadingScript || !script}
+                title="Use LLM to summarize focus work and work sessions"
+              >
+                {dailySummaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Daily Summary
+              </button>
               {script ? <FocusStatusBar blocks={script.blocks} tasks={tasks} scriptDate={displayDate} todayScriptDate={todayScriptDate} /> : null}
             </div>
           </div>
@@ -525,6 +607,109 @@ export function TodayPage() {
             </button>
             <button className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground hover:bg-primary/90" onClick={handleConfirmConflicts}>
               Create logs
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(dailySummary) || Boolean(dailySummaryError) || dailySummaryLoading} onOpenChange={(open) => {
+        if (!open && !dailySummaryLoading) {
+          setDailySummary(null)
+          setDailySummaryError('')
+        }
+      }}>
+        <DialogContent className="max-h-[85vh] sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bot className="h-4 w-4" />
+              Daily Summary
+              {dailySummary?.cached && <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">Cached</span>}
+            </DialogTitle>
+          </DialogHeader>
+          <DialogBody className="min-h-0 overflow-y-auto">
+            {dailySummaryLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generating daily summary...
+              </div>
+            ) : dailySummaryError ? (
+              <div className="text-sm text-destructive">{dailySummaryError}</div>
+            ) : (
+              <textarea
+                readOnly
+                value={dailySummary?.summaryMarkdown ?? ''}
+                className="min-h-[520px] w-full resize-y rounded-md border bg-background p-3 font-mono text-sm leading-6 outline-none focus:ring-1 focus:ring-primary"
+              />
+            )}
+          </DialogBody>
+          <DialogFooter>
+            <button className="dialog-button-secondary" onClick={() => {
+              setDailySummary(null)
+              setDailySummaryError('')
+            }} disabled={dailySummaryLoading}>
+              Close
+            </button>
+            <button className="dialog-button-secondary" onClick={async () => {
+              setDailySummaryLoading(true)
+              setDailySummaryError('')
+              try {
+                setDailySummary(await generateDailySummary(displayDate, { refresh: true }))
+              } catch (error: any) {
+                setDailySummaryError(error?.response?.data?.error || error?.message || 'Failed to regenerate daily summary.')
+              } finally {
+                setDailySummaryLoading(false)
+              }
+            }} disabled={dailySummaryLoading}>
+              Regenerate
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(planDraft) || Boolean(planDraftError)} onOpenChange={(open) => {
+        if (!open) {
+          setPlanDraft(null)
+          setPlanDraftDoc(null)
+          setPlanDraftError('')
+        }
+      }}>
+        <DialogContent className="max-h-[88vh] sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Plan Today</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="min-h-0 overflow-y-auto">
+            {planDraftError ? (
+              <div className="text-sm text-destructive">{planDraftError}</div>
+            ) : planDraftDoc ? (
+              <div className="space-y-3">
+                <div className="text-xs text-muted-foreground">
+                  {planDraft?.sources.taskCount ?? 0} task lines · {planDraft?.sources.recommendedTaskCount ?? 0} recommendations · {planDraft?.sources.carriedBlockCount ?? 0} carried focus lines
+                </div>
+                <div className="min-h-[520px] rounded-lg border border-border">
+                  <DayScriptEditor
+                    value={planDraftDoc}
+                    tasks={pendingTasks}
+                    scriptDate={displayDate}
+                    todayScriptDate={todayScriptDate}
+                    onChange={setPlanDraftDoc}
+                    onSave={() => {}}
+                    onNavigateTask={(taskId) => setActiveTask(taskId)}
+                    onEditingTask={() => {}}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </DialogBody>
+          <DialogFooter>
+            <button className="dialog-button-secondary" onClick={() => {
+              setPlanDraft(null)
+              setPlanDraftDoc(null)
+              setPlanDraftError('')
+            }}>
+              Cancel
+            </button>
+            <button className="dialog-button-primary" onClick={applyPlanToday} disabled={!planDraftDoc}>
+              Apply
             </button>
           </DialogFooter>
         </DialogContent>

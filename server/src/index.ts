@@ -21,6 +21,7 @@ import { getLogger } from './logging'
 import { getVersion } from './version'
 import { createSSEStream, broadcastEvent } from './services/eventBus'
 import { testTaskSummaryPrompt } from './services/taskContextService'
+import { buildPlanTodayDraft, generateDailySummary } from './services/dayScriptLlmService'
 import fs from 'fs'
 import path from 'path'
 
@@ -531,6 +532,26 @@ app.post('/api/day-scripts/:date/confirm-progress-sync', async (c) => {
   }
   scheduleTaskSummaryRefresh(createdLogs.map((log) => log.taskId))
   return c.json({ createdLogs })
+})
+
+app.post('/api/day-scripts/:date/daily-summary', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    return c.json(await generateDailySummary(c.req.param('date'), {
+      refresh: Boolean(body.refresh),
+      mode: body.mode === 'test' ? 'test' : 'record',
+    }))
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Daily summary failed' }, 400)
+  }
+})
+
+app.post('/api/day-scripts/:date/plan-today-draft', async (c) => {
+  try {
+    return c.json(buildPlanTodayDraft(c.req.param('date')))
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Plan today draft failed' }, 400)
+  }
 })
 
 // --- Task Context API ---

@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, PlanTodayDraftResult } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -326,6 +326,16 @@ export const httpApi: ApiInterface = {
 
   async getDayScriptExecutionRecords(date: string, filters?: { taskId?: string; start?: number; end?: number }): Promise<DayScriptExecutionRecord[]> {
     const { data } = await (await withClientId()).get<DayScriptExecutionRecord[]>(`/api/day-scripts/${encodeURIComponent(date)}/execution-records`, { params: filters })
+    return data
+  },
+
+  async generateDailySummary(date: string, body: { refresh?: boolean; mode?: 'record' | 'test' } = {}): Promise<DailySummaryResult> {
+    const { data } = await (await withClientId()).post<DailySummaryResult>(`/api/day-scripts/${encodeURIComponent(date)}/daily-summary`, body)
+    return data
+  },
+
+  async buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult> {
+    const { data } = await (await withClientId()).post<PlanTodayDraftResult>(`/api/day-scripts/${encodeURIComponent(date)}/plan-today-draft`)
     return data
   },
 

@@ -23,7 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTi
 import { save } from '@tauri-apps/plugin-dialog'
 import { writeFile } from '@tauri-apps/plugin-fs'
 import { isTauriEnv, ensureApiReady, clientId } from '@/services/httpApi'
-import { fetchLlmSettings, fetchStartOfDayOffset, fetchTaskEntries, fetchTodos, saveLlmSettings, setStartOfDayOffset, testLlmConnection, testTaskSummaryPrompt } from '@/services/api'
+import { fetchLlmSettings, fetchStartOfDayOffset, fetchTaskEntries, fetchTodos, generateDailySummary, saveLlmSettings, setStartOfDayOffset, testLlmConnection, testTaskSummaryPrompt } from '@/services/api'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 import type { LlmSettings, Task, TaskEntry, TaskSummaryTestResult } from '@/types'
 
@@ -62,6 +62,7 @@ type SettingsSectionId =
   | 'ai.provider'
   | 'ai.meetingExtraction'
   | 'ai.taskSummary'
+  | 'ai.dailySummary'
   | 'data.database'
   | 'data.importExport'
   | 'diagnostics.clientLog'
@@ -126,6 +127,7 @@ function displayLlmSettings(settings: LlmSettings): LlmSettings {
     ...settings,
     meetingExtractionPrompt: settings.meetingExtractionPrompt || settings.defaultMeetingExtractionPrompt,
     taskSummaryPrompt: settings.taskSummaryPrompt || settings.defaultTaskSummaryPrompt,
+    dailySummaryPrompt: settings.dailySummaryPrompt || settings.defaultDailySummaryPrompt,
   }
 }
 
@@ -134,6 +136,8 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
   const defaultMeetingPrompt = settings.defaultMeetingExtractionPrompt.trim()
   const taskSummaryPrompt = settings.taskSummaryPrompt.trim()
   const defaultTaskSummaryPrompt = settings.defaultTaskSummaryPrompt.trim()
+  const dailySummaryPrompt = settings.dailySummaryPrompt.trim()
+  const defaultDailySummaryPrompt = settings.defaultDailySummaryPrompt.trim()
   return {
     baseUrl: settings.baseUrl,
     model: settings.model,
@@ -143,6 +147,7 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
     taskSummaryMaxTokens: normalizeMaxTokens(settings.taskSummaryMaxTokens, 1200),
     meetingExtractionPrompt: meetingPrompt === defaultMeetingPrompt ? '' : settings.meetingExtractionPrompt,
     taskSummaryPrompt: taskSummaryPrompt === defaultTaskSummaryPrompt ? '' : settings.taskSummaryPrompt,
+    dailySummaryPrompt: dailySummaryPrompt === defaultDailySummaryPrompt ? '' : settings.dailySummaryPrompt,
   }
 }
 
@@ -701,7 +706,7 @@ function TaskSummarySettingsSection({
             placeholder="Task summary prompt"
           />
           <span className="text-[11px] text-muted-foreground">
-            The prompt must return JSON with latestProgress and nextStep. Leave nextStep empty unless the logs explicitly mention a next step.
+            The prompt must return JSON with latestProgress, nextStep, and recommendedNextStep. Leave recommendedNextStep empty when nextStep is present.
           </span>
         </label>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -730,6 +735,159 @@ function TaskSummarySettingsSection({
         onToggleExpanded={onToggleExpandedLog}
       />
     </div>
+  )
+}
+
+function DailySummarySettingsSection({
+  settings,
+  saving,
+  logs,
+  logsLoading,
+  expandedLogId,
+  onUpdate,
+  onSave,
+  onTestPrompt,
+  onLoadLogs,
+  onToggleExpandedLog,
+}: {
+  settings: LlmSettings
+  saving: boolean
+  logs: LlmCallLogSummary[]
+  logsLoading: boolean
+  expandedLogId: string | null
+  onUpdate: (patch: Partial<LlmSettings>) => void
+  onSave: () => void
+  onTestPrompt: () => void
+  onLoadLogs: () => void
+  onToggleExpandedLog: (id: string | null) => void
+}) {
+  return (
+    <div className="space-y-4">
+      <SectionPanel icon={<Bot className="h-5 w-5 text-muted-foreground" />} title="Daily Summary">
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Prompt</span>
+          <textarea
+            className="min-h-[390px] w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-1 focus:ring-primary"
+            value={settings.dailySummaryPrompt}
+            onChange={(e) => onUpdate({ dailySummaryPrompt: e.target.value })}
+            placeholder="Daily summary prompt"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            The prompt should return Markdown covering work sessions, AFK/time analysis, hourly activity, task review, and tomorrow suggestions.
+          </span>
+        </label>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={onSave} disabled={saving} className="dialog-button-primary">
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving...' : 'Save Prompt'}
+          </button>
+          <button
+            onClick={() => onUpdate({ dailySummaryPrompt: settings.defaultDailySummaryPrompt })}
+            className="dialog-button-secondary"
+          >
+            Restore Default
+          </button>
+          <button onClick={onTestPrompt} className="dialog-button-secondary">
+            <FlaskConical className="h-4 w-4" />
+            Test Prompt
+          </button>
+        </div>
+      </SectionPanel>
+      <LlmCallLogsSection
+        featureLabel="daily summary"
+        logs={logs}
+        loading={logsLoading}
+        expandedLogId={expandedLogId}
+        onLoad={onLoadLogs}
+        onToggleExpanded={onToggleExpandedLog}
+      />
+    </div>
+  )
+}
+
+function DailySummaryPromptTestDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const today = new Date().toISOString().slice(0, 10)
+  const [date, setDate] = useState(today)
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState('')
+  const [cached, setCached] = useState(false)
+  const [logId, setLogId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setDate(today)
+    setResult('')
+    setCached(false)
+    setLogId(null)
+    setError('')
+  }, [open])
+
+  const runTest = async () => {
+    setLoading(true)
+    setError('')
+    setResult('')
+    try {
+      const summary = await generateDailySummary(date, { refresh: true, mode: 'test' })
+      setResult(summary.summaryMarkdown)
+      setCached(summary.cached)
+      setLogId(summary.llmCallLogId)
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || 'Daily summary test failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] sm:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>Test Daily Summary Prompt</DialogTitle>
+          <DialogDescription>Generate a Markdown daily summary for the selected date using the real LLM provider.</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="min-h-0 overflow-y-auto">
+          <div className="space-y-3">
+            <label className="block space-y-1">
+              <span className="text-xs font-medium text-muted-foreground">Date</span>
+              <input
+                type="date"
+                className="rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+                value={date}
+                onChange={(event) => setDate(event.target.value)}
+              />
+            </label>
+            {error && <div className="text-sm text-destructive">{error}</div>}
+            {result && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {cached && <span className="rounded bg-muted px-2 py-0.5">Cached</span>}
+                  {logId && <span className="font-mono">Log: {logId}</span>}
+                </div>
+                <textarea
+                  readOnly
+                  value={result}
+                  className="min-h-[520px] w-full resize-y rounded-md border bg-background p-3 font-mono text-sm leading-6 outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+            )}
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <button className="dialog-button-secondary" onClick={() => onOpenChange(false)} disabled={loading}>Close</button>
+          <button className="dialog-button-primary" onClick={runTest} disabled={loading || !date}>
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+            Generate
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -912,6 +1070,12 @@ function TaskSummaryPromptTestDialog({
                           <div className="mt-1 whitespace-pre-wrap text-sm">{result.nextStep}</div>
                         </div>
                       )}
+                      {!result.nextStep && result.recommendedNextStep && (
+                        <div>
+                          <div className="text-xs font-medium uppercase tracking-normal text-muted-foreground">Recommended Next Step</div>
+                          <div className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">{result.recommendedNextStep}</div>
+                        </div>
+                      )}
                       {result.llmCallLogId && <div className="font-mono text-xs text-muted-foreground">Log: {result.llmCallLogId}</div>}
                     </div>
                   )}
@@ -1076,17 +1240,23 @@ export function SettingsPage() {
     defaultMeetingExtractionPrompt: '',
     taskSummaryPrompt: '',
     defaultTaskSummaryPrompt: '',
+    dailySummaryPrompt: '',
+    defaultDailySummaryPrompt: '',
   })
   const [llmSaving, setLlmSaving] = useState(false)
   const [llmTesting, setLlmTesting] = useState(false)
   const [showPromptTest, setShowPromptTest] = useState(false)
   const [showTaskSummaryPromptTest, setShowTaskSummaryPromptTest] = useState(false)
+  const [showDailySummaryPromptTest, setShowDailySummaryPromptTest] = useState(false)
   const [meetingExtractionLogs, setMeetingExtractionLogs] = useState<LlmCallLogSummary[]>([])
   const [meetingExtractionLogsLoading, setMeetingExtractionLogsLoading] = useState(false)
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null)
   const [taskSummaryLogs, setTaskSummaryLogs] = useState<LlmCallLogSummary[]>([])
   const [taskSummaryLogsLoading, setTaskSummaryLogsLoading] = useState(false)
   const [expandedTaskSummaryLogId, setExpandedTaskSummaryLogId] = useState<string | null>(null)
+  const [dailySummaryLogs, setDailySummaryLogs] = useState<LlmCallLogSummary[]>([])
+  const [dailySummaryLogsLoading, setDailySummaryLogsLoading] = useState(false)
+  const [expandedDailySummaryLogId, setExpandedDailySummaryLogId] = useState<string | null>(null)
 
   const [autoAfkEnabled, setAutoAfkEnabled] = useState(false)
   const [screenLockEnabled, setScreenLockEnabled] = useState(true)
@@ -1138,6 +1308,11 @@ export function SettingsPage() {
             id: 'ai.taskSummary',
             label: 'Task Summary',
             description: 'Edit the prompt and inspect task summary calls.',
+          },
+          {
+            id: 'ai.dailySummary',
+            label: 'Daily Summary',
+            description: 'Edit the daily review prompt and inspect summary calls.',
           },
         ],
       },
@@ -1290,6 +1465,16 @@ export function SettingsPage() {
     }
   }
 
+  const handleTestDailySummaryPrompt = async () => {
+    try {
+      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
+      setLlmSettings(displayLlmSettings(saved))
+      setShowDailySummaryPromptTest(true)
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save prompt before test' })
+    }
+  }
+
   const loadMeetingExtractionLogs = async () => {
     setMeetingExtractionLogsLoading(true)
     try {
@@ -1313,6 +1498,19 @@ export function SettingsPage() {
       setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
     } finally {
       setTaskSummaryLogsLoading(false)
+    }
+  }
+
+  const loadDailySummaryLogs = async () => {
+    setDailySummaryLogsLoading(true)
+    try {
+      const res = await apiFetch('/api/llm-call-logs?feature=daily_summary&limit=50')
+      if (!res.ok) throw new Error('Failed to load LLM logs')
+      setDailySummaryLogs(await res.json())
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
+    } finally {
+      setDailySummaryLogsLoading(false)
     }
   }
 
@@ -1499,6 +1697,21 @@ export function SettingsPage() {
             onToggleExpandedLog={setExpandedTaskSummaryLogId}
           />
         )
+      case 'ai.dailySummary':
+        return (
+          <DailySummarySettingsSection
+            settings={llmSettings}
+            saving={llmSaving}
+            logs={dailySummaryLogs}
+            logsLoading={dailySummaryLogsLoading}
+            expandedLogId={expandedDailySummaryLogId}
+            onUpdate={updateLlmSettings}
+            onSave={handleSaveLlmSettings}
+            onTestPrompt={handleTestDailySummaryPrompt}
+            onLoadLogs={loadDailySummaryLogs}
+            onToggleExpandedLog={setExpandedDailySummaryLogId}
+          />
+        )
       case 'data.database':
         return <DatabaseSettingsSection t={t} info={info} />
       case 'data.importExport':
@@ -1581,6 +1794,10 @@ export function SettingsPage() {
       <TaskSummaryPromptTestDialog
         open={showTaskSummaryPromptTest}
         onOpenChange={setShowTaskSummaryPromptTest}
+      />
+      <DailySummaryPromptTestDialog
+        open={showDailySummaryPromptTest}
+        onOpenChange={setShowDailySummaryPromptTest}
       />
     </div>
   )

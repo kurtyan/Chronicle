@@ -26,7 +26,7 @@ async function testSummary(request: APIRequestContext, taskId: string) {
 }
 
 test.describe('Task summary real LLM next step timeline', () => {
-  test.setTimeout(180000)
+  test.setTimeout(240000)
 
   let originalSettings: any
 
@@ -55,12 +55,13 @@ test.describe('Task summary real LLM next step timeline', () => {
   test('clears nextStep when a later entry solves the earlier next step', async ({ request }) => {
     const task = await createTask(request, `LLM next-step solved ${Date.now()}`)
     await appendLog(request, task.id, '初步定位登录超时来自 session refresh。下一步：解决登录超时问题。')
-    await appendLog(request, task.id, '已解决登录超时问题并验证通过，目前没有新的下一步计划。')
+    await appendLog(request, task.id, '已解决登录超时问题并验证通过，当前还没有写新的下一步计划。')
 
     const summary = await testSummary(request, task.id)
 
     expect(summary.latestProgress).toContain('登录')
     expect(summary.nextStep).toBe('')
+    expect(summary.recommendedNextStep).toMatch(/登录|超时|验证|回归|监控|记录|整理|发布|上线/)
   })
 
   test('keeps nextStep when later entries do unrelated work without solving it', async ({ request }) => {
@@ -72,5 +73,18 @@ test.describe('Task summary real LLM next step timeline', () => {
 
     expect(summary.latestProgress).toMatch(/导出|样式/)
     expect(summary.nextStep).toMatch(/导出失败|解决导出/)
+    expect(summary.recommendedNextStep).toBe('')
+  })
+
+  test('recommends a next step when no explicit next step is present', async ({ request }) => {
+    const task = await createTask(request, `LLM next-step recommend ${Date.now()}`)
+    await appendLog(request, task.id, '完成了设置页的布局调整，保存按钮和输入框现在对齐。')
+    await appendLog(request, task.id, '手动检查发现移动端宽度下按钮换行还不够自然，尚未列出后续行动。')
+
+    const summary = await testSummary(request, task.id)
+
+    expect(summary.latestProgress).toMatch(/设置|布局|按钮|移动端/)
+    expect(summary.nextStep).toBe('')
+    expect(summary.recommendedNextStep).toMatch(/移动端|按钮|换行|检查|优化|验证|调整/)
   })
 })
