@@ -147,9 +147,12 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const emptyMetrics = await code.evaluate((element) => {
       const pre = element.closest('pre')!
       const preStyle = window.getComputedStyle(pre)
+      const codeStyle = window.getComputedStyle(element)
       return {
         height: pre.getBoundingClientRect().height,
         overflowY: preStyle.overflowY,
+        lineHeight: Number.parseFloat(codeStyle.lineHeight),
+        verticalPadding: Number.parseFloat(preStyle.paddingTop) + Number.parseFloat(preStyle.paddingBottom),
       }
     })
     expect(emptyMetrics.height).toBeLessThan(120)
@@ -158,13 +161,16 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const fullMetrics = await code.evaluate((element) => {
       const pre = element.closest('pre')!
       const preStyle = window.getComputedStyle(pre)
+      const codeStyle = window.getComputedStyle(element)
       return {
         height: pre.getBoundingClientRect().height,
         overflowY: preStyle.overflowY,
         scrollHeight: pre.scrollHeight,
+        visibleCodeLines: (pre.getBoundingClientRect().height - (Number.parseFloat(preStyle.paddingTop) + Number.parseFloat(preStyle.paddingBottom))) / Number.parseFloat(codeStyle.lineHeight),
       }
     })
-    expect(fullMetrics.height).toBeGreaterThan(emptyMetrics.height * 4)
+    expect(fullMetrics.visibleCodeLines).toBeGreaterThanOrEqual(9)
+    expect(fullMetrics.visibleCodeLines).toBeLessThanOrEqual(10.6)
     expect(fullMetrics.height).toBeLessThan(360)
     expect(fullMetrics.scrollHeight).toBeGreaterThan(fullMetrics.height)
     expect(['auto', 'scroll']).toContain(fullMetrics.overflowY)

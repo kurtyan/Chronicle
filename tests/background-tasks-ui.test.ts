@@ -137,6 +137,55 @@ test.describe('Background Tasks UI', () => {
     expect(backgroundGenerateCalls).toBe(0)
   })
 
+  test('Daily Summary markdown rendering preserves session activity soft line breaks', async ({ page }) => {
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const summaryMarkdown = [
+      '# Daily Summary',
+      '',
+      '## Session Activity',
+      '05:00 work block',
+      '06:00 work block',
+      '07:00 no work recorded',
+    ].join('\n')
+    const mock = await startMockLlm([summaryMarkdown])
+    const date = uniqueScriptDate(uniqueDayOffset())
+    await saveEmptyDayScript(page, date)
+
+    try {
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: mock.baseUrl, model: 'mock-model' },
+      })
+
+      const started = await page.request.post(`/api/day-scripts/${date}/daily-summary/background`)
+      expect(started.ok()).toBeTruthy()
+      const startedTask = await started.json()
+      await expect.poll(async () => {
+        const res = await page.request.get('/api/background-tasks?includeDismissed=true&limit=20')
+        const tasks = await res.json()
+        return tasks.find((task: any) => task.id === startedTask.id)?.status
+      }).toBe('success')
+
+      await page.goto(`/today?date=${date}&lang=en`)
+      await page.waitForLoadState('load')
+      await page.getByLabel('Generate Daily Summary with LLM').click()
+
+      const dialog = page.getByRole('dialog')
+      await expect(dialog).toBeVisible()
+      await expect(dialog.getByRole('heading', { name: 'Session Activity' })).toBeVisible()
+      const activityParagraph = dialog.locator('p', { hasText: '05:00 work block' }).first()
+      await expect(activityParagraph).toBeVisible()
+      const metrics = await activityParagraph.evaluate((element) => ({
+        text: (element as HTMLElement).innerText,
+        whiteSpace: window.getComputedStyle(element).whiteSpace,
+      }))
+      expect(metrics.whiteSpace).toBe('pre-wrap')
+      expect(metrics.text).toBe('05:00 work block\n06:00 work block\n07:00 no work recorded')
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+      await mock.close()
+    }
+  })
+
   test('clicking a successful meeting extraction task opens the confirmation dialog directly', async ({ page }) => {
     const originalSettings = await (await page.request.get('/api/settings/llm')).json()
     const mock = await startMockLlm([JSON.stringify({

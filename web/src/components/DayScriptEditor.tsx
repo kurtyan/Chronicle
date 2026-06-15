@@ -719,10 +719,8 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           background-clip: content-box;
         }
         .day-script-scroll > .tiptap {
-          display: flex;
-          flex-direction: column;
           min-height: 0;
-          height: 100%;
+          min-height: 100%;
           width: 100%;
         }
         .day-script-editor.tiptap.ProseMirror {

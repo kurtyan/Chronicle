@@ -17,9 +17,10 @@ export function MarkdownView({ markdown, className = '' }: MarkdownViewProps) {
           h2: ({ children }) => <h2 className="mt-5 mb-2 border-b border-border pb-1 text-lg font-semibold">{children}</h2>,
           h3: ({ children }) => <h3 className="mt-4 mb-2 text-base font-semibold">{children}</h3>,
           h4: ({ children }) => <h4 className="mt-3 mb-1 text-sm font-semibold uppercase tracking-normal text-muted-foreground">{children}</h4>,
-          p: ({ children }) => <p className="my-2 leading-6">{children}</p>,
+          p: ({ children }) => <p className="my-2 leading-6" style={{ whiteSpace: 'pre-wrap' }}>{children}</p>,
           ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-6">{children}</ul>,
           ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>,
+          li: ({ children }) => <li style={{ whiteSpace: 'pre-wrap' }}>{children}</li>,
           blockquote: ({ children }) => <blockquote className="my-3 border-l-4 border-border pl-4 text-muted-foreground">{children}</blockquote>,
           pre: ({ children }) => <pre className="my-3 overflow-auto rounded-md bg-muted p-3">{children}</pre>,
           code: ({ className, children }) => {
