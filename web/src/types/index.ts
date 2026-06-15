@@ -258,6 +258,32 @@ export interface DailySummaryResult {
   llmCallLogId: string | null
 }
 
+export interface DailySummaryCacheResult extends DailySummaryResult {
+  updatedAt: number
+  fingerprintStatus: 'fresh' | 'stale'
+}
+
+export type BackgroundTaskType = 'daily_summary' | 'task_summary' | 'meeting_extract'
+export type BackgroundTaskStatus = 'running' | 'success' | 'error'
+
+export interface BackgroundTask {
+  id: string
+  type: BackgroundTaskType
+  sourceKey: string
+  title: string
+  status: BackgroundTaskStatus
+  result: DailySummaryResult | TaskSummaryTestResult | Omit<MeetingExtractionResult, 'rawContent'> | MeetingExtractionResult | null
+  error: string | null
+  meta: Record<string, any>
+  readAt: number | null
+  dismissedAt: number | null
+  createdAt: number
+  startedAt: number
+  updatedAt: number
+  completedAt: number | null
+  timeoutAt: number | null
+}
+
 export interface PlanTodayDraftResult {
   date: string
   document: Record<string, any>

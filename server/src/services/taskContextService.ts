@@ -275,20 +275,26 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
   const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
   try {
     const response = await fetch(`${settings.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model: settings.model,
-        temperature: 0,
-        max_tokens: settings.taskSummaryMaxTokens,
-        response_format: { type: 'json_object' },
-        messages,
-      }),
-    })
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: settings.model,
+          temperature: 0,
+          max_tokens: settings.taskSummaryMaxTokens,
+          response_format: { type: 'json_object' },
+          messages,
+        }),
+      })
+      .catch((err: any) => {
+        if (err?.name === 'AbortError') {
+          throw new Error(`LLM request timed out after ${settings.timeoutMs} ms`)
+        }
+        throw err
+      })
     const text = await response.text()
     rawProviderResponse = text
     if (!response.ok) throw new Error(`LLM request failed (${response.status}): ${text.slice(0, 200)}`)

@@ -204,13 +204,13 @@ export class AppService {
       'SELECT COUNT(*) as count FROM tasks WHERE completed_at IS NOT NULL AND completed_at >= ? AND completed_at <= ?'
     ).get(start, end) as { count: number }
 
-    // In progress: tasks with sessions in range, not yet DONE
+    // In progress: tasks with sessions overlapping the range, not yet DONE
     const inProgressResult = getDb().prepare(
       `SELECT COUNT(DISTINCT t.id) as count FROM tasks t
        INNER JOIN work_sessions ws ON ws.task_id = t.id
-       WHERE ws.started_at >= ? AND ws.started_at <= ?
+       WHERE ws.started_at < ? AND COALESCE(ws.ended_at, ?) > ?
        AND t.status != 'DONE' AND t.status != 'DROPPED'`
-    ).get(start, end) as { count: number }
+    ).get(end, Date.now(), start) as { count: number }
 
     return {
       total: totalResult.count,
@@ -239,11 +239,11 @@ export class AppService {
           .sort((a, b) => b.updatedAt - a.updatedAt)
         break
       case 'IN_PROGRESS': {
-        // Tasks not DONE/DROPPED that have work sessions starting in range
+        // Tasks not DONE/DROPPED that have work sessions overlapping the range
         const activeIds = new Set(
           getDb().prepare(
-            `SELECT DISTINCT task_id FROM work_sessions WHERE started_at >= ? AND started_at <= ?`
-          ).all(start, end).map(r => (r as { task_id: string }).task_id)
+            `SELECT DISTINCT task_id FROM work_sessions WHERE started_at < ? AND COALESCE(ended_at, ?) > ?`
+          ).all(end, now, start).map(r => (r as { task_id: string }).task_id)
         )
         filtered = allTasks.filter(t =>
           !['DONE', 'DROPPED'].includes(t.status) && activeIds.has(t.id)

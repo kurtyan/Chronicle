@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { CalendarClock, Check, Loader2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { createMeeting, extractMeeting, fetchTodos, getTaskById, submitTaskEntries } from '@/services/api'
+import { createMeeting, extractMeetingInBackground, fetchBackgroundTask, fetchTodos, getTaskById, submitTaskEntries } from '@/services/api'
 import type { MeetingExtractionResult, Task } from '@/types'
 import { extractTaskMentionIdsFromHtml, RichEditor } from '@/components/RichEditor'
+import { meetingExtractSourceKey, useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
 
 type Mode = 'record' | 'test'
 const RECORD_DRAFT_KEY = 'chronicle_meeting_record_draft_html'
@@ -16,19 +17,41 @@ interface Props {
   mode: Mode
   onOpenChange: (open: boolean) => void
   onSaved?: (task: Task) => void
+  initialResult?: MeetingExtractionResult | null
+  initialRawContent?: string
+  initialError?: string
+  initialExtracting?: boolean
+  backgroundTaskId?: string | null
 }
 
-export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: Props) {
+export function MeetingExtractionDialog({
+  open,
+  mode,
+  onOpenChange,
+  onSaved,
+  initialResult,
+  initialRawContent,
+  initialError,
+  initialExtracting,
+  backgroundTaskId,
+}: Props) {
   const [step, setStep] = useState<'input' | 'confirm'>('input')
   const [rawContent, setRawContent] = useState(() => getStoredDraft(mode))
   const [result, setResult] = useState<MeetingExtractionResult | null>(null)
   const [extracting, setExtracting] = useState(false)
+  const [foregroundExtractionSourceKey, setForegroundExtractionSourceKey] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [startedAtInput, setStartedAtInput] = useState('')
   const [endedAtInput, setEndedAtInput] = useState('')
   const [mentionedTaskIds, setMentionedTaskIds] = useState<string[]>(() => extractTaskMentionIdsFromHtml(getStoredDraft(mode)))
   const [mentionTasks, setMentionTasks] = useState<Task[]>([])
+  const backgroundTasks = useBackgroundTaskStore((s) => s.tasks)
+  const loadBackgroundTasks = useBackgroundTaskStore((s) => s.loadTasks)
+  const consumeBackgroundTask = useBackgroundTaskStore((s) => s.consumeTask)
+  const setBackgroundPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
+  const backgroundedSourceKeyRef = useRef<string | null>(null)
+  const [activeBackgroundTaskId, setActiveBackgroundTaskId] = useState<string | null>(backgroundTaskId ?? null)
 
   useEffect(() => {
     if (!open) return
@@ -46,18 +69,78 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
   }, [open])
 
   useEffect(() => {
+    if (!open || isHtmlEmpty(rawContent)) return
+    const sourceKey = meetingExtractSourceKey(mode, hashDraft(rawContent.trim()))
+    const task = backgroundTasks.find((item) => item.sourceKey === sourceKey)
+    if (!task) return
+    if (task.status === 'running') {
+      setExtracting(true)
+      setError('')
+      return
+    }
+    setExtracting(false)
+    if (task.status === 'success') {
+      setForegroundExtractionSourceKey(null)
+      void fetchBackgroundTask(task.id).then((detail) => {
+        if (detail.result && 'rawContent' in detail.result) {
+          setActiveBackgroundTaskId(detail.id)
+          setResult(detail.result)
+          setStep('confirm')
+          setError('')
+        }
+      }).catch(() => {
+        setError('Failed to load extraction result.')
+      })
+    }
+    if (task.status === 'error') {
+      setForegroundExtractionSourceKey(null)
+      setError(task.error || 'Extraction failed')
+    }
+  }, [backgroundTasks, mode, open, rawContent])
+
+  useEffect(() => {
+    if (open && initialResult) {
+      setResult(initialResult)
+      setRawContent(initialResult.rawContent)
+      setStep('confirm')
+      setExtracting(false)
+      setSaving(false)
+      setError('')
+      setMentionedTaskIds(extractTaskMentionIdsFromHtml(initialResult.rawContent))
+      return
+    }
+    if (open && initialRawContent !== undefined) {
+      setStep('input')
+      setRawContent(initialRawContent)
+      setResult(null)
+      setExtracting(Boolean(initialExtracting))
+      setForegroundExtractionSourceKey(null)
+      backgroundedSourceKeyRef.current = null
+      setActiveBackgroundTaskId(backgroundTaskId ?? null)
+      setSaving(false)
+      setError(initialError ?? '')
+      setMentionedTaskIds(extractTaskMentionIdsFromHtml(initialRawContent))
+      return
+    }
     if (!open) {
       setStep('input')
       setRawContent(getStoredDraft(mode))
       setResult(null)
       setExtracting(false)
+      setForegroundExtractionSourceKey(null)
+      backgroundedSourceKeyRef.current = null
+      setActiveBackgroundTaskId(null)
       setSaving(false)
       setError('')
       setStartedAtInput('')
       setEndedAtInput('')
       setMentionedTaskIds(extractTaskMentionIdsFromHtml(getStoredDraft(mode)))
     }
-  }, [open, mode])
+  }, [initialError, initialExtracting, initialRawContent, initialResult, open, mode])
+
+  useEffect(() => {
+    if (backgroundTaskId) setActiveBackgroundTaskId(backgroundTaskId)
+  }, [backgroundTaskId])
 
   useEffect(() => {
     if (!open) return
@@ -66,17 +149,27 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
 
   const runExtraction = async () => {
     if (isHtmlEmpty(rawContent)) return
+    const content = rawContent.trim()
+    const sourceKey = meetingExtractSourceKey(mode, hashDraft(content))
     setExtracting(true)
+    setForegroundExtractionSourceKey(sourceKey)
     setError('')
     try {
-      const extracted = await extractMeeting(rawContent.trim(), mode)
-      setResult(extracted)
-      setStep('confirm')
+      const task = await extractMeetingInBackground(content, mode, hashDraft(content))
+      setActiveBackgroundTaskId(task.id)
+      await loadBackgroundTasks()
     } catch (err: any) {
-      setError(err?.response?.data?.error || err?.message || 'Extraction failed')
-    } finally {
+      setForegroundExtractionSourceKey(null)
       setExtracting(false)
+      setError(err?.response?.data?.error || err?.message || 'Extraction failed')
     }
+  }
+
+  const sendExtractionToBackground = async () => {
+    if (!extracting || !foregroundExtractionSourceKey) return
+    await loadBackgroundTasks()
+    setBackgroundPanelOpen(true)
+    onOpenChange(false)
   }
 
   const updateResult = (patch: Partial<MeetingExtractionResult>) => {
@@ -97,7 +190,15 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
     try {
       if (mentionedTaskIds.length > 0) {
         const logContent = buildMeetingLogContent(result)
-        await submitTaskEntries(mentionedTaskIds, logContent, 'log')
+        const entries = await submitTaskEntries(mentionedTaskIds, logContent, 'log')
+        const taskIdToConsume = backgroundTaskId ?? activeBackgroundTaskId
+        if (taskIdToConsume) {
+          await consumeBackgroundTask(taskIdToConsume, {
+            consumedAction: 'appended_task_log',
+            targetTaskIds: mentionedTaskIds,
+            targetEntryIds: entries.map((entry) => entry.id),
+          })
+        }
         const firstTask = await getTaskById(mentionedTaskIds[0])
         if (firstTask) onSaved?.(firstTask)
       } else {
@@ -111,6 +212,14 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
           rawContent: result.rawContent,
           llmCallLogId: result.llmCallLogId,
         })
+        const taskIdToConsume = backgroundTaskId ?? activeBackgroundTaskId
+        if (taskIdToConsume) {
+          await consumeBackgroundTask(taskIdToConsume, {
+            consumedAction: 'created_meeting',
+            targetTaskIds: [task.id],
+            targetEntryIds: [],
+          })
+        }
         onSaved?.(task)
       }
       localStorage.removeItem(draftKey(mode))
@@ -155,6 +264,12 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
                 }}
               />
               {error && <div className="text-sm text-destructive">{error}</div>}
+              {extracting && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {foregroundExtractionSourceKey ? 'Extracting...' : 'Extracting in background...'}
+                </div>
+              )}
             </div>
           ) : result ? (
             <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-2">
@@ -229,19 +344,30 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
               Back
             </button>
           )}
-          <button className="dialog-button-secondary" onClick={() => onOpenChange(false)} disabled={extracting || saving}>
+          <button className="dialog-button-secondary" onClick={() => onOpenChange(false)} disabled={saving || (extracting && Boolean(foregroundExtractionSourceKey))}>
             <X className="w-4 h-4" />
             Close
           </button>
           {step === 'input' ? (
-            <button
-              onClick={runExtraction}
-              disabled={!canExtract || extracting}
-              className="dialog-button-primary"
-            >
-              {extracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarClock className="w-4 h-4" />}
-              Extract
-            </button>
+            <>
+              {extracting && foregroundExtractionSourceKey && (
+                <button
+                  onClick={sendExtractionToBackground}
+                  className="dialog-button-secondary"
+                >
+                  <CalendarClock className="w-4 h-4" />
+                  Run in Background
+                </button>
+              )}
+              <button
+                onClick={runExtraction}
+                disabled={!canExtract || extracting}
+                className="dialog-button-primary"
+              >
+                {extracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarClock className="w-4 h-4" />}
+                Extract
+              </button>
+            </>
           ) : isTest ? (
             <button className="dialog-button-primary" onClick={() => onOpenChange(false)}>
               <Check className="w-4 h-4" />
@@ -261,6 +387,12 @@ export function MeetingExtractionDialog({ open, mode, onOpenChange, onSaved }: P
       </DialogContent>
     </Dialog>
   )
+}
+
+function hashDraft(value: string): string {
+  let hash = 5381
+  for (let i = 0; i < value.length; i++) hash = ((hash << 5) + hash) ^ value.charCodeAt(i)
+  return (hash >>> 0).toString(36)
 }
 
 function buildMeetingLogContent(result: MeetingExtractionResult): string {

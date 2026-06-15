@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, PlanTodayDraftResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -564,7 +564,7 @@ export class EmbeddedApiProvider implements ApiInterface {
       `SELECT COUNT(*) as count FROM tasks WHERE completed_at IS NOT NULL AND completed_at >= ${start} AND completed_at <= ${end}`
     )
     const inProgressResult = this.db!.exec(
-      `SELECT COUNT(DISTINCT t.id) as count FROM tasks t INNER JOIN work_sessions ws ON ws.task_id = t.id WHERE ws.started_at >= ${start} AND ws.started_at <= ${end} AND t.status != 'DONE' AND t.status != 'DROPPED'`
+      `SELECT COUNT(DISTINCT t.id) as count FROM tasks t INNER JOIN work_sessions ws ON ws.task_id = t.id WHERE ws.started_at < ${end} AND COALESCE(ws.ended_at, ${Date.now()}) > ${start} AND t.status != 'DONE' AND t.status != 'DROPPED'`
     )
     return {
       total: totalResult.length > 0 ? Number(totalResult[0].values[0][0]) : 0,
@@ -773,6 +773,12 @@ export class EmbeddedApiProvider implements ApiInterface {
   async generateDailySummary(date: string): Promise<DailySummaryResult> {
     return { date, summaryMarkdown: 'Daily summary is not supported in embedded mode.', cached: false, llmCallLogId: null }
   }
+  async fetchDailySummaryCache(_date: string): Promise<DailySummaryCacheResult | null> {
+    return null
+  }
+  async generateDailySummaryInBackground(date: string): Promise<BackgroundTask> {
+    throw new Error(`Daily summary background is not supported in embedded mode for ${date}`)
+  }
   async buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult> {
     return { date, document: { type: 'doc', content: [{ type: 'paragraph' }] }, sources: { taskCount: 0, recommendedTaskCount: 0, carriedBlockCount: 0 } }
   }
@@ -845,8 +851,26 @@ Return Markdown only. Include sessions timeline, AFK/time analysis, hourly activ
   async extractMeeting(_rawContent: string, _mode?: 'record' | 'test'): Promise<MeetingExtractionResult> {
     throw new Error('Not supported in embedded mode')
   }
+  async extractMeetingInBackground(_rawContent: string, _mode: 'record' | 'test', _draftHash: string): Promise<BackgroundTask> {
+    throw new Error('Not supported in embedded mode')
+  }
   async createMeeting(_req: CreateMeetingRequest): Promise<Task> {
     throw new Error('Not supported in embedded mode')
+  }
+  async fetchBackgroundTasks(_options?: { status?: BackgroundTaskStatus | 'all'; includeDismissed?: boolean; limit?: number }): Promise<BackgroundTask[]> {
+    return []
+  }
+  async fetchBackgroundTask(id: string): Promise<BackgroundTask> {
+    throw new Error(`Background task ${id} is not supported in embedded mode`)
+  }
+  async markBackgroundTaskRead(id: string): Promise<BackgroundTask> {
+    throw new Error(`Background task ${id} is not supported in embedded mode`)
+  }
+  async dismissBackgroundTask(id: string): Promise<BackgroundTask> {
+    throw new Error(`Background task ${id} is not supported in embedded mode`)
+  }
+  async consumeBackgroundTask(id: string): Promise<BackgroundTask> {
+    throw new Error(`Background task ${id} is not supported in embedded mode`)
   }
 }
 

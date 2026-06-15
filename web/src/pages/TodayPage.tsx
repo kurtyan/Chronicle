@@ -4,10 +4,12 @@ import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Sparkles } from 
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
-import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchStartOfDayOffset, generateDailySummary, getDayScript, saveDayScript } from '@/services/api'
+import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, generateDailySummaryInBackground, getDayScript, saveDayScript } from '@/services/api'
 import type { DailySummaryResult, DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
+import { dailySummarySourceKey, useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
+import { MarkdownView } from '@/components/MarkdownView'
 
 const TODAY_LEFT_PANE_PERCENT_KEY = 'chronicle_today_left_pane_percent'
 const TODAY_LEFT_PANE_MIN_PERCENT = 12
@@ -199,6 +201,7 @@ export function TodayPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedTaskId = searchParams.get('task')
   const explicitDateParam = searchParams.get('date')
+  const dailySummaryOpenRequest = searchParams.get('dailySummary')
   const [startOfDayOffset, setStartOfDayOffset] = useState(5)
   const todayScriptDate = useMemo(() => workdayDate(startOfDayOffset), [startOfDayOffset])
   const [displayDate, setDisplayDate] = useState(() => explicitDateParam || workdayDate(5))
@@ -207,13 +210,34 @@ export function TodayPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [conflicts, setConflicts] = useState<ProgressSyncConflict[]>([])
+  const [dailySummaryOpen, setDailySummaryOpen] = useState(false)
   const [dailySummary, setDailySummary] = useState<DailySummaryResult | null>(null)
   const [dailySummaryError, setDailySummaryError] = useState('')
   const [dailySummaryLoading, setDailySummaryLoading] = useState(false)
+  const [dailySummaryShowSource, setDailySummaryShowSource] = useState(false)
   const [planDraft, setPlanDraft] = useState<PlanTodayDraftResult | null>(null)
   const [planDraftDoc, setPlanDraftDoc] = useState<Record<string, any> | null>(null)
   const [planDraftError, setPlanDraftError] = useState('')
   const [planDraftLoading, setPlanDraftLoading] = useState(false)
+  const backgroundTasks = useBackgroundTaskStore((s) => s.tasks)
+  const loadBackgroundTasks = useBackgroundTaskStore((s) => s.loadTasks)
+  const setBackgroundPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
+  const dailySummaryRunningTask = useMemo(() => backgroundTasks.find((task) =>
+    task.type === 'daily_summary'
+    && task.status === 'running'
+    && task.sourceKey === dailySummarySourceKey(displayDate)
+  ) ?? null, [backgroundTasks, displayDate])
+  const dailySummaryFinishedTask = useMemo(() => backgroundTasks.find((task) =>
+    task.type === 'daily_summary'
+    && task.status === 'success'
+    && task.sourceKey === dailySummarySourceKey(displayDate)
+    && task.result
+  ) ?? null, [backgroundTasks, displayDate])
+  const dailySummaryErrorTask = useMemo(() => backgroundTasks.find((task) =>
+    task.type === 'daily_summary'
+    && task.status === 'error'
+    && task.sourceKey === dailySummarySourceKey(displayDate)
+  ) ?? null, [backgroundTasks, displayDate])
   const [insertedNextStepIds, setInsertedNextStepIds] = useState<Set<string>>(() => new Set())
   const [leftPanePercent, setLeftPanePercent] = useState(() => {
     const saved = Number(localStorage.getItem(TODAY_LEFT_PANE_PERCENT_KEY))
@@ -232,6 +256,7 @@ export function TodayPage() {
   const taskSummaryUpdating = useTaskStore((s) => s.taskSummaryUpdating)
   const loadTaskContexts = useTaskStore((s) => s.loadTaskContexts)
   const autoTakeOverInFlightRef = useRef<string | null>(null)
+  const handledDailySummaryOpenRequestRef = useRef<string | null>(null)
   const focusActivityRef = useRef<Map<string, DayScriptFocusActivity>>(loadStoredFocusActivity(displayDate))
 
   useEffect(() => {
@@ -257,6 +282,27 @@ export function TodayPage() {
   useEffect(() => {
     if (selectedTaskId) setActiveTask(selectedTaskId)
   }, [selectedTaskId, setActiveTask])
+
+  useEffect(() => {
+    if (explicitDateParam && explicitDateParam !== displayDate) {
+      setDisplayDate(explicitDateParam)
+    }
+  }, [displayDate, explicitDateParam])
+
+  useEffect(() => {
+    if (!dailySummaryOpen || !dailySummaryFinishedTask?.result) return
+    const result = dailySummaryFinishedTask.result
+    if ('summaryMarkdown' in result) {
+      setDailySummary(result)
+      setDailySummaryLoading(false)
+    }
+  }, [dailySummaryFinishedTask, dailySummaryOpen])
+
+  useEffect(() => {
+    if (!dailySummaryOpen || !dailySummaryErrorTask || dailySummary || dailySummaryRunningTask) return
+    setDailySummaryLoading(false)
+    setDailySummaryError(dailySummaryErrorTask.error || 'Daily summary failed.')
+  }, [dailySummary, dailySummaryErrorTask, dailySummaryOpen, dailySummaryRunningTask])
 
   useEffect(() => {
     if (!activeTaskId) return
@@ -392,16 +438,64 @@ export function TodayPage() {
   }
 
   async function handleDailySummary() {
+    setDailySummaryOpen(true)
     setDailySummaryLoading(true)
     setDailySummaryError('')
-    setDailySummary(null)
+    setDailySummaryShowSource(false)
     try {
-      const result = await generateDailySummary(displayDate)
-      setDailySummary(result)
+      await loadBackgroundTasks()
+      const cached = await fetchDailySummaryCache(displayDate)
+      const finishedResult = dailySummaryFinishedTask?.result
+      const errorTask = useBackgroundTaskStore.getState().tasks.find((task) =>
+        task.type === 'daily_summary'
+        && task.status === 'error'
+        && task.sourceKey === dailySummarySourceKey(displayDate)
+      )
+      if (cached) {
+        setDailySummary(cached)
+      } else if (finishedResult && 'summaryMarkdown' in finishedResult) {
+        setDailySummary(finishedResult)
+      } else if (errorTask) {
+        setDailySummary(null)
+        setDailySummaryError(errorTask.error || 'Daily summary failed.')
+      } else {
+        setDailySummary(null)
+      }
+      const running = useBackgroundTaskStore.getState().tasks.some((task) =>
+        task.type === 'daily_summary'
+        && task.status === 'running'
+        && task.sourceKey === dailySummarySourceKey(displayDate)
+      )
+      const shouldRegenerate = cached?.fingerprintStatus === 'stale' || (!cached && !errorTask)
+      if (shouldRegenerate && !running) await generateDailySummaryInBackground(displayDate)
     } catch (error: any) {
       setDailySummaryError(error?.response?.data?.error || error?.message || 'Failed to generate daily summary.')
     } finally {
       setDailySummaryLoading(false)
+      void loadBackgroundTasks()
+    }
+  }
+
+  useEffect(() => {
+    if (!dailySummaryOpenRequest) return
+    const requestKey = `${displayDate}:${dailySummaryOpenRequest}`
+    if (handledDailySummaryOpenRequestRef.current === requestKey) return
+    handledDailySummaryOpenRequestRef.current = requestKey
+    void handleDailySummary()
+    const next = new URLSearchParams(searchParams)
+    next.delete('dailySummary')
+    setSearchParams(next, { replace: true })
+  }, [dailySummaryOpenRequest, displayDate])
+
+  async function runDailySummaryInBackground() {
+    setDailySummaryError('')
+    try {
+      if (!dailySummaryRunningTask) await generateDailySummaryInBackground(displayDate)
+      await loadBackgroundTasks()
+      setDailySummaryOpen(false)
+      setBackgroundPanelOpen(true)
+    } catch (error: any) {
+      setDailySummaryError(error?.response?.data?.error || error?.message || 'Failed to generate daily summary.')
     }
   }
 
@@ -487,11 +581,11 @@ export function TodayPage() {
               <button
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border hover:bg-muted disabled:opacity-60"
                 onClick={handleDailySummary}
-                disabled={dailySummaryLoading || loadingScript || !script}
+                disabled={loadingScript || !script}
                 title="Generate Daily Summary with LLM"
                 aria-label="Generate Daily Summary with LLM"
               >
-                {dailySummaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {dailySummaryRunningTask ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               </button>
               {script ? <FocusStatusBar blocks={script.blocks} tasks={tasks} scriptDate={displayDate} todayScriptDate={todayScriptDate} /> : null}
             </div>
@@ -612,11 +706,9 @@ export function TodayPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(dailySummary) || Boolean(dailySummaryError) || dailySummaryLoading} onOpenChange={(open) => {
-        if (!open && !dailySummaryLoading) {
-          setDailySummary(null)
-          setDailySummaryError('')
-        }
+      <Dialog open={dailySummaryOpen} onOpenChange={(open) => {
+        setDailySummaryOpen(open)
+        if (!open) setDailySummaryError('')
       }}>
         <DialogContent className="max-h-[85vh] sm:max-w-4xl">
           <DialogHeader>
@@ -627,7 +719,7 @@ export function TodayPage() {
             </DialogTitle>
           </DialogHeader>
           <DialogBody className="min-h-0 overflow-y-auto">
-            {dailySummaryLoading ? (
+            {(dailySummaryLoading || dailySummaryRunningTask) && !dailySummary ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Generating daily summary...
@@ -635,31 +727,48 @@ export function TodayPage() {
             ) : dailySummaryError ? (
               <div className="text-sm text-destructive">{dailySummaryError}</div>
             ) : (
-              <textarea
-                readOnly
-                value={dailySummary?.summaryMarkdown ?? ''}
-                className="min-h-[520px] w-full resize-y rounded-md border bg-background p-3 font-mono text-sm leading-6 outline-none focus:ring-1 focus:ring-primary"
-              />
+              <div className="space-y-3">
+                <div className="flex justify-end">
+                  <button className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted" onClick={() => setDailySummaryShowSource((value) => !value)}>
+                    {dailySummaryShowSource ? 'Show Rendered' : 'Show Source'}
+                  </button>
+                </div>
+                {dailySummaryShowSource ? (
+                  <textarea
+                    readOnly
+                    value={dailySummary?.summaryMarkdown ?? ''}
+                    className="min-h-[520px] w-full resize-y rounded-md border bg-background p-3 font-mono text-sm leading-6 outline-none focus:ring-1 focus:ring-primary"
+                  />
+                ) : (
+                  <MarkdownView markdown={dailySummary?.summaryMarkdown ?? ''} className="min-h-[520px] rounded-md border bg-background p-4 text-sm leading-6" />
+                )}
+              </div>
             )}
           </DialogBody>
           <DialogFooter>
+            {(dailySummaryLoading || dailySummaryRunningTask) && (
+              <button className="dialog-button-secondary" onClick={runDailySummaryInBackground}>
+                <Sparkles className="h-4 w-4" />
+                Run in Background
+              </button>
+            )}
             <button className="dialog-button-secondary" onClick={() => {
               setDailySummary(null)
               setDailySummaryError('')
-            }} disabled={dailySummaryLoading}>
+              setDailySummaryOpen(false)
+            }}>
               Close
             </button>
-            <button className="dialog-button-secondary" onClick={async () => {
-              setDailySummaryLoading(true)
+            <button className="dialog-button-secondary whitespace-nowrap" onClick={async () => {
               setDailySummaryError('')
               try {
-                setDailySummary(await generateDailySummary(displayDate, { refresh: true }))
+                await generateDailySummaryInBackground(displayDate)
+                await loadBackgroundTasks()
               } catch (error: any) {
                 setDailySummaryError(error?.response?.data?.error || error?.message || 'Failed to regenerate daily summary.')
-              } finally {
-                setDailySummaryLoading(false)
               }
-            }} disabled={dailySummaryLoading}>
+            }} disabled={Boolean(dailySummaryRunningTask)}>
+              {dailySummaryRunningTask && <Loader2 className="h-4 w-4 animate-spin" />}
               Regenerate
             </button>
           </DialogFooter>

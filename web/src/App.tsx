@@ -4,14 +4,22 @@ import { ReportPage } from './pages/ReportPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TodayPage } from './pages/TodayPage'
 import { PlanTheDay } from './pages/PlanTheDay'
-import { ListTodo, BarChart3, Settings, Calendar } from 'lucide-react'
+import { AlertCircle, BarChart3, Calendar, CheckCircle2, ClipboardList, ListTodo, Loader2, Settings, X } from 'lucide-react'
 import { useI18n } from './i18n/context'
 import { useEffect, useState, useRef, useCallback } from 'react'
+import type React from 'react'
 import { createPortal } from 'react-dom'
 import { useSSE } from './hooks/useSSE'
 import { isTauriEnv, apiBase } from './services/httpApi'
 import { dispatchShortcut, registerShortcut } from '@/shortcuts/registry'
 import '@/styles/prose-display.css'
+import DOMPurify from 'dompurify'
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { BACKGROUND_TASK_TOAST_TTL_MS, useBackgroundTaskStore, type BackgroundTask } from '@/stores/backgroundTaskStore'
+import { MarkdownView } from '@/components/MarkdownView'
+import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
+import type { MeetingExtractionResult } from '@/types'
+import { fetchBackgroundTask } from '@/services/api'
 
 // Open links in system browser when running in Tauri
 function useSystemBrowserLinks() {
@@ -123,7 +131,7 @@ function SseStatusDot() {
 
   return (
     <>
-      <div className="relative mt-auto mb-3">
+      <div className="relative flex h-8 w-8 items-center justify-center">
         <div
           ref={dotRef}
           className={`w-2 h-2 rounded-full cursor-pointer hover:opacity-80 transition-opacity ${dotClass}`}
@@ -156,6 +164,12 @@ function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const { t } = useI18n()
+  const tasks = useBackgroundTaskStore((s) => s.tasks)
+  const panelOpen = useBackgroundTaskStore((s) => s.panelOpen)
+  const setPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
+  const runningCount = tasks.filter((task) => task.status === 'running').length
+  const unreadCount = tasks.filter((task) => task.status !== 'running' && !task.readAt).length
+  const hasErrors = tasks.some((task) => task.status === 'error')
 
   const navItems = [
     { path: '/', icon: <ListTodo className="w-5 h-5" />, label: t('sidebar.board') },
@@ -194,9 +208,363 @@ function Sidebar() {
           </button>
         ))}
       </nav>
-      <SseStatusDot />
+      <div className="mt-auto flex flex-col items-center gap-3">
+        <button
+          className={`relative w-8 h-8 rounded-md flex items-center justify-center transition ${
+            panelOpen
+              ? 'bg-primary text-primary-foreground'
+              : hasErrors
+                ? 'text-red-600 hover:bg-red-500/10'
+                : runningCount > 0
+                  ? 'text-blue-600 hover:bg-blue-500/10'
+                  : 'hover:bg-muted text-muted-foreground'
+          }`}
+          onClick={() => setPanelOpen(!panelOpen)}
+          title={panelOpen ? 'Hide Background Tasks' : 'Show Background Tasks'}
+        >
+          <ClipboardList className="w-5 h-5" />
+          {(runningCount > 0 || unreadCount > 0) && (
+            <span className={`absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white ${unreadCount > 0 ? 'bg-blue-600' : 'bg-slate-600'}`}>
+              {unreadCount || runningCount}
+            </span>
+          )}
+        </button>
+        <SseStatusDot />
+      </div>
     </aside>
   )
+}
+
+function BackgroundTasksPanel() {
+  const navigate = useNavigate()
+  const tasks = useBackgroundTaskStore((s) => s.tasks)
+  const panelOpen = useBackgroundTaskStore((s) => s.panelOpen)
+  const selectedTaskId = useBackgroundTaskStore((s) => s.selectedTaskId)
+  const statusFilter = useBackgroundTaskStore((s) => s.statusFilter)
+  const loading = useBackgroundTaskStore((s) => s.loading)
+  const loadTasks = useBackgroundTaskStore((s) => s.loadTasks)
+  const setPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
+  const setStatusFilter = useBackgroundTaskStore((s) => s.setStatusFilter)
+  const selectTask = useBackgroundTaskStore((s) => s.selectTask)
+  const markRead = useBackgroundTaskStore((s) => s.markRead)
+  const dismissTask = useBackgroundTaskStore((s) => s.dismissTask)
+  const toasts = useBackgroundTaskStore((s) => s.toasts)
+  const removeToast = useBackgroundTaskStore((s) => s.removeToast)
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null
+  const visibleTasks = statusFilter === 'all'
+    ? tasks
+    : tasks.filter((task) => task.status === statusFilter)
+  const [meetingRoute, setMeetingRoute] = useState<{
+    mode: 'record' | 'test'
+    taskId: string
+    result?: MeetingExtractionResult | null
+    rawContent?: string
+    error?: string
+    extracting?: boolean
+  } | null>(null)
+
+  useEffect(() => {
+    void loadTasks()
+  }, [loadTasks])
+
+  useEffect(() => {
+    if (panelOpen) void loadTasks()
+  }, [loadTasks, panelOpen])
+
+  useEffect(() => {
+    if (!panelOpen) return
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-background-tasks-panel="true"]')) return
+      if (target?.closest('[role="dialog"]')) return
+      setPanelOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown, true)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true)
+  }, [panelOpen, setPanelOpen])
+
+  async function routeDailySummaryTask(task: BackgroundTask) {
+    const date = typeof task.meta?.date === 'string'
+      ? task.meta.date
+      : task.sourceKey.replace(/^daily_summary:/, '')
+    if (!date) {
+      selectTask(task.id)
+      return
+    }
+    selectTask(null)
+    setPanelOpen(false)
+    navigate(`/today?date=${encodeURIComponent(date)}&dailySummary=${Date.now()}`)
+  }
+
+  async function routeTaskSummaryTask(task: BackgroundTask) {
+    const result = task.result as { taskId?: unknown } | null
+    const taskId = typeof task.meta?.taskId === 'string'
+      ? task.meta.taskId
+      : typeof result?.taskId === 'string'
+        ? result.taskId
+        : task.sourceKey.replace(/^task_summary:/, '')
+    if (!taskId) {
+      selectTask(task.id)
+      return
+    }
+    selectTask(null)
+    setPanelOpen(false)
+    navigate('/')
+    await useTaskStore.getState().setActiveTask(taskId)
+  }
+
+  async function routeMeetingExtractTask(task: BackgroundTask) {
+    const detail = await fetchBackgroundTask(task.id).catch(() => task)
+    const targetTaskIds = Array.isArray(detail.meta?.targetTaskIds) ? detail.meta.targetTaskIds : []
+    const targetTaskId = targetTaskIds.find((id): id is string => typeof id === 'string')
+    if (detail.status === 'success' && detail.meta?.consumedAt && targetTaskId) {
+      selectTask(null)
+      setPanelOpen(false)
+      navigate('/')
+      await useTaskStore.getState().setActiveTask(targetTaskId)
+      return
+    }
+
+    const mode = detail.meta?.mode === 'test' ? 'test' : 'record'
+    if (detail.status === 'success' && detail.result && 'rawContent' in detail.result) {
+      setMeetingRoute({ mode, taskId: detail.id, result: detail.result as MeetingExtractionResult })
+      selectTask(null)
+      return
+    }
+
+    const rawContent = typeof detail.meta?.rawContent === 'string' ? detail.meta.rawContent : ''
+    if (rawContent) {
+      setMeetingRoute({
+        mode,
+        taskId: detail.id,
+        rawContent,
+        error: detail.status === 'error' ? (detail.error || 'Extraction failed') : '',
+        extracting: detail.status === 'running',
+      })
+      selectTask(null)
+      return
+    }
+
+    selectTask(detail.id)
+  }
+
+  async function openTask(task: BackgroundTask) {
+    if (task.type === 'daily_summary') await routeDailySummaryTask(task)
+    else if (task.type === 'task_summary') await routeTaskSummaryTask(task)
+    else await routeMeetingExtractTask(task)
+    if (!task.readAt && task.status !== 'running') await markRead(task.id)
+  }
+
+  useEffect(() => {
+    if (toasts.length === 0) return
+    const timers = toasts.map((toast) => window.setTimeout(
+      () => removeToast(toast.id),
+      Math.max(0, toast.createdAt + BACKGROUND_TASK_TOAST_TTL_MS - Date.now())
+    ))
+    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  }, [removeToast, toasts])
+
+  return createPortal(
+    <>
+      {panelOpen && <div
+          data-background-tasks-panel="true"
+          className="fixed bottom-0 left-16 right-0 z-40 border-t border-border bg-background shadow-[0_-18px_55px_-36px_hsl(var(--foreground)/0.55)]"
+        >
+        <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="h-4 w-4 text-muted-foreground" />
+            <div className="text-sm font-semibold">Background Tasks</div>
+            <div className="text-xs text-muted-foreground">{visibleTasks.length}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            {(['all', 'running', 'success', 'error'] as const).map((status) => (
+              <button
+                key={status}
+                className={`rounded-md px-2 py-1 text-xs ${statusFilter === status ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+                onClick={() => setStatusFilter(status)}
+              >
+                {status[0].toUpperCase() + status.slice(1)}
+              </button>
+            ))}
+            <button className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setPanelOpen(false)} title="Close">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="max-h-80 overflow-y-auto">
+          {loading && visibleTasks.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">Loading background tasks...</div>
+          ) : visibleTasks.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">No background tasks in the last 30 days.</div>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {visibleTasks.map((task) => {
+                return (
+                  <div key={task.id} className="grid grid-cols-[24px_minmax(0,1fr)_120px_170px_36px] items-center gap-3 px-4 py-3 text-sm hover:bg-muted/50">
+                    <TaskStatusIcon status={task.status} />
+                    <button className="min-w-0 text-left" onClick={() => openTask(task)}>
+                      <div className="truncate font-medium">{task.title}</div>
+                      {task.error && <div className="mt-0.5 truncate text-xs text-red-600">{task.error}</div>}
+                    </button>
+                    <div className="text-xs text-muted-foreground">{formatTaskType(task.type)}</div>
+                    <div className="text-right text-xs text-muted-foreground">{new Date(task.updatedAt).toLocaleString()}</div>
+                    <button className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" title="Dismiss" onClick={() => dismissTask(task.id)}>
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+        </div>}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-6 right-6 z-50 flex w-80 flex-col gap-2">
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className="rounded-lg border border-border bg-background p-3 text-left text-sm shadow-lg"
+            >
+              <div className="flex items-start gap-2">
+                <TaskStatusIcon status={toast.status} />
+                <button
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => {
+                    const task = tasks.find((item) => item.id === toast.taskId)
+                    if (task) void openTask(task)
+                    else {
+                      setPanelOpen(true)
+                      selectTask(toast.taskId)
+                      void markRead(toast.taskId)
+                    }
+                    removeToast(toast.id)
+                  }}
+                >
+                  <div className="font-medium">{toast.status === 'success' ? 'Background task completed' : 'Background task failed'}</div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">{toast.title}</div>
+                </button>
+                <button
+                  className="rounded p-0.5 text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    removeToast(toast.id)
+                  }}
+                  aria-label="Dismiss notification"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <BackgroundTaskResultDialog
+        task={selectedTask}
+        onOpenChange={(open) => !open && selectTask(null)}
+      />
+      <MeetingExtractionDialog
+        open={Boolean(meetingRoute)}
+        mode={meetingRoute?.mode ?? 'record'}
+        initialResult={meetingRoute?.result ?? null}
+        initialRawContent={meetingRoute?.rawContent}
+        initialError={meetingRoute?.error}
+        initialExtracting={meetingRoute?.extracting}
+        backgroundTaskId={meetingRoute?.taskId ?? null}
+        onSaved={async (task) => {
+          setPanelOpen(false)
+          navigate('/')
+          await useTaskStore.getState().setActiveTask(task.id)
+        }}
+        onOpenChange={(open) => { if (!open) setMeetingRoute(null) }}
+      />
+    </>,
+    document.body
+  )
+}
+
+function TaskStatusIcon({ status }: { status: BackgroundTask['status'] }) {
+  if (status === 'running') return <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+  if (status === 'success') return <CheckCircle2 className="h-4 w-4 text-green-600" />
+  return <AlertCircle className="h-4 w-4 text-red-600" />
+}
+
+function formatTaskType(type: BackgroundTask['type']): string {
+  if (type === 'daily_summary') return 'Daily Summary'
+  if (type === 'task_summary') return 'Task Summary'
+  return 'Meeting Extract'
+}
+
+function BackgroundTaskResultDialog({ task, onOpenChange }: {
+  task: BackgroundTask | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const result = task?.result
+  const [showSource, setShowSource] = useState(false)
+
+  return (
+    <Dialog open={Boolean(task)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[88vh] sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{task?.title ?? 'Background Task'}</DialogTitle>
+          <DialogDescription>{task ? formatTaskType(task.type) : ''}</DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          {!result ? null : 'summaryMarkdown' in result ? (
+            <div className="space-y-3">
+              <div className="flex justify-end">
+                <button className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted" onClick={() => setShowSource((value) => !value)}>
+                  {showSource ? 'Show Rendered' : 'Show Source'}
+                </button>
+              </div>
+              {showSource ? (
+                <pre className="whitespace-pre-wrap rounded-md border border-border/70 bg-muted/20 p-4 text-sm leading-6">{result.summaryMarkdown}</pre>
+              ) : (
+                <MarkdownView markdown={result.summaryMarkdown} className="rounded-md border border-border/70 bg-background p-4 text-sm leading-6" />
+              )}
+            </div>
+          ) : 'latestProgress' in result ? (
+            <div className="space-y-4">
+              <ResultField label="Task">{task?.meta?.taskTitle ?? result.taskId}</ResultField>
+              <ResultField label="Latest Progress">{result.latestProgress}</ResultField>
+              {result.nextStep && <ResultField label="Next Step">{result.nextStep}</ResultField>}
+              {!result.nextStep && result.recommendedNextStep && <ResultField label="Recommendation">{result.recommendedNextStep}</ResultField>}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <ResultField label="Title">{result.title || 'Untitled'}</ResultField>
+              <ResultField label="Time">{formatMeetingTime(result.startedAt, result.endedAt)}</ResultField>
+              <ResultField label="Participants">{result.participants.join(', ') || 'None'}</ResultField>
+              <ResultField label="Tags">{result.tags.join(', ') || 'None'}</ResultField>
+              {result.warnings.length > 0 && <ResultField label="Warnings">{result.warnings.join('\n')}</ResultField>}
+              <div>
+                <div className="mb-1 text-xs font-medium uppercase tracking-normal text-muted-foreground">Content</div>
+                <div
+                  className="prose-mirror-display rounded-md border border-border/70 bg-muted/10 p-3 text-sm"
+                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.content, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
+                />
+              </div>
+            </div>
+          )}
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ResultField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1 text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</div>
+      <div className="whitespace-pre-wrap text-sm leading-6">{children}</div>
+    </div>
+  )
+}
+
+function formatMeetingTime(startedAt: number | null, endedAt: number | null): string {
+  if (!startedAt && !endedAt) return 'Not set'
+  const start = startedAt ? new Date(startedAt).toLocaleString() : '?'
+  const end = endedAt ? new Date(endedAt).toLocaleString() : '?'
+  return `${start} - ${end}`
 }
 
 // Global version badge — fixed bottom-right, z-index on top of all components
@@ -454,6 +822,7 @@ function Layout() {
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
+      <BackgroundTasksPanel />
       {import.meta.env.DEV && <DevVersionBadge />}
       <AutoAfkDialog
         open={afkDialog.open}

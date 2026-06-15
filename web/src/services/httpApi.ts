@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, PlanTodayDraftResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -334,6 +334,16 @@ export const httpApi: ApiInterface = {
     return data
   },
 
+  async fetchDailySummaryCache(date: string): Promise<DailySummaryCacheResult | null> {
+    const { data } = await (await withClientId()).get<DailySummaryCacheResult | null>(`/api/day-scripts/${encodeURIComponent(date)}/daily-summary-cache`)
+    return data
+  },
+
+  async generateDailySummaryInBackground(date: string): Promise<BackgroundTask> {
+    const { data } = await (await withClientId()).post<BackgroundTask>(`/api/day-scripts/${encodeURIComponent(date)}/daily-summary/background`)
+    return data
+  },
+
   async buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult> {
     const { data } = await (await withClientId()).post<PlanTodayDraftResult>(`/api/day-scripts/${encodeURIComponent(date)}/plan-today-draft`)
     return data
@@ -385,8 +395,38 @@ export const httpApi: ApiInterface = {
     return data
   },
 
+  async extractMeetingInBackground(rawContent: string, mode: 'record' | 'test', draftHash: string): Promise<BackgroundTask> {
+    const { data } = await (await withClientId()).post<BackgroundTask>('/api/meetings/extract/background', { rawContent, mode, draftHash })
+    return data
+  },
+
   async createMeeting(req: CreateMeetingRequest): Promise<Task> {
     const { data } = await (await withClientId()).post<Task>('/api/meetings', req)
+    return data
+  },
+
+  async fetchBackgroundTasks(options: { status?: BackgroundTaskStatus | 'all'; includeDismissed?: boolean; limit?: number } = {}): Promise<BackgroundTask[]> {
+    const { data } = await (await withClientId()).get<BackgroundTask[]>('/api/background-tasks', { params: options })
+    return data
+  },
+
+  async fetchBackgroundTask(id: string): Promise<BackgroundTask> {
+    const { data } = await (await withClientId()).get<BackgroundTask>(`/api/background-tasks/${encodeURIComponent(id)}`)
+    return data
+  },
+
+  async markBackgroundTaskRead(id: string): Promise<BackgroundTask> {
+    const { data } = await (await withClientId()).post<BackgroundTask>(`/api/background-tasks/${encodeURIComponent(id)}/read`)
+    return data
+  },
+
+  async dismissBackgroundTask(id: string): Promise<BackgroundTask> {
+    const { data } = await (await withClientId()).post<BackgroundTask>(`/api/background-tasks/${encodeURIComponent(id)}/dismiss`)
+    return data
+  },
+
+  async consumeBackgroundTask(id: string, meta: Record<string, unknown>): Promise<BackgroundTask> {
+    const { data } = await (await withClientId()).post<BackgroundTask>(`/api/background-tasks/${encodeURIComponent(id)}/consume`, meta)
     return data
   },
 }

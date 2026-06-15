@@ -287,6 +287,13 @@ export async function extractMeeting(rawContent: string, mode: 'record' | 'test'
   }
 }
 
+function normalizeLlmRequestError(err: any, timeoutMs: number): never {
+  if (err?.name === 'AbortError') {
+    throw new Error(`LLM request timed out after ${timeoutMs} ms`)
+  }
+  throw err
+}
+
 async function callChatCompletions(settings: LlmSettings, messages: Array<{ role: string; content: string }>, maxTokens: number): Promise<string> {
   return (await callChatCompletionsWithRaw(settings, messages, maxTokens)).content
 }
@@ -315,6 +322,7 @@ export async function callChatCompletionsWithRaw(
         ...(options.jsonResponse === false ? {} : { response_format: { type: 'json_object' } }),
       }),
     })
+      .catch((err) => normalizeLlmRequestError(err, settings.timeoutMs))
     const text = await res.text()
     if (!res.ok) throw new Error(`LLM request failed (${res.status}): ${text.slice(0, 500)}`)
     let json: any

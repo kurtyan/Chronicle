@@ -133,14 +133,21 @@ export function updateConfig(patch: Partial<ChronicleConfig>): ChronicleConfig {
   const current = getConfig()
   const configDir = getConfigDir()
   const configPath = getConfigPath()
-  const next: ChronicleConfig = {
+  const fileConfig: Record<string, any> = (() => {
+    try {
+      if (fs.existsSync(configPath)) return JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    } catch { /* Use current config as write base */ }
+    return {}
+  })()
+  const next = {
+    ...fileConfig,
     ...current,
     ...patch,
-    server: { ...current.server, ...patch.server },
-    mcp: { ...current.mcp, ...patch.mcp },
-    lauri: { ...current.lauri, ...patch.lauri },
-    ui: { ...current.ui, ...patch.ui },
-    llm: { ...current.llm, ...patch.llm },
+    server: { ...(fileConfig.server ?? {}), ...current.server, ...patch.server },
+    mcp: { ...(fileConfig.mcp ?? {}), ...current.mcp, ...patch.mcp },
+    lauri: { ...(fileConfig.lauri ?? {}), ...current.lauri, ...patch.lauri },
+    ui: { ...(fileConfig.ui ?? {}), ...current.ui, ...patch.ui },
+    llm: { ...(fileConfig.llm ?? {}), ...current.llm, ...patch.llm },
   }
   if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true })
   fs.writeFileSync(configPath, JSON.stringify(next, null, 2))

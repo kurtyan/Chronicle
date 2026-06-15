@@ -21,7 +21,21 @@ import { getLogger } from './logging'
 import { getVersion } from './version'
 import { createSSEStream, broadcastEvent } from './services/eventBus'
 import { testTaskSummaryPrompt } from './services/taskContextService'
-import { buildPlanTodayDraft, generateDailySummary } from './services/dayScriptLlmService'
+import { buildPlanTodayDraft, generateDailySummary, getDailySummaryCache } from './services/dayScriptLlmService'
+import {
+  cleanupBackgroundTasks,
+  consumeBackgroundTask,
+  createOrReuseRunningTask,
+  dismissBackgroundTask,
+  expireStaleRunningTasks,
+  failBackgroundTask,
+  finishBackgroundTask,
+  getBackgroundTask,
+  getRunningBackgroundTaskBySource,
+  interruptRunningBackgroundTasks,
+  listBackgroundTasks,
+  markBackgroundTaskRead,
+} from './services/backgroundTaskService'
 import fs from 'fs'
 import path from 'path'
 
@@ -39,9 +53,22 @@ const publicDir = findPublicDir()
 const app = new Hono()
 const service = new AppService()
 
+function emitBackgroundTask(task: any) {
+  if (task) broadcastEvent('background_task_updated', task)
+}
+
+function backgroundPreview(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+}
+
 app.use('/*', cors())
 
-import { setTaskExtraInfo } from './services/taskService'
+import { getTaskById as getTaskByIdSync, setTaskExtraInfo } from './services/taskService'
 
 // Extract client ID from header for SSE source tracking
 app.use('/*', async (c, next) => {
@@ -78,6 +105,17 @@ function scheduleTaskSummaryRefresh(taskIds: string[]) {
     if (running) running.dirty = true
     for (const request of queue) request.dirty = true
 
+    const task = getTaskByIdSync(taskId)
+    const settings = getLlmSettings()
+    const bgTask = createOrReuseRunningTask({
+      type: 'task_summary',
+      sourceKey: `task_summary:${taskId}`,
+      title: task ? `Task summary: ${task.title}` : `Task summary: ${taskId}`,
+      meta: { taskId, ...(task ? { taskTitle: task.title } : {}) },
+      timeoutAt: Date.now() + settings.timeoutMs + 10000,
+    })
+    emitBackgroundTask(bgTask)
+
     queue.push({ taskId, dirty: false })
     summaryRefreshQueues.set(taskId, queue)
     broadcastEvent('task_summary_refresh_started', { taskId })
@@ -102,14 +140,28 @@ async function consumeTaskSummaryRefreshQueue(taskId: string) {
       const contexts = await service.refreshTaskContexts([taskId])
       if (request.dirty) continue
       const context = contexts.find((item) => item.taskId === taskId)
+      const bgTask = getBackgroundTaskBySource('task_summary', `task_summary:${taskId}`)
       if (context) {
+        if (bgTask) {
+          emitBackgroundTask(finishBackgroundTask(bgTask.id, {
+            taskId: context.taskId,
+            latestProgress: context.summary.latestProgress,
+            nextStep: context.summary.nextStep,
+            recommendedNextStep: context.summary.recommendedNextStep,
+            llmCallLogId: null,
+          }))
+        }
         broadcastEvent('task_summary_updated', context)
       } else {
+        if (bgTask) emitBackgroundTask(failBackgroundTask(bgTask.id, 'Task not found'))
         broadcastEvent('task_summary_refresh_failed', { taskId, error: 'Task not found' })
       }
     } catch (err: any) {
       if (!request.dirty) {
-        broadcastEvent('task_summary_refresh_failed', { taskId, error: err?.message || 'Summary refresh failed' })
+        const message = err?.message || 'Summary refresh failed'
+        const bgTask = getBackgroundTaskBySource('task_summary', `task_summary:${taskId}`)
+        if (bgTask) emitBackgroundTask(failBackgroundTask(bgTask.id, message))
+        broadcastEvent('task_summary_refresh_failed', { taskId, error: message })
       }
     } finally {
       if (summaryRefreshRunning.get(taskId) === request) {
@@ -117,6 +169,10 @@ async function consumeTaskSummaryRefreshQueue(taskId: string) {
       }
     }
   }
+}
+
+function getBackgroundTaskBySource(type: 'daily_summary' | 'task_summary' | 'meeting_extract', sourceKey: string) {
+  return getRunningBackgroundTaskBySource(type, sourceKey)
 }
 
 // --- Task API ---
@@ -309,6 +365,35 @@ app.post('/api/meetings/extract', async (c) => {
     }
     const mode = body.mode === 'test' ? 'test' : 'record'
     return c.json(await extractMeeting(body.rawContent, mode))
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Meeting extraction failed' }, 400)
+  }
+})
+
+app.post('/api/meetings/extract/background', async (c) => {
+  try {
+    const body = await c.req.json()
+    if (!body.rawContent || typeof body.rawContent !== 'string') {
+      return c.json({ error: 'rawContent is required' }, 400)
+    }
+    const mode = body.mode === 'test' ? 'test' : 'record'
+    const draftHash = typeof body.draftHash === 'string' && body.draftHash ? body.draftHash : String(Date.now())
+    const sourceKey = `meeting_extract:${mode}:${draftHash}`
+    const running = getRunningBackgroundTaskBySource('meeting_extract', sourceKey)
+    if (running) return c.json(running, 202)
+    const settings = getLlmSettings()
+    const task = createOrReuseRunningTask({
+      type: 'meeting_extract',
+      sourceKey,
+      title: mode === 'test' ? 'Test meeting extraction' : 'Meeting extraction',
+      meta: { mode, draftHash, rawContent: body.rawContent, rawContentPreview: backgroundPreview(body.rawContent) },
+      timeoutAt: Date.now() + settings.timeoutMs + 10000,
+    })
+    emitBackgroundTask(task)
+    void extractMeeting(body.rawContent, mode)
+      .then((result) => emitBackgroundTask(finishBackgroundTask(task.id, result)))
+      .catch((err: any) => emitBackgroundTask(failBackgroundTask(task.id, err?.message || 'Meeting extraction failed')))
+    return c.json(task, 202)
   } catch (err: any) {
     return c.json({ error: err.message || 'Meeting extraction failed' }, 400)
   }
@@ -546,6 +631,40 @@ app.post('/api/day-scripts/:date/daily-summary', async (c) => {
   }
 })
 
+app.get('/api/day-scripts/:date/daily-summary-cache', async (c) => {
+  try {
+    const cached = getDailySummaryCache(c.req.param('date'))
+    if (!cached) return c.json(null)
+    return c.json(cached)
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Daily summary cache failed' }, 400)
+  }
+})
+
+app.post('/api/day-scripts/:date/daily-summary/background', async (c) => {
+  const date = c.req.param('date')
+  try {
+    const sourceKey = `daily_summary:${date}`
+    const running = getRunningBackgroundTaskBySource('daily_summary', sourceKey)
+    if (running) return c.json(running, 202)
+    const settings = getLlmSettings()
+    const task = createOrReuseRunningTask({
+      type: 'daily_summary',
+      sourceKey,
+      title: `Daily summary: ${date}`,
+      meta: { date },
+      timeoutAt: Date.now() + settings.timeoutMs + 10000,
+    })
+    emitBackgroundTask(task)
+    void generateDailySummary(date, { refresh: true, mode: 'record' })
+      .then((result) => emitBackgroundTask(finishBackgroundTask(task.id, result)))
+      .catch((err: any) => emitBackgroundTask(failBackgroundTask(task.id, err?.message || 'Daily summary failed')))
+    return c.json(task, 202)
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Daily summary failed' }, 400)
+  }
+})
+
 app.post('/api/day-scripts/:date/plan-today-draft', async (c) => {
   try {
     return c.json(buildPlanTodayDraft(c.req.param('date')))
@@ -576,6 +695,51 @@ app.post('/api/task-context/test-summary', async (c) => {
   } catch (err: any) {
     return c.json({ error: err?.message || 'Task summary test failed' }, 400)
   }
+})
+
+// --- Background Tasks API ---
+app.get('/api/background-tasks', async (c) => {
+  for (const task of expireStaleRunningTasks()) emitBackgroundTask(task)
+  cleanupBackgroundTasks()
+  const status = c.req.query('status')
+  if (status && !['all', 'running', 'success', 'error'].includes(status)) {
+    return c.json({ error: 'Invalid background task status' }, 400)
+  }
+  const includeDismissed = c.req.query('includeDismissed') === 'true'
+  const limit = parseInt(c.req.query('limit') || '100', 10)
+  return c.json(listBackgroundTasks({ status: status as any, includeDismissed, limit }))
+})
+
+app.get('/api/background-tasks/:id', async (c) => {
+  const task = getBackgroundTask(c.req.param('id'), { includeSensitive: true })
+  if (!task) return c.json({ error: 'Not found' }, 404)
+  return c.json(task)
+})
+
+app.post('/api/background-tasks/:id/read', async (c) => {
+  const task = markBackgroundTaskRead(c.req.param('id'))
+  if (!task) return c.json({ error: 'Not found' }, 404)
+  emitBackgroundTask(task)
+  return c.json(task)
+})
+
+app.post('/api/background-tasks/:id/dismiss', async (c) => {
+  const task = dismissBackgroundTask(c.req.param('id'))
+  if (!task) return c.json({ error: 'Not found' }, 404)
+  emitBackgroundTask(task)
+  return c.json(task)
+})
+
+app.post('/api/background-tasks/:id/consume', async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  const task = consumeBackgroundTask(c.req.param('id'), typeof body === 'object' && body ? body : {})
+  if (!task) return c.json({ error: 'Not found' }, 404)
+  emitBackgroundTask(task)
+  return c.json(task)
+})
+
+app.post('/api/background-tasks/cleanup', async (c) => {
+  return c.json({ deleted: cleanupBackgroundTasks() })
 })
 
 // --- Settings API ---
@@ -713,6 +877,7 @@ const port = cliPort ?? config.server.port
 const host = config.server.host
 
 initDb()
+for (const task of interruptRunningBackgroundTasks()) emitBackgroundTask(task)
 
 // Auto-rebuild FTS index when tokenizer version changes
 const FTS_INDEX_VERSION_KEY = 'fts_tokenizer_version'

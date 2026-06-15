@@ -32,9 +32,6 @@ export const WrappedCodeBlock = CodeBlock.extend({
       const pre = document.createElement('pre')
       const code = document.createElement('code')
       const button = document.createElement('button')
-      pre.style.minHeight = 'calc(1.5em + 1.3rem)'
-      pre.style.maxHeight = 'calc(15em + 1.3rem)'
-      pre.style.overflow = 'auto'
 
       const renderState = () => {
         const softWrap = currentNode.attrs.softWrap !== false

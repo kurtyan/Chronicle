@@ -251,6 +251,34 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS background_tasks (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      source_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result_json TEXT,
+      error_message TEXT,
+      meta_json TEXT,
+      read_at INTEGER,
+      dismissed_at INTEGER,
+      created_at INTEGER NOT NULL,
+      started_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      timeout_at INTEGER
+    )
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_background_tasks_updated_at
+    ON background_tasks(updated_at DESC)
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_background_tasks_source
+    ON background_tasks(type, source_key, status)
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS _meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

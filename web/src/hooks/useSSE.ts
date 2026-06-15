@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
 import { clientId, isTauriEnv, ensureApiReady } from '@/services/httpApi'
 import type { TaskProgressContext } from '@/types'
+import { useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
+import type { BackgroundTask } from '@/types'
 
 export type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
@@ -194,19 +196,35 @@ export function useSSE() {
         task_summary_refresh_started: (raw) => {
           try {
             const data = JSON.parse(raw) as { taskId?: string }
-            if (data.taskId) markTaskSummaryUpdating(data.taskId)
+            if (data.taskId) {
+              markTaskSummaryUpdating(data.taskId)
+              void useBackgroundTaskStore.getState().loadTasks()
+            }
           } catch { /* ignore malformed event */ }
         },
         task_summary_updated: (raw) => {
           try {
             const context = JSON.parse(raw) as TaskProgressContext
-            if (context.taskId) receiveTaskSummaryContext(context)
+            if (context.taskId) {
+              receiveTaskSummaryContext(context)
+              useBackgroundTaskStore.getState().loadTasks()
+            }
           } catch { /* ignore malformed event */ }
         },
         task_summary_refresh_failed: (raw) => {
           try {
             const data = JSON.parse(raw) as { taskId?: string; error?: string }
-            if (data.taskId) receiveTaskSummaryFailure(data.taskId, data.error ?? 'Summary refresh failed')
+            if (data.taskId) {
+              const error = data.error ?? 'Summary refresh failed'
+              receiveTaskSummaryFailure(data.taskId, error)
+              useBackgroundTaskStore.getState().loadTasks()
+            }
+          } catch { /* ignore malformed event */ }
+        },
+        background_task_updated: (raw) => {
+          try {
+            const task = JSON.parse(raw) as BackgroundTask
+            if (task?.id) useBackgroundTaskStore.getState().upsertTask(task, { notify: true })
           } catch { /* ignore malformed event */ }
         },
         db_imported: () => {

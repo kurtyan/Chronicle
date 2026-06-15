@@ -25,6 +25,11 @@ export interface DailySummaryResult {
   llmCallLogId: string | null
 }
 
+export interface DailySummaryCacheResult extends DailySummaryResult {
+  updatedAt: number
+  fingerprintStatus: 'fresh' | 'stale'
+}
+
 export interface PlanTodayDraftResult {
   date: string
   document: JsonNode
@@ -193,10 +198,11 @@ function buildSummaryInput(date: string): { inputText: string; fingerprintData: 
   const sessions = mergeSessions(getSessionsForRange(start, end)
     .map((session) => ({
       ...session,
-      endedAt: session.endedAt ?? now,
+      startedAt: Math.max(session.startedAt, start),
+      endedAt: Math.min(session.endedAt ?? now, end),
       taskTitle: tasksById.get(session.taskId)?.title ?? session.taskId,
     }))
-    .filter((session) => session.endedAt > start && session.startedAt < end)
+    .filter((session) => session.endedAt > session.startedAt)
     .sort((a, b) => a.startedAt - b.startedAt))
 
   const taskIds = [...new Set([
@@ -361,6 +367,28 @@ export async function generateDailySummary(date: string, options: { refresh?: bo
     )
   }
   return { date, summaryMarkdown, cached: false, llmCallLogId: logId }
+}
+
+export function getDailySummaryCache(date: string): DailySummaryCacheResult | null {
+  const settings = getLlmSettings()
+  const prompt = settings.dailySummaryPrompt.trim() || DEFAULT_DAILY_SUMMARY_PROMPT
+  const input = buildSummaryInput(date)
+  const fingerprint = createHash('sha1').update(JSON.stringify({ prompt, input: input.fingerprintData })).digest('hex')
+  const cached = queryOne('SELECT * FROM day_script_daily_summaries WHERE script_date = ?', [date]) as {
+    fingerprint: string
+    summary_markdown: string
+    llm_call_log_id: string | null
+    updated_at: number
+  } | null
+  if (!cached) return null
+  return {
+    date,
+    summaryMarkdown: cached.summary_markdown,
+    cached: true,
+    llmCallLogId: cached.llm_call_log_id,
+    updatedAt: cached.updated_at,
+    fingerprintStatus: cached.fingerprint === fingerprint ? 'fresh' : 'stale',
+  }
 }
 
 export function buildPlanTodayDraft(date: string): PlanTodayDraftResult {

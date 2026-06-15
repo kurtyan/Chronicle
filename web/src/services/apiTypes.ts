@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, PlanTodayDraftResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -74,6 +74,8 @@ export interface ApiInterface {
   confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }>
   getDayScriptExecutionRecords(date: string, filters?: { taskId?: string; start?: number; end?: number }): Promise<DayScriptExecutionRecord[]>
   generateDailySummary(date: string, body?: { refresh?: boolean; mode?: 'record' | 'test' }): Promise<DailySummaryResult>
+  fetchDailySummaryCache(date: string): Promise<DailySummaryCacheResult | null>
+  generateDailySummaryInBackground(date: string): Promise<BackgroundTask>
   buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult>
   getTaskContexts(status?: string): Promise<TaskProgressContext[]>
   refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]>
@@ -84,5 +86,11 @@ export interface ApiInterface {
   saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings>
   testLlmConnection(): Promise<{ ok: boolean; latencyMs?: number; model?: string; error?: string }>
   extractMeeting(rawContent: string, mode?: 'record' | 'test'): Promise<MeetingExtractionResult>
+  extractMeetingInBackground(rawContent: string, mode: 'record' | 'test', draftHash: string): Promise<BackgroundTask>
   createMeeting(req: CreateMeetingRequest): Promise<Task>
+  fetchBackgroundTasks(options?: { status?: BackgroundTaskStatus | 'all'; includeDismissed?: boolean; limit?: number }): Promise<BackgroundTask[]>
+  fetchBackgroundTask(id: string): Promise<BackgroundTask>
+  markBackgroundTaskRead(id: string): Promise<BackgroundTask>
+  dismissBackgroundTask(id: string): Promise<BackgroundTask>
+  consumeBackgroundTask(id: string, meta: Record<string, unknown>): Promise<BackgroundTask>
 }

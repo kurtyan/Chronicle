@@ -52,7 +52,7 @@ function findTaskLink(node: any, taskId: string): any | null {
   return null
 }
 
-async function startMockLlm(summaries: string[]) {
+async function startMockLlm(summaries: string[], delayMs = 0) {
   const calls: any[] = []
   const server = http.createServer((req, res) => {
     let body = ''
@@ -63,12 +63,14 @@ async function startMockLlm(summaries: string[]) {
       const parsed = body ? JSON.parse(body) : {}
       calls.push(parsed)
       const content = summaries[Math.min(calls.length - 1, summaries.length - 1)] ?? 'mock summary'
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({
-        id: `mock-${calls.length}`,
-        object: 'chat.completion',
-        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
-      }))
+      setTimeout(() => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          id: `mock-${calls.length}`,
+          object: 'chat.completion',
+          choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
+        }))
+      }, delayMs)
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -184,6 +186,106 @@ test.describe('Plan Today draft', () => {
       expect(mock.calls).toHaveLength(2)
     } finally {
       await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset.offset } })
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+      await mock.close()
+    }
+  })
+
+  test('daily summary background task persists, deduplicates, and writes cache', async ({ page }) => {
+    const date = uniqueScriptDate(uniqueDayOffset() + 3)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const mock = await startMockLlm(['background summary'], 200)
+
+    try {
+      await page.request.put('/api/settings/llm', {
+        data: {
+          ...originalSettings,
+          baseUrl: mock.baseUrl,
+          model: 'mock-model',
+          dailySummaryPrompt: 'Return a concise markdown summary.',
+        },
+      })
+
+      const first = await page.request.post(`/api/day-scripts/${date}/daily-summary/background`)
+      expect(first.ok()).toBeTruthy()
+      const firstTask = await first.json()
+      expect(firstTask.status).toBe('running')
+      expect(firstTask.sourceKey).toBe(`daily_summary:${date}`)
+
+      const second = await page.request.post(`/api/day-scripts/${date}/daily-summary/background`)
+      expect(second.ok()).toBeTruthy()
+      const secondTask = await second.json()
+      expect(secondTask.id).toBe(firstTask.id)
+
+      await expect.poll(async () => {
+        const res = await page.request.get('/api/background-tasks?includeDismissed=true&limit=20')
+        const tasks = await res.json()
+        return tasks.find((task: any) => task.id === firstTask.id)?.status
+      }).toBe('success')
+
+      const cacheRes = await page.request.get(`/api/day-scripts/${date}/daily-summary-cache`)
+      expect(cacheRes.ok()).toBeTruthy()
+      const cache = await cacheRes.json()
+      expect(cache.summaryMarkdown).toBe('background summary')
+      expect(cache.cached).toBe(true)
+      expect(mock.calls).toHaveLength(1)
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+      await mock.close()
+    }
+  })
+
+  test('background task API rejects invalid status filters', async ({ page }) => {
+    const res = await page.request.get('/api/background-tasks?status=bogus')
+    expect(res.status()).toBe(400)
+  })
+
+  test('meeting extraction background task hides raw content in list but exposes it in detail', async ({ page }) => {
+    const rawContent = '<p>10:00-10:15 secret roadmap meeting with Alice</p>'
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const mock = await startMockLlm([JSON.stringify({
+      title: 'Roadmap meeting',
+      startedAt: '10:00',
+      endedAt: '10:15',
+      content: '<p>Discussed roadmap.</p>',
+      participants: ['Alice'],
+      tags: ['roadmap'],
+      warnings: [],
+    })], 100)
+
+    try {
+      await page.request.put('/api/settings/llm', {
+        data: {
+          ...originalSettings,
+          baseUrl: mock.baseUrl,
+          model: 'mock-model',
+        },
+      })
+
+      const started = await page.request.post('/api/meetings/extract/background', {
+        data: { rawContent, mode: 'record', draftHash: `privacy-${Date.now()}` },
+      })
+      expect(started.ok()).toBeTruthy()
+      const startedTask = await started.json()
+
+      const runningList = await (await page.request.get('/api/background-tasks?includeDismissed=true')).json()
+      const runningListTask = runningList.find((task: any) => task.id === startedTask.id)
+      expect(JSON.stringify(runningListTask)).not.toContain(rawContent)
+
+      await expect.poll(async () => {
+        const res = await page.request.get('/api/background-tasks?includeDismissed=true')
+        const tasks = await res.json()
+        return tasks.find((task: any) => task.id === startedTask.id)?.status
+      }).toBe('success')
+
+      const list = await (await page.request.get('/api/background-tasks?includeDismissed=true')).json()
+      const listTask = list.find((task: any) => task.id === startedTask.id)
+      expect(JSON.stringify(listTask)).not.toContain(rawContent)
+
+      const detail = await (await page.request.get(`/api/background-tasks/${startedTask.id}`)).json()
+      expect(JSON.stringify(detail)).toContain(rawContent)
+      expect(detail.result.rawContent).toBe(rawContent)
+    } finally {
       await page.request.put('/api/settings/llm', { data: originalSettings })
       await mock.close()
     }

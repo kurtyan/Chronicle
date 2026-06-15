@@ -216,6 +216,7 @@ export function ReportPage() {
     const days: { date: Date; dayStart: number; dayEnd: number; daySessions: WorkSession[] }[] = []
     let d = new Date(rangeStart - workDayOffset * 3600_000)
     d.setHours(0, 0, 0, 0)
+    const now = nowTickRef.current
     while (d.getTime() + workDayOffset * 3600_000 < rangeEnd) {
       const dayStart = d.getTime() + workDayOffset * 3600_000
       d.setDate(d.getDate() + 1)
@@ -224,7 +225,19 @@ export function ReportPage() {
         date: new Date(dayStart),
         dayStart,
         dayEnd,
-        daySessions: sessions.filter(s => s.startedAt >= dayStart && s.startedAt < dayEnd),
+        daySessions: sessions
+          .map((session) => {
+            const rawEnd = session.endedAt ?? now
+            const startedAt = Math.max(session.startedAt, dayStart)
+            const endedAt = Math.min(rawEnd, dayEnd)
+            if (startedAt >= endedAt) return null
+            return {
+              ...session,
+              startedAt,
+              endedAt: session.endedAt === null && rawEnd < dayEnd ? null : endedAt,
+            }
+          })
+          .filter((session): session is WorkSession => session !== null),
       })
     }
     return days

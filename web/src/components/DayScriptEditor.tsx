@@ -622,6 +622,10 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
         if (index === currentIndex) element.classList.add('day-script-line-active')
       }
     })
+
+    root.querySelectorAll('pre').forEach((pre) => {
+      pre.classList.toggle('day-script-code-block-scroll', pre.scrollHeight > pre.clientHeight + 1)
+    })
   }
 
   function scheduleApplyBlockClasses(nextEditor: NonNullable<typeof editor>) {
@@ -764,11 +768,15 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           background: hsl(var(--muted));
           border-radius: 0.5rem;
           margin: 0.5rem 0;
-          min-height: calc(1.5em + 1.3rem);
-          max-height: calc(15em + 1.3rem);
-          overflow: auto;
+          min-height: calc((0.9rem * 1.5) + 1.3rem);
+          max-height: calc((0.9rem * 1.5 * 10) + 1.3rem);
+          overflow-x: auto;
+          overflow-y: hidden;
           padding: 0.65rem 1rem;
           display: block;
+        }
+        .day-script-editor.ProseMirror pre.day-script-code-block-scroll {
+          overflow-y: auto;
         }
         .day-script-editor.ProseMirror pre code {
           display: block;

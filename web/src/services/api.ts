@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, PlanTodayDraftResult } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -185,6 +185,12 @@ export async function getDayScriptExecutionRecords(date: string, filters?: { tas
 export async function generateDailySummary(date: string, body?: { refresh?: boolean; mode?: 'record' | 'test' }): Promise<DailySummaryResult> {
   return (await getApi()).generateDailySummary(date, body)
 }
+export async function fetchDailySummaryCache(date: string): Promise<DailySummaryCacheResult | null> {
+  return (await getApi()).fetchDailySummaryCache(date)
+}
+export async function generateDailySummaryInBackground(date: string): Promise<BackgroundTask> {
+  return (await getApi()).generateDailySummaryInBackground(date)
+}
 export async function buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult> {
   return (await getApi()).buildPlanTodayDraft(date)
 }
@@ -217,6 +223,24 @@ export async function testLlmConnection(): Promise<{ ok: boolean; latencyMs?: nu
 export async function extractMeeting(rawContent: string, mode?: 'record' | 'test'): Promise<MeetingExtractionResult> {
   return (await getApi()).extractMeeting(rawContent, mode)
 }
+export async function extractMeetingInBackground(rawContent: string, mode: 'record' | 'test', draftHash: string): Promise<BackgroundTask> {
+  return (await getApi()).extractMeetingInBackground(rawContent, mode, draftHash)
+}
 export async function createMeeting(req: CreateMeetingRequest): Promise<Task> {
   return (await getApi()).createMeeting(req)
+}
+export async function fetchBackgroundTasks(options?: { status?: BackgroundTaskStatus | 'all'; includeDismissed?: boolean; limit?: number }): Promise<BackgroundTask[]> {
+  return (await getApi()).fetchBackgroundTasks(options)
+}
+export async function fetchBackgroundTask(id: string): Promise<BackgroundTask> {
+  return (await getApi()).fetchBackgroundTask(id)
+}
+export async function markBackgroundTaskRead(id: string): Promise<BackgroundTask> {
+  return (await getApi()).markBackgroundTaskRead(id)
+}
+export async function dismissBackgroundTask(id: string): Promise<BackgroundTask> {
+  return (await getApi()).dismissBackgroundTask(id)
+}
+export async function consumeBackgroundTask(id: string, meta: Record<string, unknown>): Promise<BackgroundTask> {
+  return (await getApi()).consumeBackgroundTask(id, meta)
 }
