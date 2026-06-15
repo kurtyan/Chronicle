@@ -771,7 +771,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           min-height: calc((0.9rem * 1.5) + 1.3rem);
           max-height: calc((0.9rem * 1.5 * 10) + 1.3rem);
           overflow-x: auto;
-          overflow-y: hidden;
+          overflow-y: auto;
           padding: 0.65rem 1rem;
           display: block;
         }

@@ -10,6 +10,16 @@ function uniqueScriptDate(dayOffset: number): string {
   ].join('-')
 }
 
+function workdayDate(offset = 5, dayDelta = 0): string {
+  const date = new Date(Date.now() - offset * 3600_000)
+  date.setDate(date.getDate() + dayDelta)
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
 async function createTask(page: Page, title: string) {
   const res = await page.request.post('/api/tasks', {
     data: { title, type: 'TODO', priority: 'MEDIUM' },
@@ -230,6 +240,93 @@ test.describe('Plan Today draft', () => {
       expect(cache.cached).toBe(true)
       expect(mock.calls).toHaveLength(1)
     } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+      await mock.close()
+    }
+  })
+
+  test('daily summary sends only today non-focus logs as facts and separates historical context', async ({ page }) => {
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const originalOffset = await (await page.request.get('/api/settings/start-of-day-offset')).json()
+    const mock = await startMockLlm(['summary one', 'summary two'])
+
+    try {
+      await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 5 } })
+      await page.request.put('/api/settings/llm', {
+        data: {
+          ...originalSettings,
+          baseUrl: mock.baseUrl,
+          model: 'mock-model',
+          dailySummaryPrompt: 'Return a concise markdown summary.',
+        },
+      })
+
+      const today = workdayDate(5)
+      const task = await createTask(page, `DailySummaryFacts-${Date.now()}`)
+      await page.request.put(`/api/day-scripts/${today}`, {
+        data: {
+          expectedRevision: 0,
+          document: {
+            type: 'doc',
+            content: [
+              {
+                type: 'paragraph',
+                content: [{
+                  type: 'text',
+                  text: `10:00-10:30 @${task.title} ✅`,
+                  marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
+                }],
+              },
+              { type: 'paragraph', content: [{ type: 'text', text: 'focus-only progress should stay in focus blocks' }] },
+            ],
+          },
+        },
+      })
+      await page.request.post(`/api/tasks/${task.id}/logs`, {
+        data: { content: '<p>manual today note outside focus</p>', type: 'log' },
+      })
+
+      const todaySummary = await page.request.post(`/api/day-scripts/${today}/daily-summary`, { data: { refresh: true, mode: 'test' } })
+      expect(todaySummary.ok()).toBeTruthy()
+      const todayInput = mock.calls
+        .flatMap((call) => call.messages ?? [])
+        .find((message: any) => message.role === 'user' && String(message.content).includes('Related Task Details:'))
+        ?.content ?? ''
+      const todayTaskDetails = todayInput.slice(todayInput.indexOf('Related Task Details:'))
+      expect(todayInput).toContain('focus-only progress should stay in focus blocks')
+      expect(todayTaskDetails).toContain('"todayLogs"')
+      expect(todayTaskDetails).toContain('manual today note outside focus')
+      expect(todayTaskDetails).not.toContain('Day Script progress')
+
+      const tomorrow = workdayDate(5, 1)
+      const historicalTask = await createTask(page, `DailySummaryContext-${Date.now()}`)
+      await page.request.post(`/api/tasks/${historicalTask.id}/logs`, {
+        data: { content: '<p>historical setup before this workday</p>', type: 'log' },
+      })
+      await saveDayScript(page, tomorrow, {
+        type: 'doc',
+        content: [{
+          type: 'paragraph',
+          content: [{
+            type: 'text',
+            text: `09:00-09:30 @${historicalTask.title}`,
+            marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(historicalTask.id)}`, taskId: historicalTask.id } }],
+          }],
+        }],
+      })
+
+      const tomorrowSummary = await page.request.post(`/api/day-scripts/${tomorrow}/daily-summary`, { data: { refresh: true, mode: 'test' } })
+      expect(tomorrowSummary.ok()).toBeTruthy()
+      const tomorrowInput = mock.calls
+        .flatMap((call) => call.messages ?? [])
+        .filter((message: any) => message.role === 'user' && String(message.content).includes('Related Task Details:'))
+        .at(-1)?.content ?? ''
+      const tomorrowDetails = JSON.parse(tomorrowInput.slice(tomorrowInput.indexOf('[\n')))
+      const detail = tomorrowDetails.find((item: any) => item.id === historicalTask.id)
+      expect(detail.todayLogs).toEqual([])
+      expect(detail.recentContextBeforeToday.map((entry: any) => entry.content).join('\n')).toContain('historical setup before this workday')
+    } finally {
+      await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset.offset } })
       await page.request.put('/api/settings/llm', { data: originalSettings })
       await mock.close()
     }

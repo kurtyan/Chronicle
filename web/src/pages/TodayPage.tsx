@@ -305,20 +305,14 @@ export function TodayPage() {
   }, [dailySummary, dailySummaryErrorTask, dailySummaryOpen, dailySummaryRunningTask])
 
   useEffect(() => {
-    if (!activeTaskId) return
     const next = new URLSearchParams(searchParams)
-    next.set('task', activeTaskId)
+    if (activeTaskId) next.set('task', activeTaskId)
     if (displayDate !== todayScriptDate) next.set('date', displayDate)
     else next.delete('date')
-    setSearchParams(next, { replace: true })
-  }, [activeTaskId, displayDate, todayScriptDate])
-
-  useEffect(() => {
-    const next = new URLSearchParams(searchParams)
-    if (displayDate !== todayScriptDate) next.set('date', displayDate)
-    else next.delete('date')
-    setSearchParams(next, { replace: true })
-  }, [displayDate, todayScriptDate])
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true })
+    }
+  }, [activeTaskId, displayDate, searchParams, setSearchParams, todayScriptDate])
 
   useEffect(() => {
     let cancelled = false
@@ -466,10 +460,9 @@ export function TodayPage() {
         && task.status === 'running'
         && task.sourceKey === dailySummarySourceKey(displayDate)
       )
-      const shouldRegenerate = cached?.fingerprintStatus === 'stale' || (!cached && !errorTask)
-      if (shouldRegenerate && !running) await generateDailySummaryInBackground(displayDate)
+      if (running) setDailySummaryLoading(true)
     } catch (error: any) {
-      setDailySummaryError(error?.response?.data?.error || error?.message || 'Failed to generate daily summary.')
+      setDailySummaryError(error?.response?.data?.error || error?.message || 'Failed to load daily summary.')
     } finally {
       setDailySummaryLoading(false)
       void loadBackgroundTasks()
@@ -551,6 +544,18 @@ export function TodayPage() {
     document.addEventListener('mouseup', handleMouseUp)
   }, [updatePanePercent])
 
+  const shiftDisplayDate = useCallback((offset: number) => {
+    const nextDate = dateOffset(displayDate, offset)
+    setDisplayDate(nextDate)
+    const nextParams = new URLSearchParams(searchParams)
+    if (activeTaskId) nextParams.set('task', activeTaskId)
+    if (nextDate !== todayScriptDate) nextParams.set('date', nextDate)
+    else nextParams.delete('date')
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true })
+    }
+  }, [activeTaskId, displayDate, searchParams, setSearchParams, todayScriptDate])
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div ref={splitContainerRef} className="flex min-h-0 flex-1">
@@ -560,11 +565,11 @@ export function TodayPage() {
         >
           <div className="flex h-16 flex-nowrap items-center gap-5 border-b bg-card/60 px-6">
             <div className="flex shrink-0 items-center gap-3">
-              <button className="rounded-lg border border-border p-2 hover:bg-muted" onClick={() => setDisplayDate((value) => dateOffset(value, -1))}>
+              <button className="rounded-lg border border-border p-2 hover:bg-muted" onClick={() => shiftDisplayDate(-1)}>
                 <ChevronLeft className="h-4 w-4" />
               </button>
               <div className="whitespace-nowrap text-lg font-semibold">{formatDate(displayDate)}</div>
-              <button className="rounded-lg border border-border p-2 hover:bg-muted" onClick={() => setDisplayDate((value) => dateOffset(value, 1))}>
+              <button className="rounded-lg border border-border p-2 hover:bg-muted" onClick={() => shiftDisplayDate(1)}>
                 <ChevronRight className="h-4 w-4" />
               </button>
             </div>
@@ -726,6 +731,8 @@ export function TodayPage() {
               </div>
             ) : dailySummaryError ? (
               <div className="text-sm text-destructive">{dailySummaryError}</div>
+            ) : !dailySummary ? (
+              <div className="text-sm text-muted-foreground">No daily summary has been generated for this date.</div>
             ) : (
               <div className="space-y-3">
                 <div className="flex justify-end">
@@ -769,7 +776,7 @@ export function TodayPage() {
               }
             }} disabled={Boolean(dailySummaryRunningTask)}>
               {dailySummaryRunningTask && <Loader2 className="h-4 w-4 animate-spin" />}
-              Regenerate
+              {dailySummary ? 'Regenerate' : 'Generate'}
             </button>
           </DialogFooter>
         </DialogContent>

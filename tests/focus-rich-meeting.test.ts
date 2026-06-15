@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import http from 'node:http'
 
 function uniqueScriptDate(dayOffset: number): string {
   const date = new Date(2099, 1, dayOffset)
@@ -38,6 +39,33 @@ async function saveDayScript(page: Page, date: string, document: Record<string, 
   })
   expect(saveRes.ok()).toBeTruthy()
   return saveRes.json()
+}
+
+async function startMockLlm(response: string) {
+  const calls: any[] = []
+  const server = http.createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+    })
+    req.on('end', () => {
+      calls.push(body ? JSON.parse(body) : {})
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: `mock-${calls.length}`,
+        object: 'chat.completion',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: response } }],
+      }))
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Mock LLM server did not bind')
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    calls,
+    close: () => new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve())),
+  }
 }
 
 async function clearFocusEditor(page: Page) {
@@ -333,56 +361,57 @@ test.describe('Focus rich editor and meeting task mentions', () => {
 
   test('record meeting appends extracted content to mentioned task instead of creating a meeting task', async ({ page }) => {
     const task = await createTask(page, `MeetingMention-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const mock = await startMockLlm(JSON.stringify({
+      title: 'Mentioned task sync',
+      startedAt: '10:00',
+      endedAt: '10:30',
+      content: '<p>Decision: append this meeting note.</p>',
+      participants: ['Alice'],
+      tags: ['meeting'],
+      warnings: [],
+    }))
 
-    await page.route('**/api/meetings/extract', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          llmCallLogId: 'playwright-meeting-extract',
-          title: 'Mentioned task sync',
-          startedAt: Date.UTC(2099, 0, 1, 10, 0),
-          endedAt: Date.UTC(2099, 0, 1, 10, 30),
-          content: '<p>Decision: append this meeting note.</p>',
-          participants: ['Alice'],
-          tags: ['meeting'],
-          rawContent: '<p>raw meeting note</p>',
-          warnings: [],
-        }),
+    try {
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: mock.baseUrl, model: 'mock-model' },
       })
-    })
 
-    await page.goto('/?lang=en')
-    await page.waitForLoadState('load')
-    await page.getByRole('button', { name: 'Meeting' }).first().click()
+      await page.goto('/?lang=en')
+      await page.waitForLoadState('load')
+      await page.getByRole('button', { name: 'Meeting' }).first().click()
 
-    const dialog = page.getByRole('dialog')
-    await expect(dialog.getByText('Record Meeting')).toBeVisible()
-    const inputEditor = dialog.locator('.ProseMirror').first()
-    await inputEditor.click()
-    await page.keyboard.type(`10:00-10:30 sync @${task.title.slice(0, 10)}`)
-    await expect(page.getByRole('button', { name: task.title }).first()).toBeVisible()
-    await page.keyboard.press('Enter')
-    await page.keyboard.type(' discussed progress')
+      const dialog = page.getByRole('dialog')
+      await expect(dialog.getByText('Record Meeting')).toBeVisible()
+      const inputEditor = dialog.locator('.ProseMirror').first()
+      await inputEditor.click()
+      await page.keyboard.type(`10:00-10:30 sync @${task.title.slice(0, 10)}`)
+      await expect(page.getByRole('button', { name: task.title }).first()).toBeVisible()
+      await page.keyboard.press('Enter')
+      await page.keyboard.type(' discussed progress')
 
-    await dialog.getByRole('button', { name: 'Extract' }).click()
-    await expect(dialog.getByRole('button', { name: 'Append to Task Log' })).toBeVisible()
-    await dialog.getByRole('button', { name: 'Append to Task Log' }).click()
+      await dialog.getByRole('button', { name: 'Extract' }).click()
+      await expect(dialog.getByRole('button', { name: 'Append to Task Log' })).toBeVisible()
+      await dialog.getByRole('button', { name: 'Append to Task Log' }).click()
 
-    await expect(dialog).not.toBeVisible()
+      await expect(dialog).not.toBeVisible()
 
-    const entriesRes = await page.request.get(`/api/tasks/${task.id}/logs`)
-    expect(entriesRes.ok()).toBeTruthy()
-    const entries = await entriesRes.json()
-    expect(entries.some((entry: { content: string }) => (
-      entry.content.includes('Mentioned task sync') &&
-      entry.content.includes('Decision: append this meeting note.')
-    ))).toBeTruthy()
+      const entriesRes = await page.request.get(`/api/tasks/${task.id}/logs`)
+      expect(entriesRes.ok()).toBeTruthy()
+      const entries = await entriesRes.json()
+      expect(entries.some((entry: { content: string }) => (
+        entry.content.includes('Mentioned task sync') &&
+        entry.content.includes('Decision: append this meeting note.')
+      ))).toBeTruthy()
 
-    const afterTasksRes = await page.request.get('/api/tasks')
-    expect(afterTasksRes.ok()).toBeTruthy()
-    const tasks = await afterTasksRes.json()
-    expect(tasks.some((item: { title: string }) => item.title === 'Mentioned task sync')).toBeFalsy()
+      const afterTasksRes = await page.request.get('/api/tasks')
+      expect(afterTasksRes.ok()).toBeTruthy()
+      const tasks = await afterTasksRes.json()
+      expect(tasks.some((item: { title: string }) => item.title === 'Mentioned task sync')).toBeFalsy()
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+      await mock.close()
+    }
   })
 
   test('focus page default date follows configured workday offset', async ({ page }) => {
@@ -399,5 +428,29 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(page.getByText(expected)).toBeVisible()
 
     await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 5 } })
+  })
+
+  test('switching focus dates repeatedly keeps URL and editor stable', async ({ page }) => {
+    const errors: string[] = []
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text())
+    })
+    page.on('pageerror', (error) => errors.push(error.message))
+
+    const date = uniqueScriptDate(90)
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+    await expect(page.locator('.day-script-editor.ProseMirror')).toBeVisible()
+
+    const previousDateButton = page.locator('section').first().locator('button').first()
+    for (let i = 0; i < 8; i += 1) {
+      await previousDateButton.click()
+      await expect(page.locator('.day-script-editor.ProseMirror')).toBeVisible()
+    }
+
+    expect(page.url()).toContain(`date=${uniqueScriptDate(82)}`)
+    expect(errors.join('\n')).not.toContain('Maximum update depth exceeded')
   })
 })

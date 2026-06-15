@@ -80,6 +80,8 @@ Review important completed and in-progress tasks. Mention concrete progress and 
 Give practical, prioritized suggestions for tomorrow based only on the supplied focus lines, task logs, task summaries, and time utilization.
 
 Rules:
+- Treat sessions, focus blocks, and task todayLogs as the only factual sources for what happened during this workday.
+- recentContextBeforeToday is historical context only. Use it to understand task background, but do not count it as today's progress, today's timeline, or today's completed work.
 - Be specific about time usage and AFK/work patterns.
 - Call out long breaks, dead zones, context switching, and strong focus blocks.
 - Use the same language as the supplied data when possible.

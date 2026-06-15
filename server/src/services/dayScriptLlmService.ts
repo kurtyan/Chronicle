@@ -190,11 +190,30 @@ function buildHourlyBars(sessions: SessionWithTask[], start: number, end: number
   return lines.join('\n')
 }
 
+function getDayScriptSyncedEntryIds(date: string): Set<string> {
+  const rows = getDb().prepare(
+    `SELECT last_entry_id AS entry_id
+     FROM day_script_progress_syncs s
+     JOIN day_script_blocks b ON b.id = s.block_id
+     WHERE b.script_date = ? AND last_entry_id IS NOT NULL
+     UNION
+     SELECT progress_entry_id AS entry_id
+     FROM day_script_execution_records
+     WHERE script_date = ?`
+  ).all(date, date) as Array<{ entry_id: string | null }>
+  return new Set(rows.map((row) => row.entry_id).filter((id): id is string => Boolean(id)))
+}
+
+function isDayScriptProgressEntryForDate(content: string, date: string): boolean {
+  return content.includes(`Day Script progress · ${date}`)
+}
+
 function buildSummaryInput(date: string): { inputText: string; fingerprintData: unknown; sessionCount: number } {
   const script = getDayScript(date)
   const { start, end } = workdayRange(date)
   const now = Date.now()
   const tasksById = new Map(getAllTasks().map((task) => [task.id, task]))
+  const syncedEntryIds = getDayScriptSyncedEntryIds(date)
   const sessions = mergeSessions(getSessionsForRange(start, end)
     .map((session) => ({
       ...session,
@@ -211,17 +230,35 @@ function buildSummaryInput(date: string): { inputText: string; fingerprintData: 
   ])]
   const taskDetails = taskIds.map((taskId) => {
     const task = tasksById.get(taskId)
-    const logs = getTaskEntries(taskId).slice(-6).map((entry) => ({
-      type: entry.type,
-      createdAt: new Date(entry.createdAt).toISOString(),
-      content: stripHtml(entry.content),
-    }))
+    const entries = getTaskEntries(taskId)
+    const todayLogs = entries
+      .filter((entry) => entry.createdAt >= start && entry.createdAt < end)
+      .filter((entry) => !syncedEntryIds.has(entry.id))
+      .filter((entry) => !isDayScriptProgressEntryForDate(entry.content, date))
+      .slice(-6)
+      .map((entry) => ({
+        type: entry.type,
+        createdAt: new Date(entry.createdAt).toISOString(),
+        content: stripHtml(entry.content),
+      }))
+    const recentContextBeforeToday = todayLogs.length >= 2
+      ? []
+      : entries
+        .filter((entry) => entry.createdAt < start)
+        .filter((entry) => !isDayScriptProgressEntryForDate(entry.content, date))
+        .slice(-3)
+        .map((entry) => ({
+          type: entry.type,
+          createdAt: new Date(entry.createdAt).toISOString(),
+          content: stripHtml(entry.content),
+        }))
     return task ? {
       id: task.id,
       title: task.title,
       status: task.status,
       priority: task.priority,
-      logs,
+      todayLogs,
+      recentContextBeforeToday,
     } : null
   }).filter(Boolean)
 
@@ -287,6 +324,7 @@ function buildSummaryInput(date: string): { inputText: string; fingerprintData: 
     focusBlocks,
     '',
     'Related Task Details:',
+    'Use todayLogs as workday facts. Use recentContextBeforeToday only as historical background; do not count it as today progress.',
     JSON.stringify(taskDetails, null, 2),
   ].join('\n')
 

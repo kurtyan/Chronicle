@@ -168,7 +168,6 @@ function Sidebar() {
   const panelOpen = useBackgroundTaskStore((s) => s.panelOpen)
   const setPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
   const runningCount = tasks.filter((task) => task.status === 'running').length
-  const unreadCount = tasks.filter((task) => task.status !== 'running' && !task.readAt).length
   const hasErrors = tasks.some((task) => task.status === 'error')
 
   const navItems = [
@@ -210,6 +209,7 @@ function Sidebar() {
       </nav>
       <div className="mt-auto flex flex-col items-center gap-3">
         <button
+          data-background-tasks-trigger="true"
           className={`relative w-8 h-8 rounded-md flex items-center justify-center transition ${
             panelOpen
               ? 'bg-primary text-primary-foreground'
@@ -223,9 +223,9 @@ function Sidebar() {
           title={panelOpen ? 'Hide Background Tasks' : 'Show Background Tasks'}
         >
           <ClipboardList className="w-5 h-5" />
-          {(runningCount > 0 || unreadCount > 0) && (
-            <span className={`absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white ${unreadCount > 0 ? 'bg-blue-600' : 'bg-slate-600'}`}>
-              {unreadCount || runningCount}
+          {runningCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">
+              {runningCount}
             </span>
           )}
         </button>
@@ -276,6 +276,7 @@ function BackgroundTasksPanel() {
     const closeOnOutsidePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null
       if (target?.closest('[data-background-tasks-panel="true"]')) return
+      if (target?.closest('[data-background-tasks-trigger="true"]')) return
       if (target?.closest('[role="dialog"]')) return
       setPanelOpen(false)
     }
@@ -391,7 +392,7 @@ function BackgroundTasksPanel() {
             </button>
           </div>
         </div>
-        <div className="max-h-80 overflow-y-auto">
+        <div className="h-80 overflow-y-auto">
           {loading && visibleTasks.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">Loading background tasks...</div>
           ) : visibleTasks.length === 0 ? (

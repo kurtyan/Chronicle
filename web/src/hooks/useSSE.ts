@@ -59,6 +59,19 @@ function createFetchSSE(
 
         const decoder = new TextDecoder()
         let buffer = ''
+        let currentEvent = 'message'
+        let currentDataLines: string[] = []
+
+        const dispatchEvent = () => {
+          if (currentDataLines.length === 0) {
+            currentEvent = 'message'
+            return
+          }
+          const handler = handlers[currentEvent] || handlers['message']
+          if (handler) handler(currentDataLines.join('\n'))
+          currentEvent = 'message'
+          currentDataLines = []
+        }
 
         while (true) {
           const { done, value } = await reader.read()
@@ -69,21 +82,18 @@ function createFetchSSE(
           const lines = buffer.split('\n')
           buffer = lines.pop() || ''
 
-          let currentEvent = 'message'
-          let currentData = ''
-
           for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEvent = line.slice(7).trim()
-            } else if (line.startsWith('data: ')) {
-              currentData = line.slice(6)
-            } else if (line === '') {
-              if (currentData) {
-                const handler = handlers[currentEvent] || handlers['message']
-                if (handler) handler(currentData)
-                currentEvent = 'message'
-                currentData = ''
-              }
+            const normalizedLine = line.endsWith('\r') ? line.slice(0, -1) : line
+            if (normalizedLine.startsWith(':')) {
+              continue
+            } else if (normalizedLine.startsWith('event:')) {
+              currentEvent = normalizedLine.slice(6).trimStart()
+            } else if (normalizedLine.startsWith('data:')) {
+              currentDataLines.push(normalizedLine.slice(5).trimStart())
+            } else if (normalizedLine === '') {
+              dispatchEvent()
+            } else if (normalizedLine.startsWith('id:') || normalizedLine.startsWith('retry:')) {
+              continue
             }
           }
         }
