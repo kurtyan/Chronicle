@@ -262,6 +262,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
   const tasksRef = useRef<Task[]>(tasks)
   const selectedMentionIndexRef = useRef(0)
   const suppressEditingNotificationRef = useRef(false)
+  const suppressCursorNavigationRef = useRef(false)
   const lastCursorTaskIdRef = useRef<string | null>(null)
   const currentValueRef = useRef(JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] }))
 
@@ -409,7 +410,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
     },
     onSelectionUpdate: ({ editor: nextEditor }) => {
       updateMentionState(nextEditor)
-      notifyCursorTask(nextEditor)
+      if (!suppressCursorNavigationRef.current) notifyCursorTask(nextEditor)
       applyBlockClasses(nextEditor)
     },
   })
@@ -419,12 +420,16 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
     const nextSerialized = JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] })
     if (!editor || nextSerialized === currentValueRef.current) return
     suppressEditingNotificationRef.current = true
+    suppressCursorNavigationRef.current = true
     try {
       editor.commands.setContent(value)
       currentValueRef.current = nextSerialized
       scheduleApplyBlockClasses(editor)
     } finally {
       suppressEditingNotificationRef.current = false
+      window.setTimeout(() => {
+        suppressCursorNavigationRef.current = false
+      }, 0)
     }
   }, [editor, value, scriptDate])
 

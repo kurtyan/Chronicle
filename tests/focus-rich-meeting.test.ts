@@ -297,6 +297,33 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(page).toHaveURL(new RegExp(`task=${secondTask.id}`))
   })
 
+  test('saving a new focus task keeps the created task selected without route thrash', async ({ page }) => {
+    const existingTask = await createTask(page, `RouteExisting-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 56)
+    const newTaskTitle = `RouteCreated-${Date.now()}`
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+
+    await page.goto(`/today?date=${date}&task=${encodeURIComponent(existingTask.id)}&lang=en`)
+    await page.waitForLoadState('load')
+    await expect(page.getByRole('heading', { name: existingTask.title })).toBeVisible()
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type(`new task ${newTaskTitle} ✅`)
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes(`/api/day-scripts/${date}`) && response.request().method() === 'PUT'),
+      page.keyboard.press('ControlOrMeta+S'),
+    ])
+
+    await expect(page.getByRole('heading', { name: newTaskTitle })).toBeVisible()
+    await expect(editor).toContainText(newTaskTitle)
+    await expect(page).toHaveURL(/task=T\d+/)
+
+    await page.waitForTimeout(800)
+    await expect(page.getByRole('heading', { name: newTaskTitle })).toBeVisible()
+    await expect(page.locator('main')).toBeVisible()
+  })
+
   test('overall next steps board combines task summaries and focus carry-over', async ({ page }) => {
     const originalSettings = await (await page.request.get('/api/settings/llm')).json()
     const mock = await startMockLlm([

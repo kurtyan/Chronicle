@@ -279,6 +279,7 @@ function OverallNextStepsBoard({
                       if (action.taskId) onOpen(action)
                     }}
                     role={action.taskId ? 'button' : undefined}
+                    aria-label={action.taskId ? `Open task ${action.taskId}` : undefined}
                     tabIndex={action.taskId ? 0 : undefined}
                     onKeyDown={(event) => {
                       if (!action.taskId) return
