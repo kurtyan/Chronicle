@@ -98,22 +98,6 @@ export function initDb() {
   `)
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS plan_item_details (
-      id TEXT PRIMARY KEY,
-      entry_id TEXT NOT NULL UNIQUE,
-      plan_date TEXT NOT NULL,
-      estimated_minutes INTEGER NOT NULL,
-      estimated_start TEXT,
-      estimated_end TEXT,
-      actual_started_at INTEGER,
-      actual_completed_at INTEGER,
-      status TEXT NOT NULL DEFAULT 'PLANNED',
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      FOREIGN KEY (entry_id) REFERENCES task_entries(id)
-    )
-  `)
-
-  db.exec(`
     CREATE TABLE IF NOT EXISTS llm_call_logs (
       id TEXT PRIMARY KEY,
       feature TEXT NOT NULL,
@@ -296,10 +280,19 @@ export function initDb() {
 }
 
 function cleanupOrphans(): void {
-  getDb().exec(`
-    DELETE FROM plan_item_details
-    WHERE entry_id NOT IN (SELECT id FROM task_entries);
+  const hasLegacyPlanItemDetails = Boolean(
+    getDb()
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'plan_item_details'")
+      .get()
+  )
+  if (hasLegacyPlanItemDetails) {
+    getDb().prepare(`
+      DELETE FROM plan_item_details
+      WHERE entry_id NOT IN (SELECT id FROM task_entries)
+    `).run()
+  }
 
+  getDb().exec(`
     DELETE FROM task_log_drafts
     WHERE task_id NOT IN (SELECT id FROM tasks);
 

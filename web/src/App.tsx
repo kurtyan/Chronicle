@@ -3,7 +3,6 @@ import { BoardPage } from './pages/BoardPage'
 import { ReportPage } from './pages/ReportPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TodayPage } from './pages/TodayPage'
-import { PlanTheDay } from './pages/PlanTheDay'
 import { AlertCircle, BarChart3, Calendar, CheckCircle2, ClipboardList, ListTodo, Loader2, Settings, X } from 'lucide-react'
 import { useI18n } from './i18n/context'
 import { useEffect, useState, useRef, useCallback } from 'react'
@@ -699,7 +698,7 @@ function Layout() {
       },
     }))
 
-    // Cmd+R: Refresh tasks + plan items (prevent page reload on all pages)
+    // Cmd+R: Refresh tasks (prevent page reload on all pages)
     unregisters.push(registerShortcut({
       id: 'refresh',
       combo: 'mod+r',
@@ -709,11 +708,6 @@ function Layout() {
         const s = useTaskStore.getState()
         s.loadTodos()
         s.loadCurrentSession()
-        // Refresh plan items if available
-        try {
-          const { loadPlanItems, getTodayDate } = await import('@/stores/planStore')
-          loadPlanItems(getTodayDate())
-        } catch { /* planStore may not be loaded */ }
       },
     }))
 
@@ -818,7 +812,6 @@ function Layout() {
         <Routes>
           <Route path="/" element={<BoardPage />} />
           <Route path="/today" element={<TodayPage />} />
-          <Route path="/today/plan" element={<PlanTheDay />} />
           <Route path="/report" element={<ReportPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>

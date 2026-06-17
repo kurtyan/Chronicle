@@ -100,7 +100,7 @@ function getLastActivityAt(taskId: string, fallbackUpdatedAt: number): number | 
 
 function fallbackSummary(taskId: string): { latestProgress: string; nextStep: string; recommendedNextStep: string } {
   const entries = getTaskEntries(taskId)
-  const latestLog = [...entries].reverse().find((entry) => entry.type === 'log' || entry.type === 'plan')
+  const latestLog = [...entries].reverse().find((entry) => entry.type === 'log')
   const explicitNextStep = extractExplicitNextStep(entries.map((entry) => stripHtmlWithoutCodeBlocks(entry.content)).reverse())
   return {
     latestProgress: latestLog ? normalizeSummaryValue(stripHtmlWithoutCodeBlocks(latestLog.content)) : 'No recent progress recorded.',

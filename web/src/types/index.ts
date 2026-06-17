@@ -41,13 +41,8 @@ export interface TaskEntry {
   id: string
   taskId: string
   content: string
-  type: 'body' | 'log' | 'plan'
+  type: 'body' | 'log'
   createdAt: number
-  planStatus?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
-  planDetailId?: string
-  planEstimatedMinutes?: number
-  planEstimatedStart?: string
-  planEstimatedEnd?: string
 }
 
 export interface TaskLogDraft {
@@ -69,7 +64,7 @@ export interface SearchResult {
   taskType: TaskType
   taskStatus: TaskStatus
   taskTags: string[]
-  matchType: 'task' | 'entry_body' | 'entry_log' | 'entry_plan'
+  matchType: 'task' | 'entry_body' | 'entry_log'
   matchedContent: string
   originalTitle: string
   matchedOriginal: string
@@ -102,47 +97,6 @@ export interface AfkEvent {
   reason: string
   userNote: string | null
   submittedAt: number | null
-}
-
-export interface PlanItemDetail {
-  id: string
-  entryId: string
-  planDate: string
-  estimatedMinutes: number
-  estimatedStart: string | null
-  estimatedEnd: string | null
-  actualStartedAt: number | null
-  actualCompletedAt: number | null
-  status: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
-  sortOrder: number
-}
-
-export interface PlanItem extends TaskEntry {
-  detailId: string
-  taskTitle: string
-  estimatedMinutes: number
-  estimatedStart: string | null
-  estimatedEnd: string | null
-  actualStartedAt: number | null
-  actualCompletedAt: number | null
-  planStatus: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED' | 'UNFINISHED'
-  planDate: string
-  sortOrder: number
-}
-
-export interface BatchCreatePlanItem {
-  taskId: string
-  content: string
-  estimatedMinutes: number
-  estimatedStart: string
-  estimatedEnd: string
-  sortOrder: number
-  detailId?: string
-}
-
-export interface BatchCreatePlanItemsRequest {
-  planDate: string
-  items: BatchCreatePlanItem[]
 }
 
 export interface LlmSettings {

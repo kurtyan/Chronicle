@@ -4,7 +4,6 @@ import { useI18n } from '@/i18n/context'
 import type { TaskEntry, WorkSession, Task, TaskProgressContext } from '@/types'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { deleteTaskLogDraft, fetchTaskLogDraft, getTaskExtraInfoValue, saveTaskLogDraft } from '@/services/api'
-import { updatePlanItem, takeOverTask } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
 import { Copy, AlertTriangle } from 'lucide-react'
@@ -124,18 +123,6 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
       autoTakeOver(activeTaskId)
     }
   }, [activeTaskId, autoTakeOver])
-
-  const handlePlanAction = async (detailId: string, status: 'DOING' | 'DONE' | 'SKIPPED' | 'PLANNED') => {
-    try {
-      if (status === 'DOING' && selectedTask) await takeOverTask(selectedTask.id)
-      await updatePlanItem(detailId, {
-        status,
-        actualStartedAt: status === 'DOING' ? Date.now() : undefined,
-        actualCompletedAt: status === 'DONE' ? Date.now() : undefined,
-      })
-      if (selectedTask) await setActiveTask(selectedTask.id)
-    } catch { /* ignore */ }
-  }
 
   const handleTitleEdit = () => {
     if (!selectedTask) return
@@ -517,25 +504,12 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
                   highlightTokens={searchMode ? searchTokens : undefined}
                   highlightPlan={entry.id === highlightEntryId}
                   taskId={selectedTask.id}
-                  planStatus={entry.planStatus}
-                  planDetailId={entry.planDetailId}
-                  onPlanStart={(detailId) => handlePlanAction(detailId, 'DOING')}
-                  onPlanComplete={(detailId) => handlePlanAction(detailId, 'DONE')}
-                  onPlanSkip={(detailId) => handlePlanAction(detailId, 'SKIPPED')}
-                  onPlanRevert={(detailId) => handlePlanAction(detailId, 'PLANNED')}
-                  onDeletePlan={async () => {
-                    await deleteEntry(selectedTask.id, entry.id)
-                  }}
                   onFirstMeaningfulEdit={handleFirstMeaningfulEdit}
                   onEditingChange={(editing) => {
                     if (editing) {
                       setEditingEntryId(entry.id)
                       if (activeTaskId && activeTaskId !== DRAFT_ID) {
                         localStorage.setItem(`chronicle:editing_entry_id:${activeTaskId}`, entry.id)
-                      }
-                      // Auto-start plan entry when editing starts
-                      if (entry.type === 'plan' && entry.planDetailId && entry.planStatus === 'PLANNED') {
-                        handlePlanAction(entry.planDetailId, 'DOING')
                       }
                     } else {
                       setEditingEntryId(null)

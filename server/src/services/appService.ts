@@ -8,11 +8,6 @@ import {
   type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent,
 } from './taskService'
 import {
-  batchCreatePlanItems, getPlanItems, updatePlanItem, hasPlanForDate,
-  deletePlanItem, clearPlanForDate, getUnfinishedPlans, reparentPlanItem, reparentPlanItems,
-  type BatchCreatePlanItem, type PlanItem, type PlanItemDetail,
-} from './planService'
-import {
   getDayScript, saveDayScript, submitDayScriptProgress, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
   type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
 } from './dayScriptService'
@@ -338,49 +333,6 @@ export class AppService {
 
   async getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]> {
     return getAfkEvents(start, end)
-  }
-
-  // --- Plan Items ---
-
-  async hasPlanForDate(planDate: string): Promise<boolean> {
-    return hasPlanForDate(planDate)
-  }
-
-  async batchCreatePlanItems(planDate: string, items: BatchCreatePlanItem[]): Promise<PlanItem[]> {
-    return batchCreatePlanItems(planDate, items)
-  }
-
-  async getPlanItems(planDate: string): Promise<PlanItem[]> {
-    return getPlanItems(planDate)
-  }
-
-  async updatePlanItem(detailId: string, data: {
-    status?: 'PLANNED' | 'DOING' | 'DONE' | 'SKIPPED'
-    content?: string
-    actualStartedAt?: number | null
-    actualCompletedAt?: number | null
-  }): Promise<PlanItemDetail | null> {
-    return updatePlanItem(detailId, data)
-  }
-
-  async deletePlanItem(detailId: string): Promise<boolean> {
-    return deletePlanItem(detailId)
-  }
-
-  async clearPlanForDate(planDate: string): Promise<number> {
-    return clearPlanForDate(planDate)
-  }
-
-  async fetchUnfinishedPlans(beforeDate: string): Promise<PlanItem[]> {
-    return getUnfinishedPlans(beforeDate)
-  }
-
-  async reparentPlanItem(detailId: string, newPlanDate: string): Promise<boolean> {
-    return reparentPlanItem(detailId, newPlanDate)
-  }
-
-  async reparentPlanItems(detailIds: string[], newPlanDate: string): Promise<void> {
-    return reparentPlanItems(detailIds, newPlanDate)
   }
 
   // --- Day Script ---

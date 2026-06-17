@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -144,32 +144,6 @@ export async function fetchReportTasks(params: { start: number; end: number; fil
   return (await getApi()).fetchReportTasks(params)
 }
 
-// Plan Items
-export async function hasPlanForDate(date: string): Promise<boolean> {
-  return (await getApi()).hasPlanForDate(date)
-}
-export async function batchCreatePlanItems(req: BatchCreatePlanItemsRequest): Promise<PlanItem[]> {
-  return (await getApi()).batchCreatePlanItems(req)
-}
-export async function fetchPlanItems(date: string): Promise<PlanItem[]> {
-  return (await getApi()).fetchPlanItems(date)
-}
-export async function updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null; estimatedMinutes?: number; estimatedStart?: string; estimatedEnd?: string; sortOrder?: number }): Promise<PlanItemDetail> {
-  return (await getApi()).updatePlanItem(detailId, data)
-}
-export async function deletePlanItem(detailId: string): Promise<void> {
-  return (await getApi()).deletePlanItem(detailId)
-}
-export async function clearPlanForDate(date: string): Promise<number> {
-  return (await getApi()).clearPlanForDate(date)
-}
-export async function fetchUnfinishedPlans(beforeDate?: string): Promise<PlanItem[]> {
-  const qs = beforeDate ? `?before=${encodeURIComponent(beforeDate)}` : ''
-  return (await getApi()).fetchUnfinishedPlans(qs)
-}
-export async function reparentPlanItems(detailIds: string[], newPlanDate: string): Promise<void> {
-  return (await getApi()).reparentPlanItems({ detailIds, newPlanDate })
-}
 export async function getDayScript(date: string): Promise<DayScriptDocument> {
   return (await getApi()).getDayScript(date)
 }

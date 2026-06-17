@@ -27,7 +27,7 @@ function entryRowToTaskEntry(row: any): TaskEntry {
     id: row.id,
     taskId: row.task_id,
     content: row.content,
-    type: row.type as 'body' | 'log' | 'plan',
+    type: row.type === 'body' ? 'body' : 'log',
     createdAt: row.created_at,
   }
 }
@@ -708,36 +708,11 @@ export class EmbeddedApiProvider implements ApiInterface {
     return { items: [], total: 0, hasMore: false }
   }
 
-  // --- Plan Items (stub: not supported in embedded mode) ---
-  async hasPlanForDate(_date: string): Promise<boolean> {
-    return false
-  }
-  async batchCreatePlanItems(_req: import('@/types').BatchCreatePlanItemsRequest): Promise<import('@/types').PlanItem[]> {
-    return []
-  }
-  async fetchPlanItems(_date: string): Promise<import('@/types').PlanItem[]> {
-    return []
-  }
-  async updatePlanItem(_detailId: string, _data: any): Promise<import('@/types').PlanItemDetail> {
-    throw new Error('Not supported in embedded mode')
-  }
-  async deletePlanItem(_detailId: string): Promise<void> {
-    throw new Error('Not supported in embedded mode')
-  }
-  async clearPlanForDate(_date: string): Promise<number> {
-    return 0
-  }
   async fetchStartOfDayOffset(): Promise<number> {
     return 5
   }
   async setStartOfDayOffset(_offset: number): Promise<number> {
     return _offset
-  }
-  async fetchUnfinishedPlans(): Promise<import('@/types').PlanItem[]> {
-    return []
-  }
-  async reparentPlanItems(_body: { detailIds: string[], newPlanDate: string }): Promise<void> {
-    // no-op in embedded mode
   }
   async getDayScript(date: string): Promise<DayScriptDocument> {
     return {

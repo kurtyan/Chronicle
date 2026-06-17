@@ -101,6 +101,7 @@ test.describe('Auto takeover on actual edit', () => {
     await expect(page.locator('[data-rich-editor="true"] .ProseMirror')).toBeEmpty()
     await page.getByRole('button', { name: 'AFK' }).click()
     await expectIdle(page)
+    await expect(page.getByRole('button', { name: 'AFK' })).toHaveCount(0)
 
     await page.locator('[data-rich-editor="true"] .ProseMirror').fill('Second new entry')
     await expect.poll(() => takeoverCount).toBe(2)

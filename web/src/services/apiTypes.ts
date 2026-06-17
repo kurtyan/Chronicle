@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, PlanItem, PlanItemDetail, BatchCreatePlanItemsRequest, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -60,15 +60,6 @@ export interface ApiInterface {
     total: number
     hasMore: boolean
   }>
-  // Plan Items
-  hasPlanForDate(date: string): Promise<boolean>
-  batchCreatePlanItems(req: BatchCreatePlanItemsRequest): Promise<PlanItem[]>
-  fetchPlanItems(date: string): Promise<PlanItem[]>
-  updatePlanItem(detailId: string, data: { status?: string; content?: string; actualStartedAt?: number | null; actualCompletedAt?: number | null; estimatedMinutes?: number; estimatedStart?: string; estimatedEnd?: string; sortOrder?: number }): Promise<PlanItemDetail>
-  deletePlanItem(detailId: string): Promise<void>
-  clearPlanForDate(date: string): Promise<number>
-  fetchUnfinishedPlans(qs: string): Promise<PlanItem[]>
-  reparentPlanItems(body: { detailIds: string[], newPlanDate: string }): Promise<void>
   getDayScript(date: string): Promise<DayScriptDocument>
   saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult>
   submitDayScriptProgress(date: string, body?: { focusActivity?: DayScriptFocusActivity[] }): Promise<SubmitDayScriptProgressResult>

@@ -986,7 +986,7 @@ export function BoardPage() {
                           <span className="text-xs px-1 py-0.5 rounded bg-primary/10 text-primary font-medium">精确匹配</span>
                         )}
                         <span className="text-xs px-1 py-0.5 rounded bg-muted text-muted-foreground">
-                          {r.matchType === 'task' ? t('search.matchTitle') : r.matchType === 'entry_body' ? t('search.matchBody') : r.matchType === 'entry_plan' ? t('search.matchPlan') : t('search.matchLog')}
+                          {r.matchType === 'task' ? t('search.matchTitle') : r.matchType === 'entry_body' ? t('search.matchBody') : t('search.matchLog')}
                         </span>
                         <span className="text-xs text-muted-foreground">
                           {t(`type.${r.taskType.toLowerCase()}`)}

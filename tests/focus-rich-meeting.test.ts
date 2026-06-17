@@ -204,7 +204,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
   })
 
   test('focus editor persisted code blocks are not compressed by editor layout', async ({ page }) => {
-    const date = uniqueScriptDate(Date.now() % 20 + 52)
+    const date = uniqueScriptDate(1200 + Math.floor(Math.random() * 1000))
     const codeLines = Array.from({ length: 12 }, (_, index) => `${index + 1}`).join('\n')
 
     await saveDayScript(page, date, {
@@ -222,7 +222,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const editor = page.locator('.day-script-editor.ProseMirror')
     const code = editor.locator('pre code').first()
     await expect(code).toContainText('12')
-    const metrics = await code.evaluate((element) => {
+    const readMetrics = () => code.evaluate((element) => {
       const editorRoot = element.ownerDocument.querySelector('.day-script-editor.ProseMirror')!
       const pre = element.closest('pre')!
       const preStyle = window.getComputedStyle(pre)
@@ -239,6 +239,8 @@ test.describe('Focus rich editor and meeting task mentions', () => {
         visibleCodeLines: (pre.getBoundingClientRect().height - verticalPadding) / lineHeight,
       }
     })
+    await expect.poll(async () => (await readMetrics()).visibleCodeLines).toBeGreaterThanOrEqual(9)
+    const metrics = await readMetrics()
     expect(metrics.editorDisplay).toBe('block')
     expect(metrics.visibleCodeLines).toBeGreaterThanOrEqual(9)
     expect(metrics.visibleCodeLines).toBeLessThanOrEqual(10.6)
@@ -389,21 +391,6 @@ test.describe('Focus rich editor and meeting task mentions', () => {
       })
       expect(summaryRes.ok()).toBeTruthy()
 
-      const legacyPlanRes = await page.request.post('/api/plan-items/batch', {
-        data: {
-          planDate: date,
-          items: [{
-            taskId: explicitTask.id,
-            content: 'legacy wizard planned item should stay out',
-            estimatedMinutes: 25,
-            estimatedStart: '10:00',
-            estimatedEnd: '10:25',
-            sortOrder: 0,
-          }],
-        },
-      })
-      expect(legacyPlanRes.ok()).toBeTruthy()
-
       await saveDayScript(page, yesterday, {
         type: 'doc',
         content: [{
@@ -441,7 +428,6 @@ test.describe('Focus rich editor and meeting task mentions', () => {
       await expect(board).toContainText('ship release checklist')
       await expect(board).toContainText('inspect mobile layout')
       await expect(board).toContainText('yesterday carry work')
-      await expect(board).not.toContainText('legacy wizard planned item should stay out')
 
       await board.getByRole('button', { name: 'Maximize overall next steps' }).click()
       const maximized = page.getByTestId('overall-next-steps-maximized')
@@ -672,30 +658,25 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const taskB = await createTask(page, `CursorHeaderB-${Date.now()}`)
     const date = uniqueScriptDate(Date.now() % 20 + 80)
 
-    await page.request.put(`/api/day-scripts/${date}`, {
-      data: {
-        expectedRevision: 0,
-        document: {
-          type: 'doc',
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
           content: [
-            {
-              type: 'paragraph',
-              content: [
-                { type: 'text', text: '10:00-10:30 ' },
-                { type: 'text', text: `@${taskA.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskA.id)}`, taskId: taskA.id } }] },
-              ],
-            },
-            { type: 'paragraph', content: [{ type: 'text', text: 'A progress' }] },
-            {
-              type: 'paragraph',
-              content: [
-                { type: 'text', text: '11:00-11:30 ' },
-                { type: 'text', text: `@${taskB.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskB.id)}`, taskId: taskB.id } }] },
-              ],
-            },
+            { type: 'text', text: '10:00-10:30 ' },
+            { type: 'text', text: `@${taskA.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskA.id)}`, taskId: taskA.id } }] },
           ],
         },
-      },
+        { type: 'paragraph', content: [{ type: 'text', text: 'A progress' }] },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '11:00-11:30 ' },
+            { type: 'text', text: `@${taskB.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskB.id)}`, taskId: taskB.id } }] },
+          ],
+        },
+      ],
     })
 
     await page.goto(`/today?date=${date}&lang=en`)

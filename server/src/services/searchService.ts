@@ -3,15 +3,15 @@ import { tokenize } from './tokenizer'
 
 // --- Index write operations ---
 
-type EntryType = 'body' | 'log' | 'plan'
-type EntrySource = 'entry_body' | 'entry_log' | 'entry_plan'
+type EntryType = 'body' | 'log'
+type EntrySource = 'entry_body' | 'entry_log'
 
 function sourceForEntryType(type: string): EntrySource {
-  return type === 'body' ? 'entry_body' : type === 'plan' ? 'entry_plan' : 'entry_log'
+  return type === 'body' ? 'entry_body' : 'entry_log'
 }
 
 function entryTypeForSource(source: string): EntryType {
-  return source === 'entry_body' ? 'body' : source === 'entry_plan' ? 'plan' : 'log'
+  return source === 'entry_body' ? 'body' : 'log'
 }
 
 export function indexTask(taskId: string, title: string): void {

@@ -177,30 +177,6 @@ test.describe('Plan Today draft', () => {
     await expect.poll(() => errors.join('\n')).toBe('')
   })
 
-  test('saving the Plan Today wizard returns to Today without refresh loops', async ({ page }) => {
-    const errors: string[] = []
-    page.on('pageerror', (error) => errors.push(error.message))
-    page.on('console', (message) => {
-      if (message.type() === 'error') errors.push(message.text())
-    })
-
-    const task = await createTask(page, `WizardPlan-${Date.now()}`)
-    await page.goto('/today/plan?lang=en')
-    await page.waitForLoadState('load')
-
-    await page.getByRole('button', { name: new RegExp(task.title) }).first().click()
-    await page.getByPlaceholder(/Sub-task title/).fill('stabilize plan apply')
-    await page.getByRole('button', { name: /Next Step/ }).click()
-    await expect(page.getByRole('heading', { name: /Schedule Plan/ })).toBeVisible()
-    await page.getByRole('button', { name: /Save Plan/ }).click()
-
-    await expect(page).toHaveURL(/\/today(?:\?|$)/)
-    await expect(page.locator('.day-script-editor.ProseMirror').first()).toBeVisible()
-    await expect(page.getByText('No active focus block')).toBeVisible()
-    await page.waitForTimeout(500)
-    await expect.poll(() => errors.filter((message) => !message.includes('NO_COLOR')).join('\n')).toBe('')
-  })
-
   test('includes task next steps and yesterday unfinished focus blocks', async ({ page }) => {
     const baseDay = uniqueDayOffset()
     const today = uniqueScriptDate(baseDay + 1)
@@ -370,24 +346,19 @@ test.describe('Plan Today draft', () => {
 
       const today = workdayDate(5)
       const task = await createTask(page, `DailySummaryFacts-${Date.now()}`)
-      await page.request.put(`/api/day-scripts/${today}`, {
-        data: {
-          expectedRevision: 0,
-          document: {
-            type: 'doc',
-            content: [
-              {
-                type: 'paragraph',
-                content: [{
-                  type: 'text',
-                  text: `10:00-10:30 @${task.title} ✅`,
-                  marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
-                }],
-              },
-              { type: 'paragraph', content: [{ type: 'text', text: 'focus-only progress should stay in focus blocks' }] },
-            ],
+      await saveDayScript(page, today, {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{
+              type: 'text',
+              text: `10:00-10:30 @${task.title} ✅`,
+              marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
+            }],
           },
-        },
+          { type: 'paragraph', content: [{ type: 'text', text: 'focus-only progress should stay in focus blocks' }] },
+        ],
       })
       await page.request.post(`/api/tasks/${task.id}/logs`, {
         data: { content: '<p>manual today note outside focus</p>', type: 'log' },
@@ -427,8 +398,8 @@ test.describe('Plan Today draft', () => {
       const tomorrowInput = mock.calls
         .flatMap((call) => call.messages ?? [])
         .filter((message: any) => message.role === 'user' && String(message.content).includes('Related Task Details:'))
-        .at(-1)?.content ?? ''
-      const tomorrowDetails = JSON.parse(tomorrowInput.slice(tomorrowInput.indexOf('[\n')))
+      const latestTomorrowInput = tomorrowInput[tomorrowInput.length - 1]?.content ?? ''
+      const tomorrowDetails = JSON.parse(latestTomorrowInput.slice(latestTomorrowInput.indexOf('[\n')))
       const detail = tomorrowDetails.find((item: any) => item.id === historicalTask.id)
       expect(detail.todayLogs).toEqual([])
       expect(detail.recentContextBeforeToday.map((entry: any) => entry.content).join('\n')).toContain('historical setup before this workday')
