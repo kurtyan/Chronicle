@@ -41,7 +41,8 @@ async function saveDayScript(page: Page, date: string, document: Record<string, 
   return saveRes.json()
 }
 
-async function startMockLlm(response: string) {
+async function startMockLlm(response: string | string[]) {
+  const responses = Array.isArray(response) ? response : [response]
   const calls: any[] = []
   const server = http.createServer((req, res) => {
     let body = ''
@@ -50,11 +51,12 @@ async function startMockLlm(response: string) {
     })
     req.on('end', () => {
       calls.push(body ? JSON.parse(body) : {})
+      const content = responses[Math.min(calls.length - 1, responses.length - 1)] ?? responses[responses.length - 1] ?? ''
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
         id: `mock-${calls.length}`,
         object: 'chat.completion',
-        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: response } }],
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
       }))
     })
   })
@@ -200,8 +202,10 @@ test.describe('Focus rich editor and meeting task mentions', () => {
       const pre = element.closest('pre')!
       const preStyle = window.getComputedStyle(pre)
       const codeStyle = window.getComputedStyle(element)
-      const verticalPadding = Number.parseFloat(preStyle.paddingTop) + Number.parseFloat(preStyle.paddingBottom)
-      const lineHeight = Number.parseFloat(codeStyle.lineHeight) || Number.parseFloat(codeStyle.fontSize) * 1.5
+      const verticalPadding = (Number.parseFloat(preStyle.paddingTop) || 0) + (Number.parseFloat(preStyle.paddingBottom) || 0)
+      const rawLineHeight = Number.parseFloat(codeStyle.lineHeight)
+      const fontSize = Number.parseFloat(codeStyle.fontSize) || 16
+      const lineHeight = Number.isFinite(rawLineHeight) ? rawLineHeight : fontSize * 1.5
       return {
         editorDisplay: window.getComputedStyle(editorRoot).display,
         height: pre.getBoundingClientRect().height,
@@ -244,10 +248,175 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await page.getByRole('button', { name: 'Complete' }).click()
 
     await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
-    await expect(page.getByText('DONE')).toBeVisible()
+    await expect(page.getByTestId('workspace-info-bar').getByText('Done')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Redo' })).toBeVisible()
     await expect(page.locator('.day-script-editor.ProseMirror')).toContainText(task.title)
     await expect(page).toHaveURL(new RegExp(`task=${task.id}`))
+  })
+
+  test('clicking a focus task mention replaces an existing selected task without route thrash', async ({ page }) => {
+    const firstTask = await createTask(page, `RouteFirst-${Date.now()}`)
+    const secondTask = await createTask(page, `RouteSecond-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 54)
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '09:00-09:20 ' },
+            { type: 'text', text: `@${firstTask.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(firstTask.id)}`, taskId: firstTask.id } }] },
+            { type: 'text', text: ' first task' },
+          ],
+        },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '10:00-10:20 ' },
+            { type: 'text', text: `@${secondTask.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(secondTask.id)}`, taskId: secondTask.id } }] },
+            { type: 'text', text: ' second task' },
+          ],
+        },
+      ],
+    })
+
+    await page.goto(`/today?date=${date}&task=${encodeURIComponent(firstTask.id)}&lang=en`)
+    await page.waitForLoadState('load')
+    await expect(page.getByRole('heading', { name: firstTask.title })).toBeVisible()
+
+    const secondMention = page.locator('.day-script-editor.ProseMirror a[data-task-id="' + secondTask.id + '"]').first()
+    await secondMention.click()
+
+    await expect(page.getByRole('heading', { name: secondTask.title })).toBeVisible()
+    await expect(page.getByRole('heading', { name: firstTask.title })).toHaveCount(0)
+    await expect(page).toHaveURL(new RegExp(`task=${secondTask.id}`))
+
+    await page.waitForTimeout(700)
+    await expect(page.getByRole('heading', { name: secondTask.title })).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`task=${secondTask.id}`))
+  })
+
+  test('overall next steps board combines task summaries and focus carry-over', async ({ page }) => {
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const mock = await startMockLlm([
+      JSON.stringify({
+        latestProgress: 'Recommended task has context.',
+        nextStep: '',
+        recommendedNextStep: 'inspect mobile layout',
+      }),
+    ])
+    const base = Date.now() % 20 + 70
+    const date = uniqueScriptDate(base)
+    const yesterday = uniqueScriptDate(base - 1)
+    const explicitTask = await createTask(page, `OverallExplicit-${Date.now()}`)
+    const recommendedTask = await createTask(page, `OverallRecommended-${Date.now()}`)
+    const focusTask = await createTask(page, `OverallFocus-${Date.now()}`)
+    const carryTask = await createTask(page, `OverallCarry-${Date.now()}`)
+
+    try {
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: '', model: '' },
+      })
+      await page.request.post(`/api/tasks/${explicitTask.id}/logs`, {
+        data: { content: '<p>下一步：ship release checklist</p>', type: 'log' },
+      })
+      const explicitSummaryRes = await page.request.post('/api/task-context/summarize', {
+        data: { taskIds: [explicitTask.id] },
+      })
+      expect(explicitSummaryRes.ok()).toBeTruthy()
+
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: mock.baseUrl, model: 'mock-model' },
+      })
+      await page.request.post(`/api/tasks/${recommendedTask.id}/logs`, {
+        data: { content: '<p>Needs a recommendation.</p>', type: 'log' },
+      })
+      const summaryRes = await page.request.post('/api/task-context/summarize', {
+        data: { taskIds: [recommendedTask.id] },
+      })
+      expect(summaryRes.ok()).toBeTruthy()
+
+      const legacyPlanRes = await page.request.post('/api/plan-items/batch', {
+        data: {
+          planDate: date,
+          items: [{
+            taskId: explicitTask.id,
+            content: 'legacy wizard planned item should stay out',
+            estimatedMinutes: 25,
+            estimatedStart: '10:00',
+            estimatedEnd: '10:25',
+            sortOrder: 0,
+          }],
+        },
+      })
+      expect(legacyPlanRes.ok()).toBeTruthy()
+
+      await saveDayScript(page, yesterday, {
+        type: 'doc',
+        content: [{
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '09:00-09:30 ' },
+            { type: 'text', text: `@${carryTask.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(carryTask.id)}`, taskId: carryTask.id } }] },
+            { type: 'text', text: ' yesterday carry work' },
+          ],
+        }],
+      })
+      await saveDayScript(page, date, {
+        type: 'doc',
+        content: [{
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '10:00-10:20 ' },
+            { type: 'text', text: `@${focusTask.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(focusTask.id)}`, taskId: focusTask.id } }] },
+            { type: 'text', text: ' current focus action' },
+          ],
+        }],
+      })
+
+      await page.goto(`/today?date=${date}&lang=en`)
+      await page.waitForLoadState('load')
+
+      const board = page.getByTestId('overall-next-steps-board')
+      await expect(board).toBeVisible()
+      await expect(board).toContainText('Overall next steps')
+      await expect(board).toContainText('Focus Plan')
+      await expect(board).toContainText('Explicit Next')
+      await expect(board).toContainText('Recommended')
+      await expect(board).toContainText('Carry-over')
+      await expect(board).toContainText('current focus action')
+      await expect(board).toContainText('ship release checklist')
+      await expect(board).toContainText('inspect mobile layout')
+      await expect(board).toContainText('yesterday carry work')
+      await expect(board).not.toContainText('legacy wizard planned item should stay out')
+
+      await board.getByRole('button', { name: 'Maximize overall next steps' }).click()
+      const maximized = page.getByTestId('overall-next-steps-maximized')
+      await expect(maximized).toBeVisible()
+      await expect(maximized).toContainText('inspect mobile layout')
+      await maximized.getByRole('button', { name: 'Close maximized overall next steps' }).click()
+      await expect(maximized).toHaveCount(0)
+
+      await board.getByRole('button', { name: 'Maximize overall next steps' }).click()
+      await expect(page.getByTestId('overall-next-steps-maximized')).toBeVisible()
+      await page.keyboard.press('Escape')
+      await expect(page.getByTestId('overall-next-steps-maximized')).toHaveCount(0)
+
+      const explicitAction = page.locator('[data-next-step-action-id="explicit:' + explicitTask.id + '"]')
+      await explicitAction.getByRole('button', { name: 'Plan' }).click()
+      await expect(page.locator('.day-script-editor.ProseMirror')).toContainText('ship release checklist')
+      await expect(explicitAction).toContainText('In Focus')
+
+      const recommendedAction = page.locator('[data-next-step-action-id="recommended:' + recommendedTask.id + '"]')
+      await recommendedAction.click()
+      await expect(page.getByRole('heading', { name: recommendedTask.title })).toBeVisible()
+      await expect(page).toHaveURL(new RegExp(`task=${recommendedTask.id}`))
+      await expect(recommendedAction.getByRole('button', { name: 'Start Work' })).toHaveCount(0)
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+      await mock.close()
+    }
   })
 
   test('focus editor creates a new line after pasting a link with one Enter', async ({ page, context }) => {

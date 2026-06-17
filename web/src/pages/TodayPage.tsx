@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Sparkles } from 'lucide-react'
+import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
@@ -14,6 +14,23 @@ import { MarkdownView } from '@/components/MarkdownView'
 const TODAY_LEFT_PANE_PERCENT_KEY = 'chronicle_today_left_pane_percent'
 const TODAY_LEFT_PANE_MIN_PERCENT = 12
 const TODAY_LEFT_PANE_MAX_PERCENT = 88
+const OVERALL_NEXT_STEPS_COLLAPSED_KEY = 'chronicle_overall_next_steps_collapsed'
+
+type NextStepSourceType = 'now' | 'focus' | 'explicit' | 'recommended' | 'carry_over'
+
+type NextStepAction = {
+  id: string
+  taskId: string | null
+  taskTitle: string
+  taskStatus: string
+  sourceType: NextStepSourceType
+  text: string
+  state: 'updating' | 'stale' | 'failed' | 'current' | 'pending'
+  lastActivityAt: number | null
+  timeLabel?: string
+  inFocus: boolean
+  canPlan: boolean
+}
 
 function dateOffset(date: string, offset: number): string {
   const [year, month, day] = date.split('-').map(Number)
@@ -108,6 +125,21 @@ function getBlockTitle(block: DayScriptBlock, tasksById: Map<string, Task>): str
   return block.headerText || `${block.startTime}-${block.endTime}`
 }
 
+function getBlockActionText(block: DayScriptBlock): string {
+  const header = block.headerText.trim()
+  const progress = block.progressText.trim()
+  if (header && progress) return `${header}: ${progress}`
+  return header || progress || `${block.startTime}-${block.endTime}`
+}
+
+function getActionState(context: TaskProgressContext, updatingIds: Set<string>): NextStepAction['state'] {
+  if (updatingIds.has(context.taskId)) return 'updating'
+  if (context.summary.errorMessage) return 'failed'
+  if (context.summary.stale) return 'stale'
+  if (context.summary.summaryUpdatedAt) return 'current'
+  return 'pending'
+}
+
 function getMinutesUntil(endTime: string, now: Date): number {
   const [endHour, endMinute] = endTime.split(':').map(Number)
   return endHour * 60 + endMinute - (now.getHours() * 60 + now.getMinutes())
@@ -141,54 +173,152 @@ function FocusStatusBar({ blocks, tasks, scriptDate, todayScriptDate }: { blocks
   )
 }
 
-function NextStepsPanel({
-  contexts,
-  updatingIds,
-  insertedIds,
-  onInsert,
+function OverallNextStepsBoard({
+  actions,
+  onPlan,
+  onOpen,
+  maximized = false,
+  onMaximize,
+  onCloseMaximized,
 }: {
-  contexts: TaskProgressContext[]
-  updatingIds: Set<string>
-  insertedIds: Set<string>
-  onInsert: (context: TaskProgressContext) => void
+  actions: NextStepAction[]
+  onPlan: (action: NextStepAction) => void
+  onOpen: (action: NextStepAction) => void
+  maximized?: boolean
+  onMaximize?: () => void
+  onCloseMaximized?: () => void
 }) {
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('chronicle_next_steps_panel_collapsed') === '1')
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(OVERALL_NEXT_STEPS_COLLAPSED_KEY) === '1')
 
   const toggle = () => {
     const next = !collapsed
     setCollapsed(next)
-    localStorage.setItem('chronicle_next_steps_panel_collapsed', next ? '1' : '0')
+    localStorage.setItem(OVERALL_NEXT_STEPS_COLLAPSED_KEY, next ? '1' : '0')
   }
 
-  if (contexts.length === 0) return null
+  if (actions.length === 0) return null
+
+  const sectionDefs: Array<{ key: NextStepSourceType; label: string }> = [
+    { key: 'now', label: 'Now' },
+    { key: 'focus', label: 'Focus Plan' },
+    { key: 'explicit', label: 'Explicit Next' },
+    { key: 'recommended', label: 'Recommended' },
+    { key: 'carry_over', label: 'Carry-over' },
+  ]
+  const stateLabel: Record<NextStepAction['state'], string> = {
+    updating: 'Updating',
+    stale: 'Stale',
+    failed: 'Failed',
+    current: 'Current',
+    pending: 'Pending',
+  }
+  const stateClass: Record<NextStepAction['state'], string> = {
+    updating: 'bg-blue-500/10 text-blue-600',
+    stale: 'bg-amber-500/10 text-amber-600',
+    failed: 'bg-red-500/10 text-red-600',
+    current: 'bg-green-500/10 text-green-600',
+    pending: 'bg-muted text-muted-foreground',
+  }
 
   return (
-    <div className="shrink-0 rounded-lg border border-border bg-card/95 p-3 shadow-sm">
-      <button className="flex w-full items-center justify-between gap-3 text-left" onClick={toggle}>
-        <span className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">Next steps</span>
-        <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{contexts.length}</span>
-      </button>
-      {!collapsed && (
-        <div className="mt-2 max-h-56 space-y-2 overflow-y-auto pr-1">
-          {contexts.map((context) => {
-            const inserted = insertedIds.has(context.taskId)
+    <div
+      data-testid="overall-next-steps-board"
+      className={maximized
+        ? 'flex h-full min-h-0 flex-col rounded-xl border border-border bg-card p-5 shadow-2xl'
+        : 'shrink-0 rounded-lg border border-border bg-card/95 p-3 shadow-sm'
+      }
+    >
+      <div className="flex items-center justify-between gap-3">
+        <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={maximized ? undefined : toggle}>
+          <span className={maximized ? 'text-base font-semibold text-foreground' : 'text-xs font-semibold uppercase tracking-normal text-muted-foreground'}>
+            Overall next steps
+          </span>
+          <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{actions.length}</span>
+        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {!maximized && onMaximize && (
+            <button
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={onMaximize}
+              title="Maximize overall next steps"
+              aria-label="Maximize overall next steps"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {maximized && onCloseMaximized && (
+            <button
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+              onClick={onCloseMaximized}
+              title="Close maximized overall next steps"
+              aria-label="Close maximized overall next steps"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </div>
+      {(maximized || !collapsed) && (
+        <div className={maximized ? 'mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1' : 'mt-2 max-h-64 space-y-3 overflow-y-auto pr-1'}>
+          {sectionDefs.map((section) => {
+            const sectionActions = actions.filter((action) => action.sourceType === section.key)
+            if (sectionActions.length === 0) return null
             return (
-              <div key={context.taskId} className="rounded-md border border-border/70 bg-background/80 px-2.5 py-2">
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-muted-foreground" title={context.taskTitle}>{context.taskTitle}</div>
-                    <div className="mt-0.5 line-clamp-2 text-sm text-foreground">{context.summary.nextStep}</div>
-                  </div>
-                  <button
-                    className="shrink-0 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:cursor-default disabled:opacity-50"
-                    disabled={inserted}
-                    onClick={() => onInsert(context)}
-                  >
-                    {inserted ? 'Inserted' : 'Insert'}
-                  </button>
+              <section key={section.key} className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-normal text-muted-foreground">
+                  <span>{section.label}</span>
+                  <span>{sectionActions.length}</span>
                 </div>
-                {updatingIds.has(context.taskId) && <div className="mt-1 text-[11px] text-blue-600">Updating summary...</div>}
-              </div>
+                {sectionActions.map((action) => (
+                  <div
+                    key={action.id}
+                    data-next-step-action-id={action.id}
+                    data-next-step-source={action.sourceType}
+                    className={`rounded-md border border-border/70 bg-background/80 px-2.5 py-2 ${action.taskId ? 'cursor-pointer hover:bg-muted/50' : ''}`}
+                    onClick={() => {
+                      if (action.taskId) onOpen(action)
+                    }}
+                    role={action.taskId ? 'button' : undefined}
+                    tabIndex={action.taskId ? 0 : undefined}
+                    onKeyDown={(event) => {
+                      if (!action.taskId) return
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        onOpen(action)
+                      }
+                    }}
+                  >
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <span className="truncate text-xs font-medium text-muted-foreground" title={action.taskTitle}>{action.taskTitle}</span>
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{action.taskStatus}</span>
+                          {action.timeLabel && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{action.timeLabel}</span>}
+                          {action.inFocus && <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">In Focus</span>}
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateClass[action.state]}`}>{stateLabel[action.state]}</span>
+                        </div>
+                        <div className={maximized ? 'mt-1 text-sm leading-6 text-foreground' : 'mt-1 line-clamp-2 text-sm text-foreground'}>{action.text}</div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {action.canPlan && (
+                          <button
+                            className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:cursor-default disabled:opacity-50"
+                            disabled={action.inFocus}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onPlan(action)
+                            }}
+                            title={action.inFocus ? 'Already in Focus' : 'Plan in Focus'}
+                          >
+                            <Plus className="h-3 w-3" />
+                            {action.inFocus ? 'In Focus' : 'Plan'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </section>
             )
           })}
         </div>
@@ -219,6 +349,8 @@ export function TodayPage() {
   const [planDraftDoc, setPlanDraftDoc] = useState<Record<string, any> | null>(null)
   const [planDraftError, setPlanDraftError] = useState('')
   const [planDraftLoading, setPlanDraftLoading] = useState(false)
+  const [carryOverScript, setCarryOverScript] = useState<DayScriptDocument | null>(null)
+  const [nextStepsMaximized, setNextStepsMaximized] = useState(false)
   const backgroundTasks = useBackgroundTaskStore((s) => s.tasks)
   const loadBackgroundTasks = useBackgroundTaskStore((s) => s.loadTasks)
   const setBackgroundPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
@@ -280,8 +412,8 @@ export function TodayPage() {
   }, [])
 
   useEffect(() => {
-    if (selectedTaskId && selectedTaskId !== activeTaskId) void setActiveTask(selectedTaskId)
-  }, [activeTaskId, selectedTaskId, setActiveTask])
+    if (selectedTaskId && selectedTaskId !== useTaskStore.getState().activeTaskId) void setActiveTask(selectedTaskId)
+  }, [selectedTaskId, setActiveTask])
 
   useEffect(() => {
     if (explicitDateParam && explicitDateParam !== displayDate) {
@@ -336,29 +468,166 @@ export function TodayPage() {
     }
   }, [displayDate])
 
+  useEffect(() => {
+    let cancelled = false
+    getDayScript(dateOffset(displayDate, -1))
+      .then((data) => {
+        if (!cancelled) setCarryOverScript(data)
+      })
+      .catch(() => {
+        if (!cancelled) setCarryOverScript(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [displayDate])
+
+  useEffect(() => {
+    if (!nextStepsMaximized) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNextStepsMaximized(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [nextStepsMaximized])
+
   const pendingTasks = useMemo(
     () => tasks.filter((task) => task.status === 'PENDING' || task.status === 'DOING').sort((a, b) => b.updatedAt - a.updatedAt),
     [tasks]
   )
-  const nextStepContexts = useMemo(() => {
+  const nextStepActions = useMemo(() => {
     const pendingIds = new Set(pendingTasks.map((task) => task.id))
-    return Object.values(taskContexts)
-      .filter((context) => pendingIds.has(context.taskId) && context.summary.nextStep.trim())
-      .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
-  }, [pendingTasks, taskContexts])
+    const tasksById = new Map(tasks.map((task) => [task.id, task]))
+    const currentBlocks = script?.blocks ?? []
+    const currentFocusTaskIds = new Set(currentBlocks.flatMap((block) => block.taskIds))
+    const actionIds = new Set<string>()
+    const actions: NextStepAction[] = []
 
-  function appendNextStep(context: TaskProgressContext) {
-    if (!script) return
-    const linkAttrs = {
-      href: `/today?task=${encodeURIComponent(context.taskId)}`,
-      taskId: context.taskId,
+    const pushAction = (action: NextStepAction) => {
+      if (!action.text.trim()) return
+      if (actionIds.has(action.id)) return
+      actionIds.add(action.id)
+      actions.push(action)
     }
+
+    const activeIndex = script && displayDate === todayScriptDate ? findActiveBlock(script.blocks, new Date()) : -1
+    const activeBlock = activeIndex >= 0 ? script!.blocks[activeIndex] : null
+    if (activeBlock && !activeBlock.completed) {
+      const taskId = activeBlock.taskIds[0] ?? null
+      const task = taskId ? tasksById.get(taskId) : null
+      pushAction({
+        id: `now:${activeBlock.id}:${taskId ?? 'none'}`,
+        taskId,
+        taskTitle: task?.title ?? getBlockTitle(activeBlock, tasksById),
+        taskStatus: task?.status ?? 'FOCUS',
+        sourceType: 'now',
+        text: getBlockActionText(activeBlock),
+        state: 'current',
+        lastActivityAt: task?.updatedAt ?? null,
+        timeLabel: activeBlock.startTime && activeBlock.endTime ? `${activeBlock.startTime}-${activeBlock.endTime}` : undefined,
+        inFocus: true,
+        canPlan: false,
+      })
+    }
+
+    for (const block of currentBlocks) {
+      if (block.completed || block.id === activeBlock?.id) continue
+      const taskId = block.taskIds[0] ?? null
+      const task = taskId ? tasksById.get(taskId) : null
+      pushAction({
+        id: `focus:${block.id}:${taskId ?? 'none'}`,
+        taskId,
+        taskTitle: task?.title ?? getBlockTitle(block, tasksById),
+        taskStatus: task?.status ?? 'FOCUS',
+        sourceType: 'focus',
+        text: getBlockActionText(block),
+        state: 'current',
+        lastActivityAt: task?.updatedAt ?? null,
+        timeLabel: block.startTime && block.endTime ? `${block.startTime}-${block.endTime}` : undefined,
+        inFocus: true,
+        canPlan: false,
+      })
+    }
+
+    for (const context of Object.values(taskContexts)) {
+      if (!pendingIds.has(context.taskId)) continue
+      const nextStep = context.summary.nextStep.trim()
+      const recommended = context.summary.recommendedNextStep.trim()
+      const common = {
+        taskId: context.taskId,
+        taskTitle: context.taskTitle,
+        taskStatus: context.status,
+        state: getActionState(context, taskSummaryUpdating),
+        lastActivityAt: context.lastActivityAt,
+        timeLabel: undefined,
+        inFocus: currentFocusTaskIds.has(context.taskId) || insertedNextStepIds.has(`explicit:${context.taskId}`) || insertedNextStepIds.has(`recommended:${context.taskId}`),
+        canPlan: true,
+      } satisfies Omit<NextStepAction, 'id' | 'sourceType' | 'text'>
+      if (nextStep) {
+        pushAction({
+          ...common,
+          id: `explicit:${context.taskId}`,
+          sourceType: 'explicit',
+          text: nextStep,
+        })
+      } else if (recommended) {
+        pushAction({
+          ...common,
+          id: `recommended:${context.taskId}`,
+          sourceType: 'recommended',
+          text: recommended,
+        })
+      }
+    }
+
+    for (const block of carryOverScript?.blocks ?? []) {
+      if (block.completed) continue
+      const taskId = block.taskIds[0] ?? null
+      if (taskId && currentFocusTaskIds.has(taskId)) continue
+      const task = taskId ? tasksById.get(taskId) : null
+      pushAction({
+        id: `carry_over:${block.id}:${taskId ?? 'none'}`,
+        taskId,
+        taskTitle: task?.title ?? getBlockTitle(block, tasksById),
+        taskStatus: task?.status ?? 'FOCUS',
+        sourceType: 'carry_over',
+        text: getBlockActionText(block),
+        state: 'current',
+        lastActivityAt: task?.updatedAt ?? null,
+        timeLabel: block.startTime && block.endTime ? `${block.startTime}-${block.endTime}` : undefined,
+        inFocus: false,
+        canPlan: Boolean(taskId),
+      })
+    }
+
+    const sourceOrder: Record<NextStepSourceType, number> = {
+      now: 0,
+      focus: 1,
+      explicit: 2,
+      recommended: 3,
+      carry_over: 4,
+    }
+    return actions.sort((a, b) => sourceOrder[a.sourceType] - sourceOrder[b.sourceType] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+  }, [carryOverScript, displayDate, insertedNextStepIds, pendingTasks, script, taskContexts, taskSummaryUpdating, tasks, todayScriptDate])
+
+  function appendNextStep(action: NextStepAction) {
+    if (!script) return
+    if (!action.taskId) return
+    const linkAttrs = {
+      href: `/today?task=${encodeURIComponent(action.taskId)}`,
+      taskId: action.taskId,
+    }
+    const prefix = action.sourceType === 'recommended'
+      ? 'Recommended '
+      : action.sourceType === 'carry_over'
+        ? 'Carry over '
+        : 'Next step '
     const nextNode = {
       type: 'paragraph',
       content: [
-        { type: 'text', text: 'Next step ' },
-        { type: 'text', text: `@${context.taskTitle}`, marks: [{ type: 'link', attrs: linkAttrs }] },
-        { type: 'text', text: `: ${context.summary.nextStep}` },
+        { type: 'text', text: prefix },
+        { type: 'text', text: `@${action.taskTitle}`, marks: [{ type: 'link', attrs: linkAttrs }] },
+        { type: 'text', text: `: ${action.text}` },
       ],
     }
     const document = script.document && script.document.type === 'doc'
@@ -368,7 +637,12 @@ export function TodayPage() {
     const nextContent = [...content, nextNode]
     const nextDocument = { ...document, content: nextContent }
     setScript({ ...script, document: nextDocument })
-    setInsertedNextStepIds((ids) => new Set(ids).add(context.taskId))
+    setInsertedNextStepIds((ids) => new Set(ids).add(action.id))
+  }
+
+  function openNextStepAction(action: NextStepAction) {
+    if (!action.taskId) return
+    void setActiveTask(action.taskId)
   }
 
   async function handleSave() {
@@ -557,7 +831,7 @@ export function TodayPage() {
   }, [activeTaskId, displayDate, searchParams, setSearchParams, todayScriptDate])
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col">
       <div ref={splitContainerRef} className="flex min-h-0 flex-1">
         <section
           className="flex min-h-0 min-w-0 shrink-0 flex-col bg-background"
@@ -608,11 +882,11 @@ export function TodayPage() {
                     {saveError}
                   </div>
                 )}
-                <NextStepsPanel
-                  contexts={nextStepContexts}
-                  updatingIds={taskSummaryUpdating}
-                  insertedIds={insertedNextStepIds}
-                  onInsert={appendNextStep}
+                <OverallNextStepsBoard
+                  actions={nextStepActions}
+                  onPlan={appendNextStep}
+                  onOpen={openNextStepAction}
+                  onMaximize={() => setNextStepsMaximized(true)}
                 />
                 <DayScriptEditor
                   value={script.document}
@@ -680,6 +954,21 @@ export function TodayPage() {
           </div>
         </section>
       </div>
+
+      {nextStepsMaximized && (
+        <div
+          data-testid="overall-next-steps-maximized"
+          className="absolute inset-0 z-50 min-h-0 bg-background/95 p-5 backdrop-blur-sm"
+        >
+          <OverallNextStepsBoard
+            actions={nextStepActions}
+            onPlan={appendNextStep}
+            onOpen={openNextStepAction}
+            maximized
+            onCloseMaximized={() => setNextStepsMaximized(false)}
+          />
+        </div>
+      )}
 
       <Dialog open={conflicts.length > 0} onOpenChange={(open) => { if (!open) setConflicts([]) }}>
         <DialogContent className="max-h-[85vh] sm:max-w-3xl">
