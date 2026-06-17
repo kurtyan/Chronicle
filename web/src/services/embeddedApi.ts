@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -766,6 +766,9 @@ export class EmbeddedApiProvider implements ApiInterface {
   }
   async confirmDayScriptProgressSync(): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
     return { createdLogs: [] }
+  }
+  async submitDayScriptProgress(): Promise<SubmitDayScriptProgressResult> {
+    return { createdLogs: [], executionRecords: [], conflicts: [] }
   }
   async getDayScriptExecutionRecords(): Promise<DayScriptExecutionRecord[]> {
     return []

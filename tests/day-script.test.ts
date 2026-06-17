@@ -77,6 +77,14 @@ async function deleteEntry(page: Page, taskId: string, entryId: string) {
   expect(res.ok()).toBeTruthy()
 }
 
+async function submitProgress(page: Page, date: string, focusActivity?: Array<{ blockKey: string; taskId: string; firstEditedAt: number }>) {
+  const res = await page.request.post(`/api/day-scripts/${date}/submit-progress`, {
+    data: focusActivity ? { focusActivity } : {},
+  })
+  expect(res.ok()).toBeTruthy()
+  return res.json()
+}
+
 test.describe('Day Script progress sync', () => {
   test.beforeEach(async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
@@ -98,7 +106,8 @@ test.describe('Day Script progress sync', () => {
     })
     expect(firstSave.ok()).toBeTruthy()
     const first = await firstSave.json()
-    expect(first.createdLogs).toHaveLength(1)
+    expect(first.createdLogs).toHaveLength(0)
+    expect(await submitProgress(page, date)).toMatchObject({ createdLogs: [{ taskId: taskA.id }] })
 
     const secondSave = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -113,6 +122,7 @@ test.describe('Day Script progress sync', () => {
       },
     })
     expect(secondSave.ok()).toBeTruthy()
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(2)
 
     const taskAEntries = await getEntries(page, taskA.id)
     const taskBEntries = await getEntries(page, taskB.id)
@@ -137,6 +147,8 @@ test.describe('Day Script progress sync', () => {
     })
     expect(firstSave.ok()).toBeTruthy()
     const first = await firstSave.json()
+    expect(first.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const conflictSave = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -150,9 +162,11 @@ test.describe('Day Script progress sync', () => {
     expect(conflictSave.ok()).toBeTruthy()
     const conflict = await conflictSave.json()
     expect(conflict.createdLogs).toHaveLength(0)
-    expect(conflict.conflicts).toHaveLength(1)
+    const conflictSubmit = await submitProgress(page, date)
+    expect(conflictSubmit.createdLogs).toHaveLength(0)
+    expect(conflictSubmit.conflicts).toHaveLength(1)
 
-    const item = conflict.conflicts.map((entry: { blockId: string; taskId: string }) => ({
+    const item = conflictSubmit.conflicts.map((entry: { blockId: string; taskId: string }) => ({
       blockId: entry.blockId,
       taskId: entry.taskId,
     }))
@@ -193,24 +207,30 @@ test.describe('Day Script progress sync', () => {
     })
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
-    expect(saved.createdLogs).toHaveLength(1)
-    expect(saved.executionRecords).toHaveLength(1)
-    expect(saved.executionRecords[0]).toMatchObject({
+    expect(saved.createdLogs).toHaveLength(0)
+    const submitted = await submitProgress(page, date, [{
+      blockKey: `0|10:00|10:30|@${task.title}|${task.id}`,
+      taskId: task.id,
+      firstEditedAt,
+    }])
+    expect(submitted.createdLogs).toHaveLength(1)
+    expect(submitted.executionRecords).toHaveLength(1)
+    expect(submitted.executionRecords[0]).toMatchObject({
       scriptDate: date,
       taskId: task.id,
-      progressEntryId: saved.createdLogs[0].entryId,
+      progressEntryId: submitted.createdLogs[0].entryId,
       workSessionId: session.id,
       plannedMinutes: 30,
     })
-    expect(saved.executionRecords[0].actualStartedAt).toBe(firstEditedAt)
-    expect(saved.executionRecords[0].actualCompletedAt).toBeGreaterThanOrEqual(firstEditedAt)
-    expect(saved.executionRecords[0].actualMinutes).toBeGreaterThanOrEqual(0)
+    expect(submitted.executionRecords[0].actualStartedAt).toBe(firstEditedAt)
+    expect(submitted.executionRecords[0].actualCompletedAt).toBeGreaterThanOrEqual(firstEditedAt)
+    expect(submitted.executionRecords[0].actualMinutes).toBeGreaterThanOrEqual(0)
 
     const recordsRes = await page.request.get(`/api/day-scripts/${date}/execution-records?taskId=${encodeURIComponent(task.id)}`)
     expect(recordsRes.ok()).toBeTruthy()
     const records = await recordsRes.json()
     expect(records).toHaveLength(1)
-    expect(records[0].id).toBe(saved.executionRecords[0].id)
+    expect(records[0].id).toBe(submitted.executionRecords[0].id)
 
     const repeat = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -230,6 +250,7 @@ test.describe('Day Script progress sync', () => {
     const repeated = await repeat.json()
     expect(repeated.createdLogs).toHaveLength(0)
     expect(repeated.executionRecords).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(0)
 
     const secondEditedAt = Date.now() - 60_000
     const append = await page.request.put(`/api/day-scripts/${date}`, {
@@ -249,9 +270,15 @@ test.describe('Day Script progress sync', () => {
     })
     expect(append.ok()).toBeTruthy()
     const appended = await append.json()
-    expect(appended.createdLogs).toHaveLength(1)
-    expect(appended.executionRecords).toHaveLength(1)
-    expect(appended.executionRecords[0].actualStartedAt).toBe(secondEditedAt)
+    expect(appended.createdLogs).toHaveLength(0)
+    const appendedSubmit = await submitProgress(page, date, [{
+      blockKey: `0|10:00|10:30|@${task.title}|${task.id}`,
+      taskId: task.id,
+      firstEditedAt: secondEditedAt,
+    }])
+    expect(appendedSubmit.createdLogs).toHaveLength(1)
+    expect(appendedSubmit.executionRecords).toHaveLength(1)
+    expect(appendedSubmit.executionRecords[0].actualStartedAt).toBe(secondEditedAt)
 
     const appendedRecordsRes = await page.request.get(`/api/day-scripts/${date}/execution-records?taskId=${encodeURIComponent(task.id)}`)
     expect(appendedRecordsRes.ok()).toBeTruthy()
@@ -286,11 +313,17 @@ test.describe('Day Script progress sync', () => {
       })
       expect(save.ok()).toBeTruthy()
       const saved = await save.json()
-      expect(saved.executionRecords).toHaveLength(1)
+      expect(saved.executionRecords).toHaveLength(0)
+      const submitted = await submitProgress(page, date, [{
+        blockKey: `0|01:10|01:40|@${task.title}|${task.id}`,
+        taskId: task.id,
+        firstEditedAt,
+      }])
+      expect(submitted.executionRecords).toHaveLength(1)
 
       const nextNaturalDate = uniqueScriptDate(19)
-      expect(saved.executionRecords[0].plannedStartAt).toBe(localTimestamp(nextNaturalDate, '01:10'))
-      expect(saved.executionRecords[0].plannedEndAt).toBe(localTimestamp(nextNaturalDate, '01:40'))
+      expect(submitted.executionRecords[0].plannedStartAt).toBe(localTimestamp(nextNaturalDate, '01:10'))
+      expect(submitted.executionRecords[0].plannedEndAt).toBe(localTimestamp(nextNaturalDate, '01:40'))
     } finally {
       await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
     }
@@ -340,11 +373,12 @@ test.describe('Day Script progress sync', () => {
     })
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
-    expect(saved.createdLogs).toHaveLength(1)
+    expect(saved.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entries = await getEntries(page, task.id)
     expect(entries).toHaveLength(1)
-    expect(entries[0].content).toContain('<p>Day Script progress · 2099-01-04 · 10:00-10:30</p>')
+    expect(entries[0].content).not.toContain('Day Script progress')
     expect(entries[0].content).not.toContain(`<p>@${task.title}</p>`)
     expect(entries[0].content).toContain('<strong>Bold progress</strong>')
     expect(entries[0].content).toContain('<ul>')
@@ -375,7 +409,8 @@ test.describe('Day Script progress sync', () => {
     })
     expect(firstSave.ok()).toBeTruthy()
     const first = await firstSave.json()
-    expect(first.createdLogs).toHaveLength(1)
+    expect(first.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const secondSave = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -393,8 +428,10 @@ test.describe('Day Script progress sync', () => {
     expect(secondSave.ok()).toBeTruthy()
     const second = await secondSave.json()
     expect(second.createdLogs).toHaveLength(0)
-    expect(second.conflicts).toHaveLength(1)
-    expect(second.conflicts[0]).toMatchObject({
+    const secondSubmit = await submitProgress(page, date)
+    expect(secondSubmit.createdLogs).toHaveLength(0)
+    expect(secondSubmit.conflicts).toHaveLength(1)
+    expect(secondSubmit.conflicts[0]).toMatchObject({
       taskId: task.id,
       existingProgress: 'Done',
       currentProgress: 'Done\nNext',
@@ -422,7 +459,8 @@ test.describe('Day Script progress sync', () => {
     })
     expect(firstSave.ok()).toBeTruthy()
     const first = await firstSave.json()
-    expect(first.createdLogs).toHaveLength(1)
+    expect(first.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const withImage = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -447,7 +485,8 @@ test.describe('Day Script progress sync', () => {
     })
     expect(withImage.ok()).toBeTruthy()
     const imageSaved = await withImage.json()
-    expect(imageSaved.createdLogs).toHaveLength(1)
+    expect(imageSaved.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entries = await getEntries(page, task.id)
     expect(entries).toHaveLength(2)
@@ -462,6 +501,7 @@ test.describe('Day Script progress sync', () => {
     })
     expect(repeat.ok()).toBeTruthy()
     expect((await repeat.json()).createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(0)
   })
 
   test('completed focus line appends images after text was already synced', async ({ page }) => {
@@ -482,7 +522,8 @@ test.describe('Day Script progress sync', () => {
     })
     expect(textSave.ok()).toBeTruthy()
     const textSaved = await textSave.json()
-    expect(textSaved.createdLogs).toHaveLength(1)
+    expect(textSaved.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const imageSave = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -515,7 +556,8 @@ test.describe('Day Script progress sync', () => {
       },
     })
     expect(imageSave.ok()).toBeTruthy()
-    expect((await imageSave.json()).createdLogs).toHaveLength(1)
+    expect((await imageSave.json()).createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entries = await getEntries(page, task.id)
     expect(entries).toHaveLength(2)
@@ -543,7 +585,8 @@ test.describe('Day Script progress sync', () => {
     })
     expect(firstSave.ok()).toBeTruthy()
     const first = await firstSave.json()
-    expect(first.createdLogs).toHaveLength(1)
+    expect(first.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const blankSave = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
@@ -562,6 +605,7 @@ test.describe('Day Script progress sync', () => {
     expect(blankSave.ok()).toBeTruthy()
     const blankSaved = await blankSave.json()
     expect(blankSaved.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(0)
 
     const entriesAfterBlank = await getEntries(page, task.id)
     expect(entriesAfterBlank).toHaveLength(1)
@@ -581,7 +625,8 @@ test.describe('Day Script progress sync', () => {
       },
     })
     expect(realAppend.ok()).toBeTruthy()
-    expect((await realAppend.json()).createdLogs).toHaveLength(1)
+    expect((await realAppend.json()).createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entriesAfterAppend = await getEntries(page, task.id)
     expect(entriesAfterAppend).toHaveLength(2)
@@ -604,9 +649,11 @@ test.describe('Day Script progress sync', () => {
     })
     expect(firstSave.ok()).toBeTruthy()
     const first = await firstSave.json()
-    expect(first.createdLogs).toHaveLength(1)
+    expect(first.createdLogs).toHaveLength(0)
+    const firstSubmit = await submitProgress(page, date)
+    expect(firstSubmit.createdLogs).toHaveLength(1)
 
-    await deleteEntry(page, task.id, first.createdLogs[0].entryId)
+    await deleteEntry(page, task.id, firstSubmit.createdLogs[0].entryId)
     expect(await getEntries(page, task.id)).toHaveLength(0)
 
     const repeatSave = await page.request.put(`/api/day-scripts/${date}`, {
@@ -618,6 +665,7 @@ test.describe('Day Script progress sync', () => {
     expect(repeatSave.ok()).toBeTruthy()
     const repeat = await repeatSave.json()
     expect(repeat.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(0)
     expect(await getEntries(page, task.id)).toHaveLength(0)
 
     const appendSave = await page.request.put(`/api/day-scripts/${date}`, {
@@ -631,7 +679,8 @@ test.describe('Day Script progress sync', () => {
       },
     })
     expect(appendSave.ok()).toBeTruthy()
-    expect((await appendSave.json()).createdLogs).toHaveLength(1)
+    expect((await appendSave.json()).createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entriesAfterAppend = await getEntries(page, task.id)
     expect(entriesAfterAppend).toHaveLength(1)
@@ -660,10 +709,12 @@ test.describe('Day Script progress sync', () => {
       endTime: '15:00',
     })
     expect(saved.script.document.content[0].content[0].text).toBe('14:43-15:00 ')
+    expect(saved.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entries = await getEntries(page, task.id)
     expect(entries).toHaveLength(1)
-    expect(entries[0].content).toContain('Day Script progress · 2099-01-10 · 14:43-15:00')
+    expect(entries[0].content).not.toContain('Day Script progress')
     expect(entries[0].content).toContain('Compact time progress')
   })
 
@@ -681,10 +732,11 @@ test.describe('Day Script progress sync', () => {
       },
     })
     expect(save.ok()).toBeTruthy()
-    expect((await save.json()).createdLogs).toHaveLength(1)
+    expect((await save.json()).createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entries = await getEntries(page, task.id)
-    expect(entries[0].content).toContain('Day Script progress · 2099-01-14 · 10:00-10:30')
+    expect(entries[0].content).not.toContain('Day Script progress')
     expect(entries[0].content).toContain('<p>Diagnose login spike</p>')
     expect(entries[0].content.match(/Diagnose login spike/g)).toHaveLength(1)
     expect(entries[0].content).not.toContain('Diagnose login spike ✅')
@@ -707,12 +759,15 @@ test.describe('Day Script progress sync', () => {
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
     expect(saved.validationErrors).toHaveLength(0)
-    expect(saved.createdLogs).toHaveLength(1)
+    expect(saved.createdLogs).toHaveLength(0)
     expect(saved.executionRecords).toHaveLength(0)
     expect(saved.script.blocks[0]).toMatchObject({ startTime: '', endTime: '' })
+    const untimedSubmit = await submitProgress(page, date)
+    expect(untimedSubmit.createdLogs).toHaveLength(1)
+    expect(untimedSubmit.executionRecords).toHaveLength(0)
 
     const entries = await getEntries(page, task.id)
-    expect(entries[0].content).toContain('Day Script progress · 2099-01-15')
+    expect(entries[0].content).not.toContain('Day Script progress')
     expect(entries[0].content).not.toContain(' · -')
     expect(entries[0].content).toContain('<p>Draft rollout checklist</p>')
     expect(entries[0].content).toContain('List affected services')
@@ -799,7 +854,8 @@ test.describe('Day Script progress sync', () => {
     expect(append.ok()).toBeTruthy()
     const appended = await append.json()
     expect(appended.createdTasks).toHaveLength(0)
-    expect(appended.createdLogs).toHaveLength(1)
+    expect(appended.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entries = await getEntries(page, taskId)
     expect(entries).toHaveLength(2)
@@ -918,6 +974,8 @@ test.describe('Day Script progress sync', () => {
     const saved = await save.json()
     expect(saved.validationErrors).toHaveLength(0)
     expect(saved.script.blocks[0].progressText).toBe('Synced progress\n----\nDetached daily note')
+    expect(saved.createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
 
     const entries = await getEntries(page, task.id)
     expect(entries).toHaveLength(1)

@@ -53,6 +53,12 @@ export interface SaveDayScriptResult {
   conflicts: ProgressSyncConflict[]
 }
 
+export interface SubmitDayScriptProgressResult {
+  createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  executionRecords: DayScriptExecutionRecord[]
+  conflicts: ProgressSyncConflict[]
+}
+
 export interface DayScriptFocusActivity {
   blockKey: string
   taskId: string
@@ -526,17 +532,15 @@ function extractHeaderRemainder(headerText: string, taskId?: string): string {
 }
 
 function buildLogHtml(
-  scriptDate: string,
+  _scriptDate: string,
   block: { startTime: string; endTime: string; headerRemainder?: string; headerRemainderHtml?: string },
   progress: string,
   progressHtml?: string,
   includeHeaderRemainder = true
 ): string {
-  const timeRange = block.startTime && block.endTime ? ` · ${escapeHtml(block.startTime)}-${escapeHtml(block.endTime)}` : ''
-  const header = `<p>Day Script progress · ${escapeHtml(scriptDate)}${timeRange}</p>`
   const headerBody = includeHeaderRemainder ? (block.headerRemainderHtml || progressToHtml(block.headerRemainder ?? '')) : ''
   const body = progressHtml || progressToHtml(progress)
-  return `${header}${headerBody}${body}`
+  return `${headerBody}${body}`
 }
 
 function blockSyncText(block: Pick<RichDayScriptBlock, 'headerRemainder' | 'progressText'>): string {
@@ -911,8 +915,6 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
   const executionRecords: DayScriptExecutionRecord[] = []
   const conflicts: ProgressSyncConflict[] = []
 
-  if (!block.completed) return { createdLogs, executionRecords, conflicts }
-
   const progress = blockSyncText(block)
   const progressHtml = blockSyncHtml(block)
   const bodyProgress = normalizeProgress(block.progressText)
@@ -990,7 +992,7 @@ export function getDayScript(scriptDate: string): DayScriptDocument {
   }
 }
 
-export function saveDayScript(scriptDate: string, document: JsonNode, expectedRevision: number, focusActivities?: DayScriptFocusActivity[]): SaveDayScriptResult {
+export function saveDayScript(scriptDate: string, document: JsonNode, expectedRevision: number, _focusActivities?: DayScriptFocusActivity[]): SaveDayScriptResult {
   const normalizedDocument = normalizeDoc(document)
   const existing = getExistingScript(scriptDate)
   if ((existing?.revision ?? 0) !== expectedRevision) {
@@ -1019,10 +1021,6 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   let rewrittenDocument = normalizedDocument
   let nextBlocks: RichDayScriptBlock[] = []
   const createdTasks: Task[] = []
-  const createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> = []
-  const executionRecords: DayScriptExecutionRecord[] = []
-  const conflicts: ProgressSyncConflict[] = []
-  const activityMap = normalizeFocusActivities(focusActivities)
 
   const transaction = getDb().transaction(() => {
     const rewriteResult = rewriteNewTaskHeaders(normalizedDocument)
@@ -1049,18 +1047,6 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
 
     upsertBlocks(scriptDate, nextBlocks, now)
 
-    const syncMap = new Map<string, ExistingSync>()
-    for (const sync of getExistingSyncs(scriptDate)) {
-      syncMap.set(`${sync.blockId}:${sync.taskId}`, sync)
-    }
-
-    for (const block of nextBlocks) {
-      const result = syncBlockProgress(scriptDate, block, syncMap, activityMap, now)
-      createdLogs.push(...result.createdLogs)
-      executionRecords.push(...result.executionRecords)
-      conflicts.push(...result.conflicts)
-    }
-
     for (const task of createdTasks) {
       const block = nextBlocks.find((item) => item.taskIds.includes(task.id))
       if (!block) continue
@@ -1080,11 +1066,45 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   return {
     script: getDayScript(scriptDate),
     createdTasks,
-    createdLogs,
-    executionRecords,
+    createdLogs: [],
+    executionRecords: [],
     validationErrors: [],
-    conflicts,
+    conflicts: [],
   }
+}
+
+export function submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[]): SubmitDayScriptProgressResult {
+  const existing = getExistingScript(scriptDate)
+  if (!existing) return { createdLogs: [], executionRecords: [], conflicts: [] }
+
+  const parsed = parseDocument(existing.document)
+  if (parsed.validationErrors.length > 0) {
+    return { createdLogs: [], executionRecords: [], conflicts: [] }
+  }
+
+  const now = Date.now()
+  const richBlocks = assignBlockIds(parsed.blocks, existing.blocks)
+  const activityMap = normalizeFocusActivities(focusActivities)
+  const createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> = []
+  const executionRecords: DayScriptExecutionRecord[] = []
+  const conflicts: ProgressSyncConflict[] = []
+
+  const transaction = getDb().transaction(() => {
+    const syncMap = new Map<string, ExistingSync>()
+    for (const sync of getExistingSyncs(scriptDate)) {
+      syncMap.set(`${sync.blockId}:${sync.taskId}`, sync)
+    }
+
+    for (const block of richBlocks) {
+      const result = syncBlockProgress(scriptDate, block, syncMap, activityMap, now)
+      createdLogs.push(...result.createdLogs)
+      executionRecords.push(...result.executionRecords)
+      conflicts.push(...result.conflicts)
+    }
+  })
+
+  transaction()
+  return { createdLogs, executionRecords, conflicts }
 }
 
 export function getDayScriptExecutionRecords(scriptDate: string, filters?: { taskId?: string; start?: number; end?: number }): DayScriptExecutionRecord[] {
@@ -1127,7 +1147,7 @@ export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ 
     for (const item of items) {
       const block = blockMap.get(item.blockId)
       const task = getTaskById(item.taskId)
-      if (!block || !task || !block.completed || !block.taskIds.includes(item.taskId)) continue
+      if (!block || !task || !block.taskIds.includes(item.taskId)) continue
       const richBlock = block as RichDayScriptBlock
       if (richBlock.newTaskCreated) continue
       const progress = blockSyncText(richBlock)

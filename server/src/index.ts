@@ -619,6 +619,23 @@ app.post('/api/day-scripts/:date/confirm-progress-sync', async (c) => {
   return c.json({ createdLogs })
 })
 
+app.post('/api/day-scripts/:date/submit-progress', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    const focusActivities = Array.isArray(body.focusActivity) ? body.focusActivity : undefined
+    const result = await service.submitDayScriptProgress(c.req.param('date'), focusActivities)
+    for (const log of result.createdLogs) {
+      broadcastEvent('entry_created', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
+      const changedTask = await service.getTaskById(log.taskId)
+      emitTaskChange(c, changedTask)
+    }
+    scheduleTaskSummaryRefresh(result.createdLogs.map((log) => log.taskId))
+    return c.json(result)
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Submit progress failed' }, 400)
+  }
+})
+
 app.post('/api/day-scripts/:date/daily-summary', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}))

@@ -251,6 +251,12 @@ export interface SaveDayScriptResult {
   conflicts: ProgressSyncConflict[]
 }
 
+export interface SubmitDayScriptProgressResult {
+  createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  executionRecords: DayScriptExecutionRecord[]
+  conflicts: ProgressSyncConflict[]
+}
+
 export interface DailySummaryResult {
   date: string
   summaryMarkdown: string

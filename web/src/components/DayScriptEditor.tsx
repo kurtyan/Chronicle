@@ -20,6 +20,7 @@ interface DayScriptEditorProps {
   todayScriptDate: string
   onChange: (document: Record<string, any>) => void
   onSave: () => void
+  onSubmitProgress?: () => void
   onNavigateTask: (taskId: string) => void
   onEditingTask?: (activity: { taskId: string; blockKey: string }) => void
 }
@@ -252,7 +253,7 @@ function getMentionStateFromSelection(editor: Editor): MentionState {
   }
 }
 
-export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onChange, onSave, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
+export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onChange, onSave, onSubmitProgress, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
   const [mentionState, setMentionState] = useState<MentionState>(null)
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -317,6 +318,11 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
           event.preventDefault()
           onSave()
+          return true
+        }
+        if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === 'Enter') {
+          event.preventDefault()
+          onSubmitProgress?.()
           return true
         }
         if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && (event.key === 'Home' || event.key === 'End')) {

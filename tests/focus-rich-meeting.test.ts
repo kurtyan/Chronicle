@@ -41,6 +41,31 @@ async function saveDayScript(page: Page, date: string, document: Record<string, 
   return saveRes.json()
 }
 
+function paragraph(text: string, taskId?: string) {
+  if (!taskId) return { type: 'paragraph', content: [{ type: 'text', text }] }
+  const marker = text.indexOf('@')
+  if (marker < 0) return { type: 'paragraph', content: [{ type: 'text', text }] }
+  const before = text.slice(0, marker)
+  const mention = text.slice(marker)
+  return {
+    type: 'paragraph',
+    content: [
+      ...(before ? [{ type: 'text', text: before }] : []),
+      {
+        type: 'text',
+        text: mention,
+        marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskId)}`, taskId } }],
+      },
+    ],
+  }
+}
+
+async function getTaskEntries(page: Page, taskId: string) {
+  const res = await page.request.get(`/api/tasks/${taskId}/logs`)
+  expect(res.ok()).toBeTruthy()
+  return res.json()
+}
+
 async function startMockLlm(response: string | string[]) {
   const responses = Array.isArray(response) ? response : [response]
   const calls: any[] = []
@@ -491,6 +516,105 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(badge).toBeVisible()
     await expect(badge).toHaveText('new')
     await expect(badge).toHaveAttribute('contenteditable', 'false')
+  })
+
+  test('focus editor autosaves the current draft after ten seconds of inactivity', async ({ page }) => {
+    const task = await createTask(page, `AutosaveFocus-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 59)
+    const progress = `autosaved draft progress ${Date.now()}`
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type(`10:00-10:30 @${task.title.slice(0, 12)}`)
+    await page.getByRole('button', { name: new RegExp(task.title) }).first().click()
+    await page.keyboard.press('Enter')
+    await page.keyboard.type(progress)
+
+    await expect.poll(async () => {
+      const res = await page.request.get(`/api/day-scripts/${date}`)
+      const script = await res.json()
+      return JSON.stringify(script.document).includes(progress)
+    }, { timeout: 15_000 }).toBeTruthy()
+
+    await page.reload()
+    await expect(editor).toContainText(progress)
+  })
+
+  test('Cmd+S saves a focus draft without task logs and Ctrl+Enter submits unfinished progress', async ({ page }) => {
+    const task = await createTask(page, `SubmitFocus-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 61)
+    const progress = `unfinished submit progress ${Date.now()}`
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [
+        paragraph(`10:00-10:30 @${task.title}`, task.id),
+        paragraph(progress),
+      ],
+    })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    await editor.click()
+    await page.keyboard.press('ControlOrMeta+S')
+    await expect.poll(async () => (await getTaskEntries(page, task.id)).length).toBe(0)
+
+    await page.keyboard.press('Control+Enter')
+    await expect.poll(async () => (await getTaskEntries(page, task.id)).length).toBe(1)
+    const entries = await getTaskEntries(page, task.id)
+    expect(entries[0].content).toContain(progress)
+  })
+
+  test('Daily Summary opens after flushing an unsaved focus draft', async ({ page }) => {
+    const task = await createTask(page, `SummaryFlush-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 62)
+    const progress = `summary flush draft ${Date.now()}`
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    await clearFocusEditor(page)
+    await page.keyboard.type(`10:00-10:30 @${task.title.slice(0, 12)}`)
+    await page.getByRole('button', { name: new RegExp(task.title) }).first().click()
+    await page.keyboard.press('Enter')
+    await page.keyboard.type(progress)
+
+    await page.getByLabel('Generate Daily Summary with LLM').click()
+    await expect(page.getByRole('dialog').getByRole('heading', { name: 'Daily Summary' })).toBeVisible()
+    await expect.poll(async () => {
+      const res = await page.request.get(`/api/day-scripts/${date}`)
+      const script = await res.json()
+      return JSON.stringify(script.document).includes(progress)
+    }, { timeout: 5000 }).toBeTruthy()
+  })
+
+  test('Plan Today opens after flushing an unsaved focus draft', async ({ page }) => {
+    const task = await createTask(page, `PlanFlush-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 63)
+    const progress = `plan flush draft ${Date.now()}`
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    await clearFocusEditor(page)
+    await page.keyboard.type(`10:00-10:30 @${task.title.slice(0, 12)}`)
+    await page.getByRole('button', { name: new RegExp(task.title) }).first().click()
+    await page.keyboard.press('Enter')
+    await page.keyboard.type(progress)
+
+    await page.getByLabel('Plan Today with LLM task context').click()
+    await expect(page.getByRole('dialog').getByRole('heading', { name: 'Plan Today' })).toBeVisible()
+    await expect.poll(async () => {
+      const res = await page.request.get(`/api/day-scripts/${date}`)
+      const script = await res.json()
+      return JSON.stringify(script.document).includes(progress)
+    }, { timeout: 5000 }).toBeTruthy()
   })
 
   test('selecting a focus task mention opens that task detail immediately', async ({ page }) => {

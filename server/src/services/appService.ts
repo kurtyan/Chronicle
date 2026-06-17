@@ -13,8 +13,8 @@ import {
   type BatchCreatePlanItem, type PlanItem, type PlanItemDetail,
 } from './planService'
 import {
-  getDayScript, saveDayScript, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
-  type DayScriptDocument, type SaveDayScriptResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
+  getDayScript, saveDayScript, submitDayScriptProgress, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
+  type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
 } from './dayScriptService'
 import {
   getTaskContexts, refreshTaskContexts,
@@ -391,6 +391,10 @@ export class AppService {
 
   async saveDayScript(scriptDate: string, document: any, expectedRevision: number, focusActivities?: DayScriptFocusActivity[]): Promise<SaveDayScriptResult> {
     return saveDayScript(scriptDate, document, expectedRevision, focusActivities)
+  }
+
+  async submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[]): Promise<SubmitDayScriptProgressResult> {
+    return submitDayScriptProgress(scriptDate, focusActivities)
   }
 
   async confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Promise<Array<{ taskId: string; entryId: string; blockId: string }>> {
