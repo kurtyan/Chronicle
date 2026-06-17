@@ -176,6 +176,80 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     expect(['auto', 'scroll']).toContain(fullMetrics.overflowY)
   })
 
+  test('focus editor persisted code blocks are not compressed by editor layout', async ({ page }) => {
+    const date = uniqueScriptDate(Date.now() % 20 + 52)
+    const codeLines = Array.from({ length: 12 }, (_, index) => `${index + 1}`).join('\n')
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: '10:00-10:20 @persisted-code ✅' }] },
+        { type: 'codeBlock', attrs: { language: null, softWrap: true }, content: [{ type: 'text', text: codeLines }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'after code block' }] },
+      ],
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    const code = editor.locator('pre code').first()
+    await expect(code).toContainText('12')
+    const metrics = await code.evaluate((element) => {
+      const editorRoot = element.ownerDocument.querySelector('.day-script-editor.ProseMirror')!
+      const pre = element.closest('pre')!
+      const preStyle = window.getComputedStyle(pre)
+      const codeStyle = window.getComputedStyle(element)
+      const verticalPadding = Number.parseFloat(preStyle.paddingTop) + Number.parseFloat(preStyle.paddingBottom)
+      const lineHeight = Number.parseFloat(codeStyle.lineHeight) || Number.parseFloat(codeStyle.fontSize) * 1.5
+      return {
+        editorDisplay: window.getComputedStyle(editorRoot).display,
+        height: pre.getBoundingClientRect().height,
+        scrollHeight: pre.scrollHeight,
+        overflowY: preStyle.overflowY,
+        visibleCodeLines: (pre.getBoundingClientRect().height - verticalPadding) / lineHeight,
+      }
+    })
+    expect(metrics.editorDisplay).toBe('block')
+    expect(metrics.visibleCodeLines).toBeGreaterThanOrEqual(9)
+    expect(metrics.visibleCodeLines).toBeLessThanOrEqual(10.6)
+    expect(metrics.scrollHeight).toBeGreaterThan(metrics.height)
+    expect(['auto', 'scroll']).toContain(metrics.overflowY)
+  })
+
+  test('completing a task from the focus page keeps it visible', async ({ page }) => {
+    const task = await createTask(page, `FocusComplete-${Date.now()}`)
+    await page.request.put(`/api/tasks/${task.id}`, {
+      data: { status: 'DOING' },
+    })
+    const date = uniqueScriptDate(Date.now() % 20 + 53)
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: '10:00-10:20 ' },
+          { type: 'text', text: `@${task.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }] },
+          { type: 'text', text: ' finish it' },
+        ],
+      }],
+    })
+
+    await page.goto(`/today?date=${date}&task=${encodeURIComponent(task.id)}&lang=en`)
+    await page.waitForLoadState('load')
+
+    await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
+    await expect(page.locator('.day-script-editor.ProseMirror')).toContainText(task.title)
+    await page.getByRole('button', { name: 'Complete' }).click()
+
+    await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
+    await expect(page.getByText('DONE')).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Redo' })).toBeVisible()
+    await expect(page.locator('.day-script-editor.ProseMirror')).toContainText(task.title)
+    await expect(page).toHaveURL(new RegExp(`task=${task.id}`))
+  })
+
   test('focus editor creates a new line after pasting a link with one Enter', async ({ page, context }) => {
     const date = uniqueScriptDate(Date.now() % 20 + 55)
 

@@ -19,9 +19,10 @@ function isHtmlEmpty(html: string): boolean {
 interface TaskDetailWorkspaceProps {
   highlightEntryId?: string
   showTrackingStatus?: boolean
+  keepCompletedTaskVisible?: boolean
 }
 
-export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true }: TaskDetailWorkspaceProps) {
+export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true, keepCompletedTaskVisible = false }: TaskDetailWorkspaceProps) {
   const { t } = useI18n()
   const {
     selectedTask, entries, entryLoading, activeTaskId, tasks,
@@ -74,7 +75,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     await updateTask(activeTaskId, { status: 'DOING' })
   }
 
-  const handleCompleteTask = async () => {
+  const handleCompleteTask = useCallback(async () => {
     if (!activeTaskId || isDraftActive) return
     if (!isHtmlEmpty(logContent)) {
       await submitEntry(activeTaskId, logContent.trim(), 'log')
@@ -84,8 +85,12 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
       localStorage.removeItem(`chronicle:entry_draft:${activeTaskId}:__new__`)
       setEditingEntryId(null)
     }
-    await markDone(activeTaskId)
-  }
+    if (keepCompletedTaskVisible) {
+      await updateTask(activeTaskId, { status: 'DONE' })
+    } else {
+      await markDone(activeTaskId)
+    }
+  }, [activeTaskId, clearLogContentDraft, isDraftActive, keepCompletedTaskVisible, logContent, markDone, submitEntry, updateTask])
 
   const handleContinueTask = async () => {
     if (!activeTaskId || isDraftActive) return
@@ -333,13 +338,12 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
         return Boolean(s.activeTaskId && s.activeTaskId !== '__draft__' && s.selectedTask?.status === 'DOING')
       },
       handler: () => {
-        const s = useTaskStore.getState()
-        markDone(s.activeTaskId!)
+        void handleCompleteTask()
       },
     }))
 
     return () => unregisters.forEach(fn => fn())
-  }, [])
+  }, [handleCompleteTask])
 
   if (!selectedTask) return null
 

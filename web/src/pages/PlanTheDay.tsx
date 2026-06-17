@@ -12,14 +12,25 @@ function roundUpTo5Minutes(date: Date): Date {
 }
 
 function minutesToTime(totalMinutes: number): string {
-  const h = Math.floor(totalMinutes / 60)
-  const m = totalMinutes % 60
+  const normalized = ((Math.trunc(totalMinutes) % (24 * 60)) + (24 * 60)) % (24 * 60)
+  const h = Math.floor(normalized / 60)
+  const m = normalized % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
-function timeToMinutes(time: string): number {
-  const [h, m] = time.split(':').map(Number)
+function timeToMinutes(time: string | null | undefined, fallback = 0): number {
+  if (!time) return fallback
+  const match = /^(\d{1,2}):(\d{2})$/.exec(time)
+  if (!match) return fallback
+  const h = Number(match[1])
+  const m = Number(match[2])
+  if (!Number.isFinite(h) || !Number.isFinite(m) || m < 0 || m > 59) return fallback
   return h * 60 + m
+}
+
+function safeMinutes(value: number | null | undefined, fallback = 30): number {
+  if (!Number.isFinite(value ?? NaN)) return fallback
+  return Math.max(5, Math.trunc(value!))
 }
 
 // Step 1: Edit Plan
@@ -225,13 +236,13 @@ function EditPlanStep({
     let order = 0
     for (const row of rows) {
       if (row.kind === 'subtask' && row.title?.trim()) {
-        items.push({ taskId: row.taskId, content: row.title.trim(), estimatedMinutes: row.minutes ?? 30, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
+        items.push({ taskId: row.taskId, content: row.title.trim(), estimatedMinutes: safeMinutes(row.minutes), estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
       } else if (row.kind === 'imported-plan' && row.detailId) {
-        items.push({ taskId: row.taskId, content: row.title?.trim() || '', estimatedMinutes: row.minutes ?? 30, estimatedStart: row.estimatedStart ?? '', estimatedEnd: row.estimatedEnd ?? '', sortOrder: order++, detailId: row.detailId })
+        items.push({ taskId: row.taskId, content: row.title?.trim() || '', estimatedMinutes: safeMinutes(row.minutes), estimatedStart: row.estimatedStart ?? '', estimatedEnd: row.estimatedEnd ?? '', sortOrder: order++, detailId: row.detailId })
       }
     }
     if (editValue.trim() && editTaskId) {
-      items.push({ taskId: editTaskId, content: editValue.trim(), estimatedMinutes: editMinutes ?? 30, estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
+      items.push({ taskId: editTaskId, content: editValue.trim(), estimatedMinutes: safeMinutes(editMinutes), estimatedStart: '', estimatedEnd: '', sortOrder: order++ })
     }
     if (items.length === 0) {
       setShowNextHint(true)
@@ -430,9 +441,10 @@ function ScheduleStep({
 
     return items.map((item) => {
       const start = minutesToTime(current)
-      const end = minutesToTime(current + item.estimatedMinutes)
-      const result = { ...item, estimatedStart: start, estimatedEnd: end }
-      current += item.estimatedMinutes
+      const estimatedMinutes = safeMinutes(item.estimatedMinutes)
+      const end = minutesToTime(current + estimatedMinutes)
+      const result = { ...item, estimatedMinutes, estimatedStart: start, estimatedEnd: end }
+      current += estimatedMinutes
       return result
     })
   })
@@ -515,7 +527,7 @@ function ScheduleStep({
     resizeState.current = {
       index,
       startY: e.clientY,
-      originalMin: item.estimatedMinutes,
+      originalMin: safeMinutes(item.estimatedMinutes),
       originalItems: [...scheduleItems],
     }
     setResizing(true)
@@ -580,9 +592,10 @@ function ScheduleStep({
       return next.map((item, i) => {
         if (i < index) return item
         const start = minutesToTime(current)
-        const end = minutesToTime(current + item.estimatedMinutes)
-        current += item.estimatedMinutes
-        return { ...item, estimatedStart: start, estimatedEnd: end }
+        const estimatedMinutes = safeMinutes(item.estimatedMinutes)
+        const end = minutesToTime(current + estimatedMinutes)
+        current += estimatedMinutes
+        return { ...item, estimatedMinutes, estimatedStart: start, estimatedEnd: end }
       })
     })
   }
@@ -629,7 +642,7 @@ function ScheduleStep({
               {/* Sub-task row — proportional height */}
               <div
                 className="border rounded-lg mx-2 bg-card flex flex-col overflow-hidden"
-                style={{ height: Math.max(40, item.estimatedMinutes * 3) + 'px' }}
+                style={{ height: Math.max(40, safeMinutes(item.estimatedMinutes) * 3) + 'px' }}
               >
                 <div className="flex items-center gap-3 flex-1 px-3 min-h-0">
                   <div className="flex-shrink-0 w-16 text-center">
@@ -640,7 +653,7 @@ function ScheduleStep({
                   <div className="flex-1 min-w-0">
                     <div className="text-sm truncate">{item.content}</div>
                     <div className="text-xs text-muted-foreground">
-                      {item.taskId} · {item.estimatedMinutes} min
+                      {item.taskId} · {safeMinutes(item.estimatedMinutes)} min
                     </div>
                   </div>
                   <button

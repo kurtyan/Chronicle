@@ -687,12 +687,6 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
       {mentionPopup}
 
       <style>{`
-        .day-script-editor {
-          display: flex;
-          flex-direction: column;
-          height: 100%;
-          min-height: 0;
-        }
         .day-script-scroll {
           height: 100%;
           min-height: 0;
@@ -724,6 +718,8 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           width: 100%;
         }
         .day-script-editor.tiptap.ProseMirror {
+          display: block;
+          height: auto;
           min-height: 100%;
           overflow: visible;
           padding: 1.5rem 1.25rem 4rem;

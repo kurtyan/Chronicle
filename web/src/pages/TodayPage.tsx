@@ -280,8 +280,8 @@ export function TodayPage() {
   }, [])
 
   useEffect(() => {
-    if (selectedTaskId) setActiveTask(selectedTaskId)
-  }, [selectedTaskId, setActiveTask])
+    if (selectedTaskId && selectedTaskId !== activeTaskId) void setActiveTask(selectedTaskId)
+  }, [activeTaskId, selectedTaskId, setActiveTask])
 
   useEffect(() => {
     if (explicitDateParam && explicitDateParam !== displayDate) {
@@ -676,7 +676,7 @@ export function TodayPage() {
 
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <TaskDetailWorkspace showTrackingStatus />
+            <TaskDetailWorkspace showTrackingStatus keepCompletedTaskVisible />
           </div>
         </section>
       </div>
@@ -809,7 +809,7 @@ export function TodayPage() {
                     todayScriptDate={todayScriptDate}
                     onChange={setPlanDraftDoc}
                     onSave={() => {}}
-                    onNavigateTask={(taskId) => setActiveTask(taskId)}
+                    onNavigateTask={() => {}}
                     onEditingTask={() => {}}
                   />
                 </div>

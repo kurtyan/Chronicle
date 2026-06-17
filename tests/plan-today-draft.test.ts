@@ -94,6 +94,113 @@ async function startMockLlm(summaries: string[], delayMs = 0) {
 }
 
 test.describe('Plan Today draft', () => {
+  test('applying a generated plan draft keeps Today page stable', async ({ page }) => {
+    const date = uniqueScriptDate(uniqueDayOffset() + 9)
+    const task = await createTask(page, `PlanPreviewMention-${Date.now()}`)
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text())
+    })
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '09:00-09:20 existing focus' }] }],
+    })
+    await page.route(`**/api/day-scripts/${date}/plan-today-draft`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          date,
+          document: {
+            type: 'doc',
+            content: [
+              {
+                type: 'paragraph',
+                content: [
+                  { type: 'text', text: '10:00-10:30 ' },
+                  { type: 'text', text: `@${task.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }] },
+                  { type: 'text', text: ' generated plan' },
+                ],
+              },
+              { type: 'paragraph', content: [{ type: 'text', text: 'Follow up without refreshing the page' }] },
+            ],
+          },
+          sources: { taskCount: 1, recommendedTaskCount: 0, carriedBlockCount: 0 },
+        }),
+      })
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+    await page.getByLabel('Plan Today with LLM task context').click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('generated plan')
+    await expect(page).not.toHaveURL(new RegExp(`task=${task.id}`))
+    await dialog.getByRole('button', { name: 'Apply' }).click()
+
+    await expect(dialog).toHaveCount(0)
+    const editor = page.locator('.day-script-editor.ProseMirror').first()
+    await expect(editor).toBeVisible()
+    await expect(editor).toContainText('existing focus')
+    await expect(editor).toContainText('generated plan')
+    await expect.poll(() => errors.filter((message) => !message.includes('NO_COLOR')).join('\n')).toBe('')
+  })
+
+  test('empty generated plan draft does not crash the Today page', async ({ page }) => {
+    const date = uniqueScriptDate(uniqueDayOffset() + 10)
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text())
+    })
+
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.route(`**/api/day-scripts/${date}/plan-today-draft`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          date,
+          document: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '' }] }] },
+          sources: { taskCount: 0, recommendedTaskCount: 0, carriedBlockCount: 0 },
+        }),
+      })
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+    await page.getByLabel('Plan Today with LLM task context').click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await expect.poll(() => errors.join('\n')).toBe('')
+  })
+
+  test('saving the Plan Today wizard returns to Today without refresh loops', async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text())
+    })
+
+    const task = await createTask(page, `WizardPlan-${Date.now()}`)
+    await page.goto('/today/plan?lang=en')
+    await page.waitForLoadState('load')
+
+    await page.getByRole('button', { name: new RegExp(task.title) }).first().click()
+    await page.getByPlaceholder(/Sub-task title/).fill('stabilize plan apply')
+    await page.getByRole('button', { name: /Next Step/ }).click()
+    await expect(page.getByRole('heading', { name: /Schedule Plan/ })).toBeVisible()
+    await page.getByRole('button', { name: /Save Plan/ }).click()
+
+    await expect(page).toHaveURL(/\/today(?:\?|$)/)
+    await expect(page.locator('.day-script-editor.ProseMirror').first()).toBeVisible()
+    await expect(page.getByText('No active focus block')).toBeVisible()
+    await page.waitForTimeout(500)
+    await expect.poll(() => errors.filter((message) => !message.includes('NO_COLOR')).join('\n')).toBe('')
+  })
+
   test('includes task next steps and yesterday unfinished focus blocks', async ({ page }) => {
     const baseDay = uniqueDayOffset()
     const today = uniqueScriptDate(baseDay + 1)
