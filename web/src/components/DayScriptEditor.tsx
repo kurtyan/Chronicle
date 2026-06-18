@@ -308,6 +308,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<ReturnType<typeof useEditor> | null>(null)
+  const mentionPopupRef = useRef<HTMLDivElement | null>(null)
   const mentionStateRef = useRef<MentionState>(null)
   const filteredTasksRef = useRef<Task[]>([])
   const tasksRef = useRef<Task[]>(tasks)
@@ -557,6 +558,11 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
     setSelectedMentionIndex(0)
   }, [mentionState?.query])
 
+  useEffect(() => {
+    const item = mentionPopupRef.current?.querySelector(`[data-mention-index="${selectedMentionIndex}"]`) as HTMLElement | null
+    item?.scrollIntoView({ block: 'nearest' })
+  }, [selectedMentionIndex, filteredTasks.length, mentionState?.query])
+
   function updateMentionState(nextEditor: NonNullable<typeof editor>) {
     const { state, view } = nextEditor
     const { from } = state.selection
@@ -715,6 +721,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
 
         return (
           <div
+            ref={mentionPopupRef}
             className="fixed max-h-72 w-80 overflow-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
             style={{ top, left, zIndex: 2147483647 }}
           >
@@ -723,6 +730,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
               return (
               <button
                 key={task.id}
+                data-mention-index={index}
                 className={`flex w-full items-start justify-between rounded-lg px-3 py-2 text-left ${index === selectedMentionIndex ? 'bg-primary/10 text-foreground' : 'hover:bg-muted'}`}
                 onPointerDown={(event) => {
                   event.preventDefault()
@@ -829,14 +837,12 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           border-radius: 0.5rem;
           margin: 0.5rem 0;
           min-height: calc((0.9rem * 1.5) + 1.3rem);
-          max-height: calc((0.9rem * 1.5 * 10) + 1.3rem);
           overflow-x: auto;
-          overflow-y: auto;
           padding: 0.65rem 1rem;
           display: block;
         }
         .day-script-editor.ProseMirror pre.day-script-code-block-scroll {
-          overflow-y: auto;
+          overflow-x: auto;
         }
         .day-script-editor.ProseMirror pre code {
           display: block;

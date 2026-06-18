@@ -139,7 +139,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const compositionJustEnded = useRef(false)
   const handleTitleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.nativeEvent as KeyboardEvent).isComposing) return
-    if (compositionJustEnded.current) { e.preventDefault(); return }
+    if (compositionJustEnded.current && e.key === 'Enter') { e.preventDefault(); return }
     if (e.key === 'Enter') handleTitleSave()
     if (e.key === 'Escape') setEditingTitle(false)
   }

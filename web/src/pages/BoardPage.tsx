@@ -703,7 +703,7 @@ export function BoardPage() {
 
   const handleDraftTitleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if ((event.nativeEvent as KeyboardEvent).isComposing) return
-    if (compositionJustEnded.current) {
+    if (compositionJustEnded.current && event.key === 'Enter') {
       event.preventDefault()
       return
     }

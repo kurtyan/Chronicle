@@ -1,8 +1,42 @@
 import CodeBlock from '@tiptap/extension-code-block'
 import { mergeAttributes } from '@tiptap/core'
-import type { NodeViewRendererProps } from '@tiptap/core'
+import type { Editor, NodeViewRendererProps } from '@tiptap/core'
+import { TextSelection } from '@tiptap/pm/state'
+
+function moveAcrossCodeBlockBoundary(editor: Editor, nodeName: string, direction: 'up' | 'down'): boolean {
+  const { state, view } = editor
+  const { selection } = state
+
+  if (!selection.empty) return false
+
+  const { $from } = selection
+  if ($from.parent.type.name !== nodeName) return false
+
+  const textBefore = $from.parent.textBetween(0, $from.parentOffset, '\n', '\n')
+  const textAfter = $from.parent.textBetween($from.parentOffset, $from.parent.content.size, '\n', '\n')
+  const isAtBoundaryLine = direction === 'up' ? !textBefore.includes('\n') : !textAfter.includes('\n')
+
+  if (!isAtBoundaryLine) return false
+
+  const boundaryPos = direction === 'up' ? $from.before() : $from.after()
+  const resolvedPos = state.doc.resolve(Math.max(0, Math.min(boundaryPos, state.doc.content.size)))
+  const nextSelection = TextSelection.near(resolvedPos, direction === 'up' ? -1 : 1)
+
+  if (nextSelection.$from.parent.type.name === nodeName) return false
+
+  view.dispatch(state.tr.setSelection(nextSelection).scrollIntoView())
+  return true
+}
 
 export const WrappedCodeBlock = CodeBlock.extend({
+  addKeyboardShortcuts() {
+    return {
+      ...this.parent?.(),
+      ArrowUp: () => moveAcrossCodeBlockBoundary(this.editor, this.name, 'up'),
+      ArrowDown: () => moveAcrossCodeBlockBoundary(this.editor, this.name, 'down'),
+    }
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
