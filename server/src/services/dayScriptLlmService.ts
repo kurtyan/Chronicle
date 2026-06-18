@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'crypto'
 import { getDb, getMetaValue } from '../db'
-import { getDayScript } from './dayScriptService'
+import { getCarryOverDayScriptBlocks, getDayScript, type DayScriptBlock, type DayScriptBlockSource } from './dayScriptService'
 import { getAllTasks, getSessionsForRange, getTaskEntries, type Task, type WorkSession } from './taskService'
 import {
   callChatCompletionsWithRaw,
@@ -77,16 +77,6 @@ function localDateAt(date: string, hour: number): Date {
   return new Date(year, month - 1, day, hour, 0, 0, 0)
 }
 
-function addDays(date: string, offset: number): string {
-  const [year, month, day] = date.split('-').map(Number)
-  const next = new Date(year, month - 1, day + offset)
-  return [
-    next.getFullYear(),
-    String(next.getMonth() + 1).padStart(2, '0'),
-    String(next.getDate()).padStart(2, '0'),
-  ].join('-')
-}
-
 function getStartOfDayOffset(): number {
   const offset = Number(getMetaValue('start_of_day_offset') ?? 5)
   if (!Number.isFinite(offset)) return 5
@@ -137,8 +127,23 @@ function makeTaskMention(task: Task): JsonNode {
   }
 }
 
-function paragraph(content: Array<JsonNode>): JsonNode {
-  return { type: 'paragraph', content }
+function sanitizeJsonNode(node: JsonNode): JsonNode | null {
+  if (node.type === 'text' && !node.text) return null
+  const content = node.content
+    ?.map(sanitizeJsonNode)
+    .filter((child): child is JsonNode => Boolean(child))
+  return {
+    ...node,
+    ...(content ? { content } : {}),
+  }
+}
+
+function paragraph(content: Array<JsonNode>, attrs?: Record<string, any>): JsonNode {
+  return {
+    type: 'paragraph',
+    ...(attrs ? { attrs } : {}),
+    content: content.map(sanitizeJsonNode).filter((node): node is JsonNode => Boolean(node)),
+  }
 }
 
 function text(value: string): JsonNode {
@@ -146,7 +151,8 @@ function text(value: string): JsonNode {
 }
 
 function normalizeDoc(nodes: JsonNode[]): JsonNode {
-  return { type: 'doc', content: nodes.length > 0 ? nodes : [paragraph([text('')])] }
+  const content = nodes.map(sanitizeJsonNode).filter((node): node is JsonNode => Boolean(node))
+  return { type: 'doc', content: content.length > 0 ? content : [paragraph([])] }
 }
 
 function carriedBlockHeader(block: { startTime: string; endTime: string; headerText: string; taskIds: string[] }, tasksById: Map<string, Task>): JsonNode[] {
@@ -165,6 +171,29 @@ function carriedBlockHeader(block: { startTime: string; endTime: string; headerT
     makeTaskMention(task),
     ...(remainder ? [text(` ${remainder}`)] : []),
   ]
+}
+
+function sourceAttrs(source: DayScriptBlockSource, origin?: Pick<DayScriptBlock, 'originScriptDate' | 'originBlockId' | 'originSource'>): Record<string, any> {
+  return {
+    source,
+    ...(origin?.originScriptDate ? { originScriptDate: origin.originScriptDate } : {}),
+    ...(origin?.originBlockId ? { originBlockId: origin.originBlockId } : {}),
+    ...(origin?.originSource ? { originSource: origin.originSource } : {}),
+  }
+}
+
+function normalizeActionText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function actionTextForTask(value: string, task?: Task): string {
+  const trimmed = value.trim()
+  if (!task) return trimmed
+  const mention = `@${task.title}`
+  const mentionIndex = trimmed.indexOf(mention)
+  if (mentionIndex < 0) return trimmed
+  const afterMention = trimmed.slice(mentionIndex + mention.length).trim()
+  return afterMention.replace(/^:/, '').trim() || trimmed
 }
 
 function extractDocText(node: JsonNode | null | undefined): string {
@@ -430,36 +459,71 @@ export function getDailySummaryCache(date: string): DailySummaryCacheResult | nu
 }
 
 export function buildPlanTodayDraft(date: string): PlanTodayDraftResult {
-  const yesterday = addDays(date, -1)
   const tasksById = new Map(getAllTasks().map((task) => [task.id, task]))
   const contexts = getTaskContexts(['PENDING', 'DOING'])
-  const nodes: JsonNode[] = []
+  const existingToday = getDayScript(date).blocks
+  const existingKeys = new Set(existingToday.flatMap((block) =>
+    block.taskIds.map((taskId) => `${taskId}:${normalizeActionText(actionTextForTask(block.headerText, tasksById.get(taskId)))}`)
+  ))
+  const carryNodes: JsonNode[] = []
+  const taskNodes: JsonNode[] = []
   let recommendedTaskCount = 0
   let taskCount = 0
+  let carriedBlockCount = 0
+  const actionKeys = new Set<string>(existingKeys)
+
+  const pushAction = (target: JsonNode[], taskId: string, textValue: string, node: JsonNode) => {
+    const key = `${taskId}:${normalizeActionText(actionTextForTask(textValue, tasksById.get(taskId)))}`
+    if (actionKeys.has(key)) return false
+    actionKeys.add(key)
+    target.push(node)
+    return true
+  }
+
+  const carryOverBlocks = getCarryOverDayScriptBlocks(date)
+  for (const block of carryOverBlocks) {
+    const taskId = block.taskIds[0]
+    if (!taskId) continue
+    const added = pushAction(
+      carryNodes,
+      taskId,
+      block.headerText,
+      paragraph(carriedBlockHeader(block, tasksById), sourceAttrs('carry_over', block))
+    )
+    if (added) {
+      carriedBlockCount += 1
+      if (block.progressText.trim()) carryNodes.push(paragraph([text(block.progressText.trim())]))
+    }
+  }
 
   for (const context of contexts) {
     const task = tasksById.get(context.taskId)
     if (!task) continue
+    if (context.summary.errorMessage || context.summary.stale) continue
     const explicit = context.summary.nextStep.trim()
     const recommended = context.summary.recommendedNextStep.trim()
     const action = explicit || recommended
     if (!action) continue
-    taskCount += 1
-    if (!explicit && recommended) recommendedTaskCount += 1
-    nodes.push(paragraph([
-      text(explicit ? 'Next step ' : 'Recommended '),
-      makeTaskMention(task),
-      text(`: ${action}`),
-    ]))
+    const added = pushAction(
+      taskNodes,
+      context.taskId,
+      `@${task.title}: ${action}`,
+      paragraph([
+        text(explicit ? 'Next step ' : 'Recommended '),
+        makeTaskMention(task),
+        text(`: ${action}`),
+      ], sourceAttrs(explicit ? 'task_next_step' : 'task_recommended_next_step'))
+    )
+    if (added) {
+      taskCount += 1
+      if (!explicit && recommended) recommendedTaskCount += 1
+    }
   }
 
-  const previous = getDayScript(yesterday)
-  const unfinished = previous.blocks.filter((block) => !block.completed)
-  if (nodes.length > 0 && unfinished.length > 0) nodes.push({ type: 'horizontalRule' })
-  for (const block of unfinished) {
-    nodes.push(paragraph(carriedBlockHeader(block, tasksById)))
-    if (block.progressText.trim()) nodes.push(paragraph([text(block.progressText.trim())]))
-  }
+  const nodes = [
+    ...carryNodes,
+    ...taskNodes,
+  ]
 
   return {
     date,
@@ -467,7 +531,7 @@ export function buildPlanTodayDraft(date: string): PlanTodayDraftResult {
     sources: {
       taskCount,
       recommendedTaskCount,
-      carriedBlockCount: unfinished.length,
+      carriedBlockCount,
     },
   }
 }

@@ -529,7 +529,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor).toContainText(progress)
   })
 
-  test('Cmd+S saves a focus draft without task logs and Ctrl+Enter submits unfinished progress', async ({ page }) => {
+  test('Cmd+S saves a focus draft and Ctrl+Enter ignores unfinished progress', async ({ page }) => {
     const task = await createTask(page, `SubmitFocus-${Date.now()}`)
     const date = uniqueScriptDate(Date.now() % 20 + 61)
     const progress = `unfinished submit progress ${Date.now()}`
@@ -550,9 +550,8 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect.poll(async () => (await getTaskEntries(page, task.id)).length).toBe(0)
 
     await page.keyboard.press('Control+Enter')
-    await expect.poll(async () => (await getTaskEntries(page, task.id)).length).toBe(1)
-    const entries = await getTaskEntries(page, task.id)
-    expect(entries[0].content).toContain(progress)
+    await page.waitForTimeout(500)
+    await expect.poll(async () => (await getTaskEntries(page, task.id)).length).toBe(0)
   })
 
   test('Daily Summary opens after flushing an unsaved focus draft', async ({ page }) => {

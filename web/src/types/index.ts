@@ -147,7 +147,13 @@ export interface DayScriptBlock {
   progressText: string
   completed: boolean
   taskIds: string[]
+  source: DayScriptBlockSource
+  originScriptDate: string | null
+  originBlockId: string | null
+  originSource: DayScriptBlockSource | null
 }
+
+export type DayScriptBlockSource = 'manual' | 'task_next_step' | 'task_recommended_next_step' | 'carry_over'
 
 export interface DayScriptDocument {
   scriptDate: string

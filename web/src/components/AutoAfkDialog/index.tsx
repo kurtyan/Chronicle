@@ -7,6 +7,8 @@ interface AutoAfkDialogProps {
   open: boolean
   reason: string
   triggeredAt: number
+  resolvedAt?: number | null
+  autoResumed?: boolean
   onClose: () => void
 }
 
@@ -18,7 +20,7 @@ function formatElapsed(ms: number): string {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
-export function AutoAfkDialog({ open, reason, triggeredAt, onClose }: AutoAfkDialogProps) {
+export function AutoAfkDialog({ open, reason, triggeredAt, resolvedAt, autoResumed, onClose }: AutoAfkDialogProps) {
   const { t } = useI18n()
   const [elapsed, setElapsed] = useState(0)
   const [userNote, setUserNote] = useState('')
@@ -30,23 +32,27 @@ export function AutoAfkDialog({ open, reason, triggeredAt, onClose }: AutoAfkDia
       setUserNote('')
       setElapsed(0)
       setSubmitting(false)
-      intervalRef.current = setInterval(() => {
+      if (resolvedAt) {
+        setElapsed(Math.max(0, resolvedAt - triggeredAt))
+      } else {
+        intervalRef.current = setInterval(() => {
+          setElapsed(Date.now() - triggeredAt)
+        }, 1000)
         setElapsed(Date.now() - triggeredAt)
-      }, 1000)
-      setElapsed(Date.now() - triggeredAt)
+      }
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [open, triggeredAt])
+  }, [open, triggeredAt, resolvedAt])
 
   const handleSubmit = async () => {
     setSubmitting(true)
     try {
       const { createAfkEvent } = await import('@/services/api')
-      await createAfkEvent(reason, triggeredAt, userNote.trim() || undefined)
+      await createAfkEvent(reason, triggeredAt, userNote.trim() || undefined, resolvedAt ?? undefined)
     } catch (err) {
       console.error('Failed to submit AFK event:', err)
     } finally {
@@ -85,6 +91,12 @@ export function AutoAfkDialog({ open, reason, triggeredAt, onClose }: AutoAfkDia
               {reason === 'screen-lock' ? 'Screen Lock' : reason === 'idle' ? 'Idle' : reason}
             </span>
           </div>
+
+          {autoResumed && (
+            <div className="rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-600">
+              Work session resumed automatically. You can still save an AFK note for the time away.
+            </div>
+          )}
 
           <textarea
             className="dialog-textarea"

@@ -1,6 +1,7 @@
 import { EditorContent, useEditor, type Editor } from '@tiptap/react'
 import { Extension, Node, mergeAttributes } from '@tiptap/core'
 import Link from '@tiptap/extension-link'
+import Paragraph from '@tiptap/extension-paragraph'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
@@ -23,6 +24,7 @@ interface DayScriptEditorProps {
   onSubmitProgress?: () => void
   onNavigateTask: (taskId: string) => void
   onEditingTask?: (activity: { taskId: string; blockKey: string }) => void
+  onContentError?: (message: string, error?: unknown) => void
 }
 
 const TaskLink = Link.extend({
@@ -34,6 +36,34 @@ const TaskLink = Link.extend({
         default: null,
         parseHTML: (element) => element.getAttribute('data-task-id'),
         renderHTML: (attributes) => attributes.taskId ? { 'data-task-id': attributes.taskId } : {},
+      },
+    }
+  },
+})
+
+const DayScriptParagraph = Paragraph.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      source: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-day-script-source'),
+        renderHTML: (attributes) => attributes.source ? { 'data-day-script-source': attributes.source } : {},
+      },
+      originScriptDate: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-day-script-origin-date'),
+        renderHTML: (attributes) => attributes.originScriptDate ? { 'data-day-script-origin-date': attributes.originScriptDate } : {},
+      },
+      originBlockId: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-day-script-origin-block-id'),
+        renderHTML: (attributes) => attributes.originBlockId ? { 'data-day-script-origin-block-id': attributes.originBlockId } : {},
+      },
+      originSource: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-day-script-origin-source'),
+        renderHTML: (attributes) => attributes.originSource ? { 'data-day-script-origin-source': attributes.originSource } : {},
       },
     }
   },
@@ -86,6 +116,25 @@ type LineMapping = {
   from: number
   to: number
   topIndex: number
+}
+
+function sanitizeEditorNode(node: any): any | null {
+  if (!node || typeof node !== 'object') return node
+  if (node.type === 'text' && !node.text) return null
+  const content = Array.isArray(node.content)
+    ? node.content.map(sanitizeEditorNode).filter(Boolean)
+    : undefined
+  return {
+    ...node,
+    ...(content ? { content } : {}),
+  }
+}
+
+function sanitizeEditorDocument(document: Record<string, any> | null | undefined): Record<string, any> {
+  const sanitized = sanitizeEditorNode(document)
+  if (!sanitized || sanitized.type !== 'doc') return { type: 'doc', content: [{ type: 'paragraph' }] }
+  const content = Array.isArray(sanitized.content) ? sanitized.content : []
+  return { ...sanitized, content: content.length > 0 ? content : [{ type: 'paragraph' }] }
 }
 
 const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem', 'codeBlock', 'horizontalRule', 'image', 'imageResize'])
@@ -253,7 +302,8 @@ function getMentionStateFromSelection(editor: Editor): MentionState {
   }
 }
 
-export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onChange, onSave, onSubmitProgress, onNavigateTask, onEditingTask }: DayScriptEditorProps) {
+export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onChange, onSave, onSubmitProgress, onNavigateTask, onEditingTask, onContentError }: DayScriptEditorProps) {
+  const safeValue = useMemo(() => sanitizeEditorDocument(value), [value])
   const [mentionState, setMentionState] = useState<MentionState>(null)
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -265,15 +315,17 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
   const suppressEditingNotificationRef = useRef(false)
   const suppressCursorNavigationRef = useRef(false)
   const lastCursorTaskIdRef = useRef<string | null>(null)
-  const currentValueRef = useRef(JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] }))
+  const currentValueRef = useRef(JSON.stringify(safeValue))
 
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4] },
         horizontalRule: {},
+        paragraph: false,
         codeBlock: false,
       }),
+      DayScriptParagraph,
       WrappedCodeBlock,
       NewTaskBadge,
       ChronicleImage.configure({
@@ -287,7 +339,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
         placeholder: '09:30-09:50 @Task title ✅',
       }),
     ],
-    content: value,
+    content: safeValue,
     editorProps: {
       attributes: {
         class: 'day-script-editor min-h-[360px] text-[15px] leading-7 outline-none',
@@ -423,21 +475,24 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
   editorRef.current = editor
 
   useEffect(() => {
-    const nextSerialized = JSON.stringify(value ?? { type: 'doc', content: [{ type: 'paragraph' }] })
+    const nextSerialized = JSON.stringify(safeValue)
     if (!editor || nextSerialized === currentValueRef.current) return
     suppressEditingNotificationRef.current = true
     suppressCursorNavigationRef.current = true
     try {
-      editor.commands.setContent(value)
+      editor.commands.setContent(safeValue)
       currentValueRef.current = nextSerialized
       scheduleApplyBlockClasses(editor)
+    } catch (error) {
+      onContentError?.('Focus editor failed to load the supplied document.', error)
+      console.error('Failed to load Day Script editor content:', error)
     } finally {
       suppressEditingNotificationRef.current = false
       window.setTimeout(() => {
         suppressCursorNavigationRef.current = false
       }, 0)
     }
-  }, [editor, value, scriptDate])
+  }, [editor, safeValue, scriptDate])
 
   useEffect(() => {
     if (!editor) return

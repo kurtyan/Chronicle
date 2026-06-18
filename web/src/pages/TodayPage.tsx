@@ -4,8 +4,8 @@ import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Maximize2, Plus,
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
-import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, generateDailySummaryInBackground, getDayScript, saveDayScript, submitDayScriptProgress } from '@/services/api'
-import type { DailySummaryResult, DayScriptBlock, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
+import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress } from '@/services/api'
+import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 import { dailySummarySourceKey, useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
@@ -24,6 +24,10 @@ type NextStepAction = {
   taskTitle: string
   taskStatus: string
   sourceType: NextStepSourceType
+  blockSource: DayScriptBlockSource
+  originScriptDate: string | null
+  originBlockId: string | null
+  originSource: DayScriptBlockSource | null
   text: string
   state: 'updating' | 'stale' | 'failed' | 'current' | 'pending'
   lastActivityAt: number | null
@@ -114,9 +118,7 @@ function appendDocument(base: Record<string, any>, addition: Record<string, any>
   const addContent = Array.isArray(addition?.content) ? addition.content : []
   if (addContent.length === 0) return base
   if (isEmptyDoc(base)) return { type: 'doc', content: addContent }
-  const lastNode = baseContent[baseContent.length - 1]
-  const separator = lastNode?.type === 'horizontalRule' ? [] : [{ type: 'horizontalRule' }]
-  return { type: 'doc', content: [...baseContent, ...separator, ...addContent] }
+  return { type: 'doc', content: [...baseContent, ...addContent] }
 }
 
 function getBlockTitle(block: DayScriptBlock, tasksById: Map<string, Task>): string {
@@ -130,6 +132,22 @@ function getBlockActionText(block: DayScriptBlock): string {
   const progress = block.progressText.trim()
   if (header && progress) return `${header}: ${progress}`
   return header || progress || `${block.startTime}-${block.endTime}`
+}
+
+function normalizeActionText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function actionTextForTask(text: string, taskTitle: string): string {
+  const trimmed = text.trim()
+  const mention = `@${taskTitle}`
+  const mentionIndex = trimmed.indexOf(mention)
+  if (mentionIndex >= 0) {
+    const afterMention = trimmed.slice(mentionIndex + mention.length).trim().replace(/^:/, '').trim()
+    if (afterMention) return afterMention
+  }
+  const colonIndex = trimmed.indexOf(':')
+  return colonIndex >= 0 ? trimmed.slice(colonIndex + 1).trim() : trimmed
 }
 
 function getActionState(context: TaskProgressContext, updatingIds: Set<string>): NextStepAction['state'] {
@@ -351,8 +369,9 @@ export function TodayPage() {
   const [planDraft, setPlanDraft] = useState<PlanTodayDraftResult | null>(null)
   const [planDraftDoc, setPlanDraftDoc] = useState<Record<string, any> | null>(null)
   const [planDraftError, setPlanDraftError] = useState('')
+  const [planDraftPreviewError, setPlanDraftPreviewError] = useState('')
   const [planDraftLoading, setPlanDraftLoading] = useState(false)
-  const [carryOverScript, setCarryOverScript] = useState<DayScriptDocument | null>(null)
+  const [carryOverBlocks, setCarryOverBlocks] = useState<DayScriptBlock[]>([])
   const [nextStepsMaximized, setNextStepsMaximized] = useState(false)
   const backgroundTasks = useBackgroundTaskStore((s) => s.tasks)
   const loadBackgroundTasks = useBackgroundTaskStore((s) => s.loadTasks)
@@ -503,12 +522,12 @@ export function TodayPage() {
 
   useEffect(() => {
     let cancelled = false
-    getDayScript(dateOffset(displayDate, -1))
+    getCarryOverDayScriptBlocks(displayDate)
       .then((data) => {
-        if (!cancelled) setCarryOverScript(data)
+        if (!cancelled) setCarryOverBlocks(data)
       })
       .catch(() => {
-        if (!cancelled) setCarryOverScript(null)
+        if (!cancelled) setCarryOverBlocks([])
       })
     return () => {
       cancelled = true
@@ -533,13 +552,27 @@ export function TodayPage() {
     const tasksById = new Map(tasks.map((task) => [task.id, task]))
     const currentBlocks = script?.blocks ?? []
     const currentFocusTaskIds = new Set(currentBlocks.flatMap((block) => block.taskIds))
-    const actionIds = new Set<string>()
     const actions: NextStepAction[] = []
+    const actionIndexes = new Map<string, number>()
+    const sourceRank: Record<NextStepSourceType, number> = {
+      now: 0,
+      focus: 1,
+      carry_over: 2,
+      explicit: 3,
+      recommended: 4,
+    }
 
     const pushAction = (action: NextStepAction) => {
       if (!action.text.trim()) return
-      if (actionIds.has(action.id)) return
-      actionIds.add(action.id)
+      const semanticKey = action.taskId ? `${action.taskId}:${normalizeActionText(actionTextForTask(action.text, action.taskTitle))}` : action.id
+      const existingIndex = actionIndexes.get(semanticKey)
+      if (existingIndex !== undefined) {
+        if (sourceRank[action.sourceType] < sourceRank[actions[existingIndex].sourceType]) {
+          actions[existingIndex] = action
+        }
+        return
+      }
+      actionIndexes.set(semanticKey, actions.length)
       actions.push(action)
     }
 
@@ -554,6 +587,10 @@ export function TodayPage() {
         taskTitle: task?.title ?? getBlockTitle(activeBlock, tasksById),
         taskStatus: task?.status ?? 'FOCUS',
         sourceType: 'now',
+        blockSource: activeBlock.source,
+        originScriptDate: activeBlock.originScriptDate,
+        originBlockId: activeBlock.originBlockId,
+        originSource: activeBlock.originSource,
         text: getBlockActionText(activeBlock),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -573,6 +610,10 @@ export function TodayPage() {
         taskTitle: task?.title ?? getBlockTitle(block, tasksById),
         taskStatus: task?.status ?? 'FOCUS',
         sourceType: 'focus',
+        blockSource: block.source,
+        originScriptDate: block.originScriptDate,
+        originBlockId: block.originBlockId,
+        originSource: block.originSource,
         text: getBlockActionText(block),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -595,12 +636,16 @@ export function TodayPage() {
         timeLabel: undefined,
         inFocus: currentFocusTaskIds.has(context.taskId) || insertedNextStepIds.has(`explicit:${context.taskId}`) || insertedNextStepIds.has(`recommended:${context.taskId}`),
         canPlan: true,
-      } satisfies Omit<NextStepAction, 'id' | 'sourceType' | 'text'>
+        originScriptDate: null,
+        originBlockId: null,
+        originSource: null,
+      } satisfies Omit<NextStepAction, 'id' | 'sourceType' | 'blockSource' | 'text'>
       if (nextStep) {
         pushAction({
           ...common,
           id: `explicit:${context.taskId}`,
           sourceType: 'explicit',
+          blockSource: 'task_next_step',
           text: nextStep,
         })
       } else if (recommended) {
@@ -608,12 +653,13 @@ export function TodayPage() {
           ...common,
           id: `recommended:${context.taskId}`,
           sourceType: 'recommended',
+          blockSource: 'task_recommended_next_step',
           text: recommended,
         })
       }
     }
 
-    for (const block of carryOverScript?.blocks ?? []) {
+    for (const block of carryOverBlocks) {
       if (block.completed) continue
       const taskId = block.taskIds[0] ?? null
       if (taskId && currentFocusTaskIds.has(taskId)) continue
@@ -624,24 +670,23 @@ export function TodayPage() {
         taskTitle: task?.title ?? getBlockTitle(block, tasksById),
         taskStatus: task?.status ?? 'FOCUS',
         sourceType: 'carry_over',
+        blockSource: 'carry_over',
+        originScriptDate: block.originScriptDate,
+        originBlockId: block.originBlockId,
+        originSource: block.originSource,
         text: getBlockActionText(block),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
-        timeLabel: block.startTime && block.endTime ? `${block.startTime}-${block.endTime}` : undefined,
+        timeLabel: block.originScriptDate || (block.startTime && block.endTime)
+          ? [block.originScriptDate ? `from ${block.originScriptDate}` : '', block.startTime && block.endTime ? `${block.startTime}-${block.endTime}` : ''].filter(Boolean).join(' · ')
+          : undefined,
         inFocus: false,
         canPlan: Boolean(taskId),
       })
     }
 
-    const sourceOrder: Record<NextStepSourceType, number> = {
-      now: 0,
-      focus: 1,
-      explicit: 2,
-      recommended: 3,
-      carry_over: 4,
-    }
-    return actions.sort((a, b) => sourceOrder[a.sourceType] - sourceOrder[b.sourceType] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
-  }, [carryOverScript, displayDate, insertedNextStepIds, pendingTasks, script, taskContexts, taskSummaryUpdating, tasks, todayScriptDate])
+    return actions.sort((a, b) => sourceRank[a.sourceType] - sourceRank[b.sourceType] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+  }, [carryOverBlocks, displayDate, insertedNextStepIds, pendingTasks, script, taskContexts, taskSummaryUpdating, tasks, todayScriptDate])
 
   function appendNextStep(action: NextStepAction) {
     if (!script) return
@@ -657,6 +702,12 @@ export function TodayPage() {
         : 'Next step '
     const nextNode = {
       type: 'paragraph',
+      attrs: {
+        source: action.blockSource,
+        ...(action.originScriptDate ? { originScriptDate: action.originScriptDate } : {}),
+        ...(action.originBlockId ? { originBlockId: action.originBlockId } : {}),
+        ...(action.originSource ? { originSource: action.originSource } : {}),
+      },
       content: [
         { type: 'text', text: prefix },
         { type: 'text', text: `@${action.taskTitle}`, marks: [{ type: 'link', attrs: linkAttrs }] },
@@ -878,6 +929,7 @@ export function TodayPage() {
   async function handlePlanToday() {
     setPlanDraftLoading(true)
     setPlanDraftError('')
+    setPlanDraftPreviewError('')
     try {
       if (scriptDirtyRef.current) {
         const saved = await saveDraft()
@@ -1212,22 +1264,29 @@ export function TodayPage() {
           setPlanDraft(null)
           setPlanDraftDoc(null)
           setPlanDraftError('')
+          setPlanDraftPreviewError('')
         }
       }}>
-        <DialogContent className="max-h-[88vh] sm:max-w-5xl">
+        <DialogContent className="h-[88vh] max-h-[88vh] sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Plan Today</DialogTitle>
           </DialogHeader>
-          <DialogBody className="min-h-0 overflow-y-auto">
+          <DialogBody className="min-h-0 overflow-hidden">
             {planDraftError ? (
               <div className="text-sm text-destructive">{planDraftError}</div>
             ) : planDraftDoc ? (
-              <div className="space-y-3">
-                <div className="text-xs text-muted-foreground">
+              <div className="flex h-full min-h-0 flex-col gap-3">
+                <div className="shrink-0 text-xs text-muted-foreground">
                   {planDraft?.sources.taskCount ?? 0} task lines · {planDraft?.sources.recommendedTaskCount ?? 0} recommendations · {planDraft?.sources.carriedBlockCount ?? 0} carried focus lines
                 </div>
-                <div className="min-h-[520px] rounded-lg border border-border">
+                {planDraftPreviewError ? (
+                  <div className="shrink-0 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                    {planDraftPreviewError}
+                  </div>
+                ) : null}
+                <div className="min-h-0 flex-1">
                   <DayScriptEditor
+                    key={`plan-draft:${displayDate}:${planDraft?.sources.taskCount ?? 0}:${planDraft?.sources.carriedBlockCount ?? 0}`}
                     value={planDraftDoc}
                     tasks={pendingTasks}
                     scriptDate={displayDate}
@@ -1236,6 +1295,10 @@ export function TodayPage() {
                     onSave={() => {}}
                     onNavigateTask={() => {}}
                     onEditingTask={() => {}}
+                    onContentError={(message, error) => {
+                      console.warn('Plan Today preview load failed:', error ?? message)
+                      setPlanDraftPreviewError(message)
+                    }}
                   />
                 </div>
               </div>
@@ -1246,6 +1309,7 @@ export function TodayPage() {
               setPlanDraft(null)
               setPlanDraftDoc(null)
               setPlanDraftError('')
+              setPlanDraftPreviewError('')
             }}>
               Cancel
             </button>

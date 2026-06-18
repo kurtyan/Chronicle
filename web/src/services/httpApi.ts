@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -144,6 +144,11 @@ export const httpApi: ApiInterface = {
     return data
   },
 
+  async resumeTaskFromAfk(taskId: string, startedAt: number): Promise<WorkSession> {
+    const { data } = await (await withClientId()).post<WorkSession>(`/api/tasks/${taskId}/resume-from-afk`, { startedAt })
+    return data
+  },
+
   async doAfk(): Promise<void> {
     await (await withClientId()).post('/api/afk')
   },
@@ -239,8 +244,8 @@ export const httpApi: ApiInterface = {
   },
 
   // AFK Events
-  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
-    const { data } = await (await withClientId()).post<AfkEvent>('/api/afk-events', { reason, triggeredAt, userNote })
+  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt?: number): Promise<AfkEvent> {
+    const { data } = await (await withClientId()).post<AfkEvent>('/api/afk-events', { reason, triggeredAt, userNote, submittedAt })
     return data
   },
 
@@ -272,6 +277,11 @@ export const httpApi: ApiInterface = {
 
   async getDayScript(date: string): Promise<DayScriptDocument> {
     const { data } = await (await withClientId()).get<DayScriptDocument>(`/api/day-scripts/${encodeURIComponent(date)}`)
+    return data
+  },
+
+  async getCarryOverDayScriptBlocks(date: string): Promise<DayScriptBlock[]> {
+    const { data } = await (await withClientId()).get<DayScriptBlock[]>(`/api/day-scripts/${encodeURIComponent(date)}/carry-over-blocks`)
     return data
   },
 

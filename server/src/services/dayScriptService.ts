@@ -19,7 +19,13 @@ export interface DayScriptBlock {
   progressHtml?: string
   completed: boolean
   taskIds: string[]
+  source: DayScriptBlockSource
+  originScriptDate: string | null
+  originBlockId: string | null
+  originSource: DayScriptBlockSource | null
 }
+
+export type DayScriptBlockSource = 'manual' | 'task_next_step' | 'task_recommended_next_step' | 'carry_over'
 
 export interface DayScriptDocument {
   scriptDate: string
@@ -88,6 +94,7 @@ interface ParsedLine {
   taskIds: string[]
   html: string
   newTaskBadge: boolean
+  attrs?: Record<string, any>
 }
 
 interface ParsedBlock {
@@ -103,6 +110,10 @@ interface ParsedBlock {
   completed: boolean
   taskIds: string[]
   newTaskCreated: boolean
+  source: DayScriptBlockSource
+  originScriptDate: string | null
+  originBlockId: string | null
+  originSource: DayScriptBlockSource | null
 }
 
 type RichDayScriptBlock = DayScriptBlock & {
@@ -125,6 +136,7 @@ const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
 const TIME_HEADER_RE = new RegExp(`^(${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN})(?:\\s+|$)(.*)$`)
 const TIME_LIKE_RE = new RegExp(`^${TIME_VALUE_PATTERN}\\s*-\\s*${TIME_VALUE_PATTERN}`)
 const NEW_TASK_HEADER_RE = new RegExp(`^(?:((${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN}))(\\s+))?new task\\s+(.+?)\\s*(✅)?\\s*$`, 'i')
+const BLOCK_SOURCES: DayScriptBlockSource[] = ['manual', 'task_next_step', 'task_recommended_next_step', 'carry_over']
 
 function queryAll(sql: string, params: any[] = []): any[] {
   return getDb().prepare(sql).all(...params)
@@ -159,12 +171,12 @@ function collectBlockLines(node: JsonNode, lines: ParsedLine[]): void {
   const type = node.type ?? ''
 
   if (type === 'horizontalRule') {
-    lines.push({ text: '----', taskIds: [], html: '<hr>', newTaskBadge: false })
+    lines.push({ text: '----', taskIds: [], html: '<hr>', newTaskBadge: false, attrs: node.attrs })
     return
   }
 
   if (type === 'image' || type === 'imageResize') {
-    lines.push({ text: '', taskIds: [], html: renderProgressLineHtml(node), newTaskBadge: false })
+    lines.push({ text: '', taskIds: [], html: renderProgressLineHtml(node), newTaskBadge: false, attrs: node.attrs })
     return
   }
 
@@ -172,6 +184,7 @@ function collectBlockLines(node: JsonNode, lines: ParsedLine[]): void {
     const line = collectInlineText(node.content ?? [])
     line.newTaskBadge = hasNewTaskBadge(node.content ?? [])
     line.html = renderProgressLineHtml(node)
+    line.attrs = node.attrs
     lines.push(line)
     return
   }
@@ -352,6 +365,33 @@ function timeToMinutes(value: string): number | null {
 
 function normalizeProgress(progressText: string): string {
   return progressText.replace(/\r\n/g, '\n').trim()
+}
+
+function normalizeActionText(text: string): string {
+  return normalizeProgress(text).replace(/\s+/g, ' ').toLowerCase()
+}
+
+function normalizeBlockSource(value: unknown): DayScriptBlockSource | null {
+  return typeof value === 'string' && (BLOCK_SOURCES as string[]).includes(value)
+    ? value as DayScriptBlockSource
+    : null
+}
+
+function inferLegacyBlockSource(headerText: string): DayScriptBlockSource {
+  if (/^recommended\s+@.+?:/i.test(headerText)) return 'task_recommended_next_step'
+  if (/^next step\s+@.+?:/i.test(headerText)) return 'task_next_step'
+  if (/^carry[- ]over\s+@.+?:/i.test(headerText)) return 'carry_over'
+  return 'manual'
+}
+
+function sourceFromLine(line: ParsedLine, headerText: string): DayScriptBlockSource {
+  return normalizeBlockSource(line.attrs?.source)
+    ?? normalizeBlockSource(line.attrs?.dayScriptSource)
+    ?? inferLegacyBlockSource(headerText)
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
 function escapeHtml(text: string): string {
@@ -543,11 +583,30 @@ function buildLogHtml(
   return `${headerBody}${body}`
 }
 
-function blockSyncText(block: Pick<RichDayScriptBlock, 'headerRemainder' | 'progressText'>): string {
+function buildBlockLogHtml(block: RichDayScriptBlock, progress: string, progressHtml?: string, includeHeaderRemainder = true): string {
+  if (block.source !== 'manual') return progressHtml || progressToHtml(progress)
+  return buildLogHtml('', block, progress, progressHtml, includeHeaderRemainder)
+}
+
+function blockCompletionFallback(block: Pick<RichDayScriptBlock, 'source' | 'headerRemainder'>): string {
+  const action = normalizeProgress(block.headerRemainder ?? '').replace(/^[:：]\s*/, '')
+  if (block.source === 'carry_over') return `完成延续事项：${action || '未命名事项'}`
+  return `完成计划项：${action || '未命名事项'}`
+}
+
+function blockSyncText(block: Pick<RichDayScriptBlock, 'source' | 'headerRemainder' | 'progressText'>): string {
+  if (block.source !== 'manual') {
+    const body = normalizeProgress(block.progressText)
+    return body || blockCompletionFallback(block)
+  }
   return normalizeProgress([block.headerRemainder, block.progressText].filter((part) => part?.trim()).join('\n'))
 }
 
-function blockSyncHtml(block: Pick<RichDayScriptBlock, 'headerRemainderHtml' | 'progressHtml' | 'progressLines'>): string {
+function blockSyncHtml(block: Pick<RichDayScriptBlock, 'source' | 'headerRemainder' | 'headerRemainderHtml' | 'progressHtml' | 'progressLines'>): string {
+  if (block.source !== 'manual') {
+    const body = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
+    return body || progressToHtml(blockCompletionFallback(block))
+  }
   return `${block.headerRemainderHtml ?? ''}${block.progressHtml || progressLinesToHtml(block.progressLines ?? [])}`
 }
 
@@ -577,6 +636,16 @@ function plannedTimestamp(scriptDate: string, time: string): number {
   const startOfDayOffset = getStartOfDayOffset()
   const naturalDayOffset = startOfDayOffset > 0 && hour < startOfDayOffset ? 1 : 0
   return new Date(year, month - 1, day + naturalDayOffset, hour, minute, 0, 0).getTime()
+}
+
+function addDays(date: string, offset: number): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const next = new Date(year, month - 1, day + offset)
+  return [
+    next.getFullYear(),
+    String(next.getMonth() + 1).padStart(2, '0'),
+    String(next.getDate()).padStart(2, '0'),
+  ].join('-')
 }
 
 function minutesBetween(start: number, end: number): number {
@@ -719,6 +788,7 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
       const bodyText = (header?.bodyText ?? visible).trim()
       const taskIds = line.taskIds.filter((taskId) => Boolean(getTaskById(taskId)))
       const headerRemainder = extractHeaderRemainder(bodyText, taskIds[0])
+      const source = sourceFromLine(line, bodyText)
       current = {
         sortOrder: blocks.length,
         startTime,
@@ -732,6 +802,10 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
         completed: bodyText.includes('✅'),
         taskIds,
         newTaskCreated: line.newTaskBadge,
+        source,
+        originScriptDate: nullableString(line.attrs?.originScriptDate),
+        originBlockId: nullableString(line.attrs?.originBlockId),
+        originSource: normalizeBlockSource(line.attrs?.originSource),
       }
       blocks.push(current)
       return
@@ -743,7 +817,7 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
     }
 
     if (!current) {
-      if (visible.trim() || line.html) validationErrors.push({ lineIndex, message: 'Progress line must follow a focus line.' })
+      if (!isTrailingBlankProgressLine(line)) validationErrors.push({ lineIndex, message: 'Progress line must follow a focus line.' })
       return
     }
 
@@ -792,6 +866,10 @@ function getExistingScript(scriptDate: string): DayScriptDocument | null {
       progressText: rowItem.progress_text,
       completed: Boolean(rowItem.completed),
       taskIds: rowItem.task_id ? [rowItem.task_id] : [],
+      source: normalizeBlockSource(rowItem.source) ?? 'manual',
+      originScriptDate: rowItem.origin_script_date ?? null,
+      originBlockId: rowItem.origin_block_id ?? null,
+      originSource: normalizeBlockSource(rowItem.origin_source),
     })
   }
 
@@ -809,6 +887,44 @@ function getExistingScript(scriptDate: string): DayScriptDocument | null {
     blocks: [...blockMap.values()],
     updatedAt: row.updated_at,
   }
+}
+
+function blockLineage(block: Pick<DayScriptBlock, 'id' | 'source' | 'originScriptDate' | 'originBlockId' | 'originSource'>, scriptDate: string): {
+  originScriptDate: string
+  originBlockId: string
+  originSource: DayScriptBlockSource
+} {
+  return {
+    originScriptDate: block.originScriptDate ?? scriptDate,
+    originBlockId: block.originBlockId ?? block.id,
+    originSource: block.originSource ?? block.source,
+  }
+}
+
+function rowsToBlocks(rows: any[]): DayScriptBlock[] {
+  const blockMap = new Map<string, DayScriptBlock>()
+  for (const rowItem of rows) {
+    const existing = blockMap.get(rowItem.id)
+    if (existing) {
+      if (rowItem.task_id) existing.taskIds.push(rowItem.task_id)
+      continue
+    }
+    blockMap.set(rowItem.id, {
+      id: rowItem.id,
+      sortOrder: rowItem.sort_order,
+      startTime: rowItem.start_time,
+      endTime: rowItem.end_time,
+      headerText: rowItem.header_text,
+      progressText: rowItem.progress_text,
+      completed: Boolean(rowItem.completed),
+      taskIds: rowItem.task_id ? [rowItem.task_id] : [],
+      source: normalizeBlockSource(rowItem.source) ?? 'manual',
+      originScriptDate: rowItem.origin_script_date ?? null,
+      originBlockId: rowItem.origin_block_id ?? null,
+      originSource: normalizeBlockSource(rowItem.origin_source),
+    })
+  }
+  return [...blockMap.values()]
 }
 
 function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBlock[]): RichDayScriptBlock[] {
@@ -836,6 +952,10 @@ function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBl
       completed: block.completed,
       taskIds: block.taskIds,
       newTaskCreated: block.newTaskCreated,
+      source: block.source,
+      originScriptDate: block.originScriptDate ?? existing?.originScriptDate ?? null,
+      originBlockId: block.originBlockId ?? existing?.originBlockId ?? null,
+      originSource: block.originSource ?? existing?.originSource ?? null,
     }
   })
 }
@@ -862,8 +982,9 @@ function upsertBlocks(scriptDate: string, blocks: DayScriptBlock[], now: number)
   for (const block of blocks) {
     run(
       `INSERT INTO day_script_blocks (
-        id, script_date, sort_order, start_time, end_time, header_text, progress_text, completed, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, script_date, sort_order, start_time, end_time, header_text, progress_text, completed,
+        source, origin_script_date, origin_block_id, origin_source, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         script_date = excluded.script_date,
         sort_order = excluded.sort_order,
@@ -872,6 +993,10 @@ function upsertBlocks(scriptDate: string, blocks: DayScriptBlock[], now: number)
         header_text = excluded.header_text,
         progress_text = excluded.progress_text,
         completed = excluded.completed,
+        source = excluded.source,
+        origin_script_date = excluded.origin_script_date,
+        origin_block_id = excluded.origin_block_id,
+        origin_source = excluded.origin_source,
         updated_at = excluded.updated_at`,
       [
         block.id,
@@ -882,6 +1007,10 @@ function upsertBlocks(scriptDate: string, blocks: DayScriptBlock[], now: number)
         block.headerText,
         block.progressText,
         block.completed ? 1 : 0,
+        block.source,
+        block.originScriptDate,
+        block.originBlockId,
+        block.originSource,
         now,
         now,
       ]
@@ -917,8 +1046,6 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
 
   const progress = blockSyncText(block)
   const progressHtml = blockSyncHtml(block)
-  const bodyProgress = normalizeProgress(block.progressText)
-  const bodyProgressHtml = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
   if (!progress && !progressHtml) return { createdLogs, executionRecords, conflicts }
 
   for (const taskId of block.taskIds) {
@@ -929,7 +1056,7 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
     if (block.newTaskCreated && !existing) continue
 
     if (!existing) {
-      const entry = createTaskEntry(taskId, buildLogHtml(scriptDate, block, bodyProgress, bodyProgressHtml), 'log')
+      const entry = createTaskEntry(taskId, buildBlockLogHtml(block, progress, progressHtml), 'log')
       run(
         'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
         [block.id, taskId, progress, progressHtml, entry.id, completedAt]
@@ -957,7 +1084,7 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
         )
         continue
       }
-      const entry = createTaskEntry(taskId, buildLogHtml(scriptDate, block, delta, deltaHtml, false), 'log')
+      const entry = createTaskEntry(taskId, buildBlockLogHtml(block, delta, deltaHtml, false), 'log')
       run(
         'UPDATE day_script_progress_syncs SET synced_progress = ?, synced_progress_html = ?, last_entry_id = ?, updated_at = ? WHERE block_id = ? AND task_id = ?',
         [progress, progressHtml, entry.id, completedAt, block.id, taskId]
@@ -990,6 +1117,71 @@ export function getDayScript(scriptDate: string): DayScriptDocument {
     blocks: [],
     updatedAt: 0,
   }
+}
+
+export function getCarryOverDayScriptBlocks(scriptDate: string, windowDays = 7): DayScriptBlock[] {
+  const startDate = addDays(scriptDate, -windowDays)
+  const todayBlocks = getExistingScript(scriptDate)?.blocks ?? []
+  const todayLineages = new Set(todayBlocks.map((block) => {
+    const lineage = blockLineage(block, scriptDate)
+    return `${lineage.originScriptDate}:${lineage.originBlockId}`
+  }))
+  const todayTaskText = new Set(todayBlocks.flatMap((block) =>
+    block.taskIds.map((taskId) => `${taskId}:${normalizeActionText(block.headerText)}`)
+  ))
+
+  const rows = queryAll(
+    `SELECT b.*, bt.task_id
+     FROM day_script_blocks b
+     JOIN day_script_block_tasks bt ON bt.block_id = b.id
+     JOIN tasks t ON t.id = bt.task_id
+     WHERE b.script_date >= ?
+       AND b.script_date < ?
+       AND b.completed = 0
+       AND t.status IN ('PENDING', 'DOING')
+     ORDER BY b.script_date ASC, b.sort_order ASC`,
+    [startDate, scriptDate]
+  )
+  const blocks = rowsToBlocks(rows)
+  const latestByLineage = new Map<string, DayScriptBlock & { scriptDate: string }>()
+
+  for (const block of blocks) {
+    const row = rows.find((item) => item.id === block.id)
+    const blockDate = row?.script_date as string
+    const lineage = blockLineage(block, blockDate)
+    const lineageKey = `${lineage.originScriptDate}:${lineage.originBlockId}`
+    if (todayLineages.has(lineageKey)) continue
+    if (block.taskIds.some((taskId) => todayTaskText.has(`${taskId}:${normalizeActionText(block.headerText)}`))) continue
+
+    const completedLater = queryOne(
+      `SELECT 1
+       FROM day_script_blocks
+       WHERE script_date > ?
+         AND script_date < ?
+         AND completed = 1
+         AND COALESCE(origin_script_date, script_date) = ?
+         AND COALESCE(origin_block_id, id) = ?
+       LIMIT 1`,
+      [blockDate, scriptDate, lineage.originScriptDate, lineage.originBlockId]
+    )
+    if (completedLater) continue
+
+    const existing = latestByLineage.get(lineageKey)
+    if (!existing || blockDate > existing.scriptDate || (blockDate === existing.scriptDate && block.sortOrder > existing.sortOrder)) {
+      latestByLineage.set(lineageKey, {
+        ...block,
+        source: 'carry_over',
+        originScriptDate: lineage.originScriptDate,
+        originBlockId: lineage.originBlockId,
+        originSource: lineage.originSource,
+        scriptDate: blockDate,
+      })
+    }
+  }
+
+  return [...latestByLineage.values()]
+    .sort((a, b) => a.scriptDate.localeCompare(b.scriptDate) || a.sortOrder - b.sortOrder)
+    .map(({ scriptDate: _scriptDate, ...block }) => block)
 }
 
 export function saveDayScript(scriptDate: string, document: JsonNode, expectedRevision: number, _focusActivities?: DayScriptFocusActivity[]): SaveDayScriptResult {
@@ -1096,6 +1288,7 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
     }
 
     for (const block of richBlocks) {
+      if (!block.completed) continue
       const result = syncBlockProgress(scriptDate, block, syncMap, activityMap, now)
       createdLogs.push(...result.createdLogs)
       executionRecords.push(...result.executionRecords)
@@ -1149,11 +1342,10 @@ export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ 
       const task = getTaskById(item.taskId)
       if (!block || !task || !block.taskIds.includes(item.taskId)) continue
       const richBlock = block as RichDayScriptBlock
+      if (!richBlock.completed) continue
       if (richBlock.newTaskCreated) continue
       const progress = blockSyncText(richBlock)
       const progressHtml = blockSyncHtml(richBlock)
-      const bodyProgress = normalizeProgress(richBlock.progressText)
-      const bodyProgressHtml = richBlock.progressHtml || progressLinesToHtml(richBlock.progressLines ?? [])
       if (!progress && !progressHtml) continue
 
       const existingSync = queryOne(
@@ -1178,8 +1370,8 @@ export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ 
       const entry = createTaskEntry(
         item.taskId,
         canAppendDelta
-          ? buildLogHtml(scriptDate, block, logProgress, logHtml, false)
-          : buildLogHtml(scriptDate, block, bodyProgress, bodyProgressHtml),
+          ? buildBlockLogHtml(richBlock, logProgress, logHtml, false)
+          : buildBlockLogHtml(richBlock, progress, progressHtml),
         'log'
       )
       run(

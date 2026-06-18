@@ -146,11 +146,28 @@ export function initDb() {
       header_text TEXT NOT NULL,
       progress_text TEXT NOT NULL DEFAULT '',
       completed INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'manual',
+      origin_script_date TEXT,
+      origin_block_id TEXT,
+      origin_source TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (script_date) REFERENCES day_scripts(script_date) ON DELETE CASCADE
     )
   `)
+  const dayScriptBlockColumns = db.prepare("PRAGMA table_info('day_script_blocks')").all() as Array<{ name: string }>
+  if (!dayScriptBlockColumns.some((column) => column.name === 'source')) {
+    db.exec("ALTER TABLE day_script_blocks ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+  }
+  if (!dayScriptBlockColumns.some((column) => column.name === 'origin_script_date')) {
+    db.exec('ALTER TABLE day_script_blocks ADD COLUMN origin_script_date TEXT')
+  }
+  if (!dayScriptBlockColumns.some((column) => column.name === 'origin_block_id')) {
+    db.exec('ALTER TABLE day_script_blocks ADD COLUMN origin_block_id TEXT')
+  }
+  if (!dayScriptBlockColumns.some((column) => column.name === 'origin_source')) {
+    db.exec('ALTER TABLE day_script_blocks ADD COLUMN origin_source TEXT')
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS day_script_block_tasks (

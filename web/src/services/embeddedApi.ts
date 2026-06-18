@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -424,6 +424,24 @@ export class EmbeddedApiProvider implements ApiInterface {
     return { id, taskId, startedAt: now, endedAt: null }
   }
 
+  async resumeTaskFromAfk(taskId: string, startedAt: number): Promise<WorkSession> {
+    await this.ensureDb()
+    const task = await this.getTaskById(taskId)
+    if (!task) throw new Error('Task not found')
+
+    await this.runAndPersist('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [Date.now()])
+    if (task.status === 'PENDING') {
+      await this.updateTask(taskId, { status: 'DOING' })
+    }
+
+    const id = crypto.randomUUID()
+    await this.runAndPersist(
+      'INSERT INTO work_sessions (id, task_id, started_at, ended_at) VALUES (?, ?, ?, NULL)',
+      [id, taskId, startedAt]
+    )
+    return { id, taskId, startedAt, endedAt: null }
+  }
+
   async doAfk(): Promise<void> {
     await this.ensureDb()
     await this.runAndPersist('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [Date.now()])
@@ -675,13 +693,13 @@ export class EmbeddedApiProvider implements ApiInterface {
   // --- AFK Events (stub: in-memory store) ---
   private afkEvents: AfkEvent[] = []
 
-  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
+  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt = Date.now()): Promise<AfkEvent> {
     const event: AfkEvent = {
       id: crypto.randomUUID(),
       triggeredAt,
       reason,
       userNote: userNote ?? null,
-      submittedAt: Date.now(),
+      submittedAt,
     }
     this.afkEvents.push(event)
     return event
@@ -722,6 +740,9 @@ export class EmbeddedApiProvider implements ApiInterface {
       blocks: [],
       updatedAt: 0,
     }
+  }
+  async getCarryOverDayScriptBlocks(): Promise<DayScriptBlock[]> {
+    return []
   }
   async saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult> {
     return {

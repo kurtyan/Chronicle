@@ -606,29 +606,70 @@ import { AutoAfkDialog } from '@/components/AutoAfkDialog'
 // Listen for auto-AFK events from Tauri backend
 // Returns dialog state for rendering in Layout
 function useAutoAfk() {
-  const [afkDialog, setAfkDialog] = useState<{ open: boolean; reason: string; triggeredAt: number }>({
-    open: false, reason: '', triggeredAt: 0,
+  const [afkDialog, setAfkDialog] = useState<{ open: boolean; reason: string; triggeredAt: number; resolvedAt: number | null; autoResumed: boolean }>({
+    open: false, reason: '', triggeredAt: 0, resolvedAt: null, autoResumed: false,
   })
+  const [resumeToast, setResumeToast] = useState<{ open: boolean; title: string }>({ open: false, title: '' })
   const afkInProgressRef = useRef(false)
+  const pendingAutoAfkRef = useRef<{ taskId: string; reason: string; triggeredAt: number } | null>(null)
 
   useEffect(() => {
     const p = (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event')
-        const unlisten = await listen('auto-afk-triggered', async (event) => {
-          const reason = event.payload as string
+        const unlistenAfk = await listen('auto-afk-triggered', async (event) => {
+          const payload = event.payload as string | { reason?: unknown; triggeredAt?: unknown }
+          const reason = typeof payload === 'string'
+            ? payload
+            : typeof payload?.reason === 'string'
+              ? payload.reason
+              : 'idle'
           if (afkInProgressRef.current) {
             console.log('[Auto-AFK] skipped: AFK already in progress')
             return
           }
           console.log('[Auto-AFK] event received:', reason)
+          const currentSession = useTaskStore.getState().currentSession
+          const triggeredAt = typeof payload === 'object' && typeof payload.triggeredAt === 'number'
+            ? payload.triggeredAt
+            : Date.now()
           afkInProgressRef.current = true
+          pendingAutoAfkRef.current = currentSession?.taskId
+            ? { taskId: currentSession.taskId, reason, triggeredAt }
+            : null
           // End the session (calls server API + clears local state) then show dialog
-          useTaskStore.getState().doAfk()
-          setAfkDialog({ open: true, reason, triggeredAt: Date.now() })
+          await useTaskStore.getState().doAfk()
+          setAfkDialog({ open: true, reason, triggeredAt, resolvedAt: null, autoResumed: false })
+        })
+        const unlistenResume = await listen('auto-afk-resume-detected', async (event) => {
+          const payload = event.payload as { reason?: unknown; returnedAt?: unknown }
+          const returnedAt = typeof payload?.returnedAt === 'number' ? payload.returnedAt : Date.now()
+          const pending = pendingAutoAfkRef.current
+          if (!pending) {
+            console.log('[Auto-AFK] resume skipped: no pending AFK context')
+            return
+          }
+          if (useTaskStore.getState().currentSession) {
+            console.log('[Auto-AFK] resume skipped: session already active')
+            return
+          }
+          try {
+            const session = await useTaskStore.getState().resumeFromAfk(pending.taskId, returnedAt)
+            const task = useTaskStore.getState().tasks.find((item) => item.id === session.taskId)
+            setAfkDialog((prev) => prev.open
+              ? { ...prev, resolvedAt: returnedAt, autoResumed: true }
+              : prev)
+            setResumeToast({ open: true, title: task?.title ?? pending.taskId })
+            window.setTimeout(() => setResumeToast({ open: false, title: '' }), 3000)
+          } catch (error) {
+            console.error('[Auto-AFK] failed to resume from AFK:', error)
+          }
         })
         console.log('[Auto-AFK] listener registered')
-        return unlisten
+        return () => {
+          unlistenAfk()
+          unlistenResume()
+        }
       } catch (e) {
         console.log('[Auto-AFK] failed to register listener:', e)
         return null
@@ -639,6 +680,7 @@ function useAutoAfk() {
 
   const onClose = useCallback(() => {
     afkInProgressRef.current = false
+    pendingAutoAfkRef.current = null
     setAfkDialog(prev => ({ ...prev, open: false }))
   }, [])
 
@@ -646,6 +688,9 @@ function useAutoAfk() {
     open: afkDialog.open,
     reason: afkDialog.reason,
     triggeredAt: afkDialog.triggeredAt,
+    resolvedAt: afkDialog.resolvedAt,
+    autoResumed: afkDialog.autoResumed,
+    resumeToast,
     onClose,
   }
 }
@@ -817,11 +862,24 @@ function Layout() {
         </Routes>
       </main>
       <BackgroundTasksPanel />
+      {afkDialog.resumeToast.open && (
+        <div className="fixed bottom-6 right-6 z-[60] w-80 rounded-lg border border-border bg-background p-3 text-sm shadow-lg">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 text-green-500" />
+            <div className="min-w-0">
+              <div className="font-medium">Resumed from AFK</div>
+              <div className="mt-0.5 truncate text-xs text-muted-foreground">{afkDialog.resumeToast.title}</div>
+            </div>
+          </div>
+        </div>
+      )}
       {import.meta.env.DEV && <DevVersionBadge />}
       <AutoAfkDialog
         open={afkDialog.open}
         reason={afkDialog.reason}
         triggeredAt={afkDialog.triggeredAt}
+        resolvedAt={afkDialog.resolvedAt}
+        autoResumed={afkDialog.autoResumed}
         onClose={afkDialog.onClose}
       />
     </div>

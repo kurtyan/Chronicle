@@ -38,4 +38,53 @@ test.describe('Task entry data integrity', () => {
     const search = await searchRes.json()
     expect(search.results.some((result: { taskId: string }) => result.taskId === task.id)).toBeTruthy()
   })
+
+  test('resume from AFK starts a session at the detected return time and allows bounded AFK note', async ({ page }) => {
+    const task = await createTask(page, `Integrity-ResumeAfk-${Date.now()}`)
+    const takeoverRes = await page.request.post(`/api/tasks/${task.id}/takeover`)
+    expect(takeoverRes.ok()).toBeTruthy()
+    await page.request.post('/api/afk')
+
+    const triggeredAt = Date.now() - 120_000
+    const returnedAt = Date.now() - 30_000
+    const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
+      data: { startedAt: returnedAt },
+    })
+    expect(resumeRes.ok()).toBeTruthy()
+    const session = await resumeRes.json()
+    expect(session.taskId).toBe(task.id)
+    expect(session.startedAt).toBe(returnedAt)
+
+    const afkEventRes = await page.request.post('/api/afk-events', {
+      data: { reason: 'idle', triggeredAt, submittedAt: returnedAt, userNote: 'returned automatically' },
+    })
+    expect(afkEventRes.status()).toBe(201)
+    const afkEvent = await afkEventRes.json()
+    expect(afkEvent.submittedAt).toBe(returnedAt)
+  })
+
+  test('AFK event rejects overlap with an active resumed session', async ({ page }) => {
+    const task = await createTask(page, `Integrity-AfkOverlap-${Date.now()}`)
+    const startedAt = Date.now() - 60_000
+    const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
+      data: { startedAt },
+    })
+    expect(resumeRes.ok()).toBeTruthy()
+
+    const afkEventRes = await page.request.post('/api/afk-events', {
+      data: { reason: 'idle', triggeredAt: startedAt - 60_000, submittedAt: startedAt + 10_000 },
+    })
+    expect(afkEventRes.status()).toBe(409)
+  })
+
+  test('resume from AFK moves pending task to doing', async ({ page }) => {
+    const task = await createTask(page, `Integrity-ResumePending-${Date.now()}`)
+    const startedAt = Date.now() - 10_000
+    const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
+      data: { startedAt },
+    })
+    expect(resumeRes.ok()).toBeTruthy()
+    const updated = await (await page.request.get(`/api/tasks/${task.id}`)).json()
+    expect(updated.status).toBe('DOING')
+  })
 })

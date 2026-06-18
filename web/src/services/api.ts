@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -63,6 +63,9 @@ export async function deleteTaskLogDraft(taskId: string): Promise<void> {
 }
 export async function takeOverTask(taskId: string): Promise<WorkSession> {
   return (await getApi()).takeOverTask(taskId)
+}
+export async function resumeTaskFromAfk(taskId: string, startedAt: number): Promise<WorkSession> {
+  return (await getApi()).resumeTaskFromAfk(taskId, startedAt)
 }
 export async function doAfk(): Promise<void> {
   return (await getApi()).doAfk()
@@ -130,8 +133,8 @@ export async function getPinnedTaskIds(): Promise<string[]> {
 }
 
 // AFK Events
-export async function createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
-  return (await getApi()).createAfkEvent(reason, triggeredAt, userNote)
+export async function createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt?: number): Promise<AfkEvent> {
+  return (await getApi()).createAfkEvent(reason, triggeredAt, userNote, submittedAt)
 }
 export async function updateAfkEventApi(id: string, userNote: string): Promise<AfkEvent | null> {
   return (await getApi()).updateAfkEvent(id, userNote)
@@ -146,6 +149,9 @@ export async function fetchReportTasks(params: { start: number; end: number; fil
 
 export async function getDayScript(date: string): Promise<DayScriptDocument> {
   return (await getApi()).getDayScript(date)
+}
+export async function getCarryOverDayScriptBlocks(date: string): Promise<DayScriptBlock[]> {
+  return (await getApi()).getCarryOverDayScriptBlocks(date)
 }
 export async function saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult> {
   return (await getApi()).saveDayScript(date, body)

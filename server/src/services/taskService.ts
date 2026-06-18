@@ -386,7 +386,7 @@ function rowToWorkSession(row: any): WorkSession {
   }
 }
 
-export function startWorkSession(taskId: string): WorkSession {
+export function startWorkSession(taskId: string, startedAt = Date.now()): WorkSession {
   const task = getTaskById(taskId)
   if (!task) throw new Error('Task not found')
 
@@ -394,12 +394,11 @@ export function startWorkSession(taskId: string): WorkSession {
   run('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [Date.now()])
 
   const id = crypto.randomUUID()
-  const now = Date.now()
   run(
     'INSERT INTO work_sessions (id, task_id, started_at, ended_at) VALUES (?, ?, ?, NULL)',
-    [id, taskId, now]
+    [id, taskId, startedAt]
   )
-  return { id, taskId, startedAt: now, endedAt: null }
+  return { id, taskId, startedAt, endedAt: null }
 }
 
 export function endAllSessions(): void {
@@ -547,12 +546,11 @@ function rowToAfkEvent(row: any): AfkEvent {
   }
 }
 
-export function createAfkEvent(reason: string, triggeredAt: number, userNote?: string): AfkEvent {
-  const submittedAt = Date.now()
+export function createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt = Date.now()): AfkEvent {
 
   // Reject if the AFK time range overlaps with any work session
   const overlap = queryOne(
-    'SELECT COUNT(*) as count FROM work_sessions WHERE started_at < ? AND ended_at > ?',
+    'SELECT COUNT(*) as count FROM work_sessions WHERE started_at < ? AND (ended_at IS NULL OR ended_at > ?)',
     [submittedAt, triggeredAt]
   )
   if (overlap && overlap.count > 0) {

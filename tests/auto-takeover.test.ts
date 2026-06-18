@@ -21,6 +21,44 @@ async function expectIdle(page: import('@playwright/test').Page) {
   }).toBeNull()
 }
 
+async function installTauriEventMock(page: import('@playwright/test').Page) {
+  await page.addInitScript(() => {
+    const listeners: Record<string, Record<number, (event: any) => void>> = {}
+    let nextCallbackId = 1
+    ;(window as any).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+      unregisterListener: (event: string, id: number) => {
+        delete listeners[event]?.[id]
+      },
+    }
+    ;(window as any).__TAURI_INTERNALS__ = {
+      transformCallback: (callback: (event: any) => void) => {
+        const id = nextCallbackId++
+        ;(window as any).__chronicleTauriCallbacks ??= {}
+        ;(window as any).__chronicleTauriCallbacks[id] = callback
+        return id
+      },
+      invoke: async (cmd: string, args: any) => {
+        if (cmd === 'plugin:event|listen') {
+          listeners[args.event] ??= {}
+          listeners[args.event][args.handler] = (window as any).__chronicleTauriCallbacks[args.handler]
+          return args.handler
+        }
+        if (cmd === 'plugin:event|unlisten') {
+          delete listeners[args.event]?.[args.eventId]
+          return null
+        }
+        return null
+      },
+    }
+    ;(window as any).__chronicleEmitTauriEvent = (event: string, payload: unknown) => {
+      Object.entries(listeners[event] ?? {}).forEach(([id, handler]) => {
+        handler({ event, id: Number(id), payload })
+      })
+    }
+    ;(window as any).__chronicleTauriListenerCount = (event: string) => Object.keys(listeners[event] ?? {}).length
+  })
+}
+
 test.describe('Auto takeover on actual edit', () => {
   test.beforeEach(async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
@@ -105,5 +143,44 @@ test.describe('Auto takeover on actual edit', () => {
 
     await page.locator('[data-rich-editor="true"] .ProseMirror').fill('Second new entry')
     await expect.poll(() => takeoverCount).toBe(2)
+  })
+
+  test('auto AFK resumes previous task from system return event and keeps AFK dialog for note', async ({ page }) => {
+    await installTauriEventMock(page)
+    const title = `AutoResumeAfk-${Date.now()}`
+    const task = await createTaskWithTitle(page, title)
+    await page.request.post(`/api/tasks/${task.id}/takeover`)
+
+    await openTask(page, title)
+    await expect(page.getByTestId('workspace-info-bar').getByRole('button', { name: 'AFK' })).toBeVisible()
+    await expect.poll(() => page.evaluate(() => (window as any).__chronicleTauriListenerCount?.('auto-afk-triggered') ?? 0)).toBeGreaterThan(0)
+    await expect.poll(() => page.evaluate(() => (window as any).__chronicleTauriListenerCount?.('auto-afk-resume-detected') ?? 0)).toBeGreaterThan(0)
+
+    const triggeredAt = Date.now() - 90_000
+    await page.evaluate((value) => {
+      ;(window as any).__chronicleEmitTauriEvent('auto-afk-triggered', { reason: 'idle', triggeredAt: value })
+    }, triggeredAt)
+    await expect(page.getByRole('dialog')).toContainText('AutoAFK')
+    await expectIdle(page)
+
+    const returnedAt = Date.now() - 10_000
+    await page.evaluate((value) => {
+      ;(window as any).__chronicleEmitTauriEvent('auto-afk-resume-detected', { reason: 'idle-return', returnedAt: value })
+    }, returnedAt)
+
+    await expect.poll(async () => {
+      const res = await page.request.get('/api/sessions/current')
+      return await res.json()
+    }).toMatchObject({ taskId: task.id, startedAt: returnedAt })
+    await expect(page.getByRole('dialog')).toContainText('Work session resumed automatically')
+    await expect(page.getByText('Resumed from AFK')).toBeVisible()
+
+    await page.getByPlaceholder(/Briefly describe|请简要说明/).fill('auto resumed')
+    await page.getByRole('button', { name: /Submit|提交/ }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    const events = await (await page.request.get(`/api/afk-events?start=${triggeredAt - 1000}&end=${returnedAt + 1000}`)).json()
+    expect(events.some((event: { submittedAt: number; userNote: string | null }) =>
+      event.submittedAt === returnedAt && event.userNote === 'auto resumed'
+    )).toBeTruthy()
   })
 })

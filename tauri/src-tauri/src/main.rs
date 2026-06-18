@@ -110,6 +110,16 @@ impl Default for AutoAfkConfig {
 }
 
 static LAST_AUTO_AFK_EMIT: AtomicU64 = AtomicU64::new(0);
+static LAST_AUTO_AFK_RESUME_EMIT: AtomicU64 = AtomicU64::new(0);
+static AUTO_AFK_RESUME_MODE: AtomicU64 = AtomicU64::new(0); // 0 none, 1 idle, 2 screen-lock
+const AUTO_AFK_RESUME_IDLE_THRESHOLD_SECONDS: u64 = 5;
+
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
 
 fn read_auto_afk_config() -> AutoAfkConfig {
     if let Ok(config_path) = chronicle_config_path() {
@@ -142,7 +152,7 @@ fn write_auto_afk_config(cfg: &AutoAfkConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn emit_auto_afk(app: &tauri::AppHandle, reason: &str) {
+fn emit_auto_afk(app: &tauri::AppHandle, reason: &str) -> bool {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -150,7 +160,7 @@ fn emit_auto_afk(app: &tauri::AppHandle, reason: &str) {
     let last = LAST_AUTO_AFK_EMIT.load(Ordering::Relaxed);
     if now - last < 60 {
         let _ = write_client_log(format!("[Auto-AFK] skipped (dedup, reason: {}, last emitted {}s ago)", reason, now - last));
-        return;
+        return false;
     }
     let _ = write_client_log(format!("[Auto-AFK] emit triggered, reason: {}", reason));
     LAST_AUTO_AFK_EMIT.store(now, Ordering::Relaxed);
@@ -158,6 +168,28 @@ fn emit_auto_afk(app: &tauri::AppHandle, reason: &str) {
     // Emit event to frontend — the frontend's useAutoAfk hook will call
     // doAfk() to end the session (both server API + local state) and show dialog
     let _ = app.emit("auto-afk-triggered", reason);
+    true
+}
+
+fn emit_auto_afk_resume(app: &tauri::AppHandle, reason: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let last = LAST_AUTO_AFK_RESUME_EMIT.load(Ordering::Relaxed);
+    if now - last < 5 {
+        let _ = write_client_log(format!("[Auto-AFK] resume skipped (dedup, reason: {}, last emitted {}s ago)", reason, now - last));
+        return;
+    }
+
+    LAST_AUTO_AFK_RESUME_EMIT.store(now, Ordering::Relaxed);
+    AUTO_AFK_RESUME_MODE.store(0, Ordering::Relaxed);
+    let returned_at = unix_millis();
+    let _ = write_client_log(format!("[Auto-AFK] resume detected, reason: {}, returnedAt={}", reason, returned_at));
+    let _ = app.emit("auto-afk-resume-detected", serde_json::json!({
+        "reason": reason,
+        "returnedAt": returned_at,
+    }));
 }
 
 #[tauri::command]
@@ -304,7 +336,11 @@ fn setup_screen_lock_detection(app: &tauri::AppHandle) {
             let _ = write_client_log(format!("[Auto-AFK] screen lock check: is_locked={}, was_locked={}", is_locked, was_locked));
             if is_locked && !was_locked {
                 let _ = write_client_log("[Auto-AFK] triggering AFK due to screen lock".to_string());
-                emit_auto_afk(&app_handle, "screen-lock");
+                if emit_auto_afk(&app_handle, "screen-lock") {
+                    AUTO_AFK_RESUME_MODE.store(2, Ordering::Relaxed);
+                }
+            } else if !is_locked && was_locked {
+                let _ = write_client_log("[Auto-AFK] screen unlock detected, waiting for input activity before resume".to_string());
             }
             was_locked = is_locked;
         }
@@ -357,8 +393,8 @@ fn is_screen_locked() -> bool {
 static IDLE_CHECKER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn setup_idle_checker(app: &tauri::AppHandle, config: &AutoAfkConfig) {
-    if !config.enabled || !config.idle_enabled {
-        let _ = write_client_log(format!("[Auto-AFK] idle checker disabled: enabled={}, idle_enabled={}", config.enabled, config.idle_enabled));
+    if !config.enabled || (!config.idle_enabled && !config.screen_lock_enabled) {
+        let _ = write_client_log(format!("[Auto-AFK] idle checker disabled: enabled={}, idle_enabled={}, screen_lock_enabled={}", config.enabled, config.idle_enabled, config.screen_lock_enabled));
         return;
     }
     if IDLE_CHECKER_STARTED.swap(true, Ordering::Relaxed) {
@@ -373,16 +409,22 @@ fn setup_idle_checker(app: &tauri::AppHandle, config: &AutoAfkConfig) {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let config = read_auto_afk_config();
-            if !config.enabled || !config.idle_enabled {
+            if !config.enabled || (!config.idle_enabled && !config.screen_lock_enabled) {
                 continue;
             }
             match system_idle_time::get_idle_time() {
                 Ok(idle_duration) => {
                     let idle_secs = idle_duration.as_secs();
                     let _ = write_client_log(format!("[Auto-AFK] idle check: idle={}s, threshold={}s, timeout={}", idle_secs, config.idle_timeout_seconds, idle_secs >= config.idle_timeout_seconds));
-                    if idle_duration >= Duration::from_secs(config.idle_timeout_seconds) {
+                    let resume_mode = AUTO_AFK_RESUME_MODE.load(Ordering::Relaxed);
+                    if resume_mode != 0 && idle_secs <= AUTO_AFK_RESUME_IDLE_THRESHOLD_SECONDS {
+                        let reason = if resume_mode == 2 { "screen-unlock-return" } else { "idle-return" };
+                        emit_auto_afk_resume(&app_handle, reason);
+                    } else if config.idle_enabled && idle_duration >= Duration::from_secs(config.idle_timeout_seconds) {
                         let _ = write_client_log(format!("[Auto-AFK] triggering AFK due to idle ({}s)", idle_secs));
-                        emit_auto_afk(&app_handle, "idle");
+                        if emit_auto_afk(&app_handle, "idle") {
+                            AUTO_AFK_RESUME_MODE.store(1, Ordering::Relaxed);
+                        }
                     }
                 }
                 Err(e) => {

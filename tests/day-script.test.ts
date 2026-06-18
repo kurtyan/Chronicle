@@ -43,14 +43,15 @@ async function createTask(page: Page, title: string) {
   return res.json()
 }
 
-function paragraph(text: string, taskId?: string) {
-  if (!taskId) return { type: 'paragraph', content: [{ type: 'text', text }] }
+function paragraph(text: string, taskId?: string, attrs?: Record<string, any>) {
+  if (!taskId) return { type: 'paragraph', ...(attrs ? { attrs } : {}), content: [{ type: 'text', text }] }
   const marker = text.indexOf('@')
-  if (marker < 0) return { type: 'paragraph', content: [{ type: 'text', text }] }
+  if (marker < 0) return { type: 'paragraph', ...(attrs ? { attrs } : {}), content: [{ type: 'text', text }] }
   const before = text.slice(0, marker)
   const mention = text.slice(marker)
   return {
     type: 'paragraph',
+    ...(attrs ? { attrs } : {}),
     content: [
       ...(before ? [{ type: 'text', text: before }] : []),
       {
@@ -62,8 +63,8 @@ function paragraph(text: string, taskId?: string) {
   }
 }
 
-function doc(lines: Array<{ text: string; taskId?: string }>) {
-  return { type: 'doc', content: lines.map((line) => paragraph(line.text, line.taskId)) }
+function doc(lines: Array<{ text: string; taskId?: string; attrs?: Record<string, any> }>) {
+  return { type: 'doc', content: lines.map((line) => paragraph(line.text, line.taskId, line.attrs)) }
 }
 
 async function getEntries(page: Page, taskId: string) {
@@ -130,6 +131,103 @@ test.describe('Day Script progress sync', () => {
     expect(taskBEntries).toHaveLength(1)
     expect(taskAEntries[1].content).toContain('A appended progress')
     expect(taskAEntries[1].content).not.toContain('A initial progress')
+  })
+
+  test('submit progress ignores unfinished focus blocks', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Unfinished-${Date.now()}`)
+    const date = uniqueScriptDate(41)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title}`, taskId: task.id },
+          { text: 'This is still in progress and should stay in Focus only' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(0)
+    expect(await getEntries(page, task.id)).toHaveLength(0)
+  })
+
+  test('blank lines before a focus block are ignored by validation', async ({ page }) => {
+    const task = await createTask(page, `DayScript-BlankLead-${Date.now()}`)
+    const date = uniqueScriptDate(43)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            { type: 'paragraph' },
+            { type: 'paragraph', content: [{ type: 'text', text: '   ' }] },
+            paragraph(`10:00-10:30 @${task.title}`, task.id),
+          ],
+        },
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toHaveLength(0)
+    expect(saved.script.blocks).toHaveLength(1)
+  })
+
+  test('planned and carry-over completed blocks write body only or a short completion fact', async ({ page }) => {
+    const plannedTask = await createTask(page, `DayScript-Planned-${Date.now()}`)
+    const carryTask = await createTask(page, `DayScript-Carry-${Date.now()}`)
+    const date = uniqueScriptDate(42)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          {
+            text: `Next step @${plannedTask.title}: inspect mobile layout ✅`,
+            taskId: plannedTask.id,
+            attrs: { source: 'task_next_step' },
+          },
+          { text: 'Measured the mobile layout and listed breakpoints' },
+          {
+            text: `Carry over @${carryTask.title}: ship checklist ✅`,
+            taskId: carryTask.id,
+            attrs: {
+              source: 'carry_over',
+              originScriptDate: '2099-01-30',
+              originBlockId: 'origin-block-1',
+              originSource: 'manual',
+            },
+          },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.script.blocks.find((block: any) => block.taskIds.includes(plannedTask.id))).toMatchObject({
+      source: 'task_next_step',
+      originScriptDate: null,
+    })
+    expect(saved.script.blocks.find((block: any) => block.taskIds.includes(carryTask.id))).toMatchObject({
+      source: 'carry_over',
+      originScriptDate: '2099-01-30',
+      originBlockId: 'origin-block-1',
+      originSource: 'manual',
+    })
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdLogs).toHaveLength(2)
+
+    const plannedEntries = await getEntries(page, plannedTask.id)
+    expect(plannedEntries).toHaveLength(1)
+    expect(plannedEntries[0].content).toContain('Measured the mobile layout and listed breakpoints')
+    expect(plannedEntries[0].content).not.toContain('inspect mobile layout')
+    expect(plannedEntries[0].content).not.toContain('Next step')
+
+    const carryEntries = await getEntries(page, carryTask.id)
+    expect(carryEntries).toHaveLength(1)
+    expect(carryEntries[0].content).toContain('完成延续事项：ship checklist')
+    expect(carryEntries[0].content).not.toContain('Carry over')
   })
 
   test('conflict confirmation is idempotent and validates current block-task association', async ({ page }) => {

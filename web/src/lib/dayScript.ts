@@ -127,6 +127,10 @@ export function parseDayScriptDocument(document: JsonNode | null | undefined): P
         progressText: '',
         completed: bodyText.includes('✅'),
         taskIds: line.taskIds.slice(0, 1),
+        source: 'manual',
+        originScriptDate: null,
+        originBlockId: null,
+        originSource: null,
         lineStart: index,
         lineEnd: index,
       }

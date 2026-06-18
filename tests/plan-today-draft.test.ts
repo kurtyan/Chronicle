@@ -10,6 +10,16 @@ function uniqueScriptDate(dayOffset: number): string {
   ].join('-')
 }
 
+function dateOffset(date: string, offset: number): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const next = new Date(year, month - 1, day + offset)
+  return [
+    next.getFullYear(),
+    String(next.getMonth() + 1).padStart(2, '0'),
+    String(next.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
 function workdayDate(offset = 5, dayDelta = 0): string {
   const date = new Date(Date.now() - offset * 3600_000)
   date.setDate(date.getDate() + dayDelta)
@@ -48,6 +58,17 @@ function docText(node: any): string {
   return (node.content ?? []).map(docText).join('\n')
 }
 
+function countNodes(node: any, predicate: (node: any) => boolean): number {
+  if (!node) return 0
+  return (predicate(node) ? 1 : 0) + (node.content ?? []).reduce((sum: number, child: any) => sum + countNodes(child, predicate), 0)
+}
+
+function hasEmptyTextNode(node: any): boolean {
+  if (!node) return false
+  if (node.type === 'text' && node.text === '') return true
+  return (node.content ?? []).some(hasEmptyTextNode)
+}
+
 function uniqueDayOffset(): number {
   return 100 + Math.floor(Math.random() * 1000)
 }
@@ -60,6 +81,22 @@ function findTaskLink(node: any, taskId: string): any | null {
     if (found) return found
   }
   return null
+}
+
+function focusParagraph(prefix: string, task: any, suffix: string, attrs?: Record<string, any>) {
+  return {
+    type: 'paragraph',
+    ...(attrs ? { attrs } : {}),
+    content: [
+      ...(prefix ? [{ type: 'text', text: prefix }] : []),
+      {
+        type: 'text',
+        text: `@${task.title}`,
+        marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
+      },
+      ...(suffix ? [{ type: 'text', text: suffix }] : []),
+    ],
+  }
 }
 
 async function startMockLlm(summaries: string[], delayMs = 0) {
@@ -118,6 +155,7 @@ test.describe('Plan Today draft', () => {
             content: [
               {
                 type: 'paragraph',
+                attrs: { source: 'task_next_step' },
                 content: [
                   { type: 'text', text: '10:00-10:30 ' },
                   { type: 'text', text: `@${task.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }] },
@@ -177,7 +215,7 @@ test.describe('Plan Today draft', () => {
     await expect.poll(() => errors.join('\n')).toBe('')
   })
 
-  test('includes task next steps and yesterday unfinished focus blocks', async ({ page }) => {
+  test('includes task next steps and recent unfinished focus blocks', async ({ page }) => {
     const baseDay = uniqueDayOffset()
     const today = uniqueScriptDate(baseDay + 1)
     const yesterday = uniqueScriptDate(baseDay)
@@ -198,18 +236,7 @@ test.describe('Plan Today draft', () => {
       await saveDayScript(page, yesterday, {
         type: 'doc',
         content: [
-          {
-            type: 'paragraph',
-            content: [
-              { type: 'text', text: '09:00-10:00 ' },
-              {
-                type: 'text',
-                text: `@${carriedTask.title}`,
-                marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(carriedTask.id)}`, taskId: carriedTask.id } }],
-              },
-              { type: 'text', text: ' 昨日未完成事项' },
-            ],
-          },
+          focusParagraph('', carriedTask, ' 昨日未完成事项'),
           { type: 'paragraph', content: [{ type: 'text', text: '还需要补验证记录' }] },
         ],
       })
@@ -222,11 +249,142 @@ test.describe('Plan Today draft', () => {
       expect(text).toContain('整理发布检查清单')
       expect(text).toContain('昨日未完成事项')
       expect(text).toContain('还需要补验证记录')
+      expect(hasEmptyTextNode(draft.document)).toBe(false)
       expect(findTaskLink(draft.document, carriedTask.id)).toBeTruthy()
+      expect(draft.document.content.find((node: any) => docText(node).includes('昨日未完成事项'))?.attrs).toMatchObject({
+        source: 'carry_over',
+      })
 
       const saved = await saveDayScript(page, today, draft.document)
       const carriedBlock = saved.script.blocks.find((block: any) => block.headerText.includes('昨日未完成事项'))
       expect(carriedBlock?.taskIds).toContain(carriedTask.id)
+      expect(carriedBlock?.source).toBe('carry_over')
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+    }
+  })
+
+  test('carry-over uses a 7 day lineage window and filters stale, completed, and done tasks', async ({ page }) => {
+    const today = uniqueScriptDate(uniqueDayOffset() + 50)
+    const sevenDaysAgo = dateOffset(today, -7)
+    const twoDaysAgo = dateOffset(today, -2)
+    const yesterday = dateOffset(today, -1)
+    const eightDaysAgo = dateOffset(today, -8)
+
+    const lineageTask = await createTask(page, `CarryLineage-${Date.now()}`)
+    const oldTask = await createTask(page, `CarryOld-${Date.now()}`)
+    const completedTask = await createTask(page, `CarryCompleted-${Date.now()}`)
+    const doneTask = await createTask(page, `CarryDone-${Date.now()}`)
+
+    await saveDayScript(page, sevenDaysAgo, {
+      type: 'doc',
+      content: [
+        focusParagraph('09:00-09:30 ', lineageTask, ' original carry action'),
+      ],
+    })
+    const originalBlock = (await (await page.request.get(`/api/day-scripts/${sevenDaysAgo}`)).json()).blocks[0]
+
+    await saveDayScript(page, eightDaysAgo, {
+      type: 'doc',
+      content: [
+        focusParagraph('10:00-10:30 ', oldTask, ' too old carry action'),
+      ],
+    })
+
+    await saveDayScript(page, twoDaysAgo, {
+      type: 'doc',
+      content: [
+        focusParagraph('11:00-11:30 ', completedTask, ' resolved carry action'),
+        focusParagraph('13:00-13:30 ', doneTask, ' done task carry action'),
+      ],
+    })
+    const twoDaysAgoBlocks = (await (await page.request.get(`/api/day-scripts/${twoDaysAgo}`)).json()).blocks
+    const completedOrigin = twoDaysAgoBlocks.find((block: any) => block.taskIds.includes(completedTask.id))
+    expect(completedOrigin).toBeTruthy()
+    await saveDayScript(page, yesterday, {
+      type: 'doc',
+      content: [
+        focusParagraph('09:00-09:30 Carry over ', lineageTask, ': latest carry action', {
+          source: 'carry_over',
+          originScriptDate: sevenDaysAgo,
+          originBlockId: originalBlock.id,
+          originSource: 'manual',
+        }),
+        focusParagraph('11:00-11:30 Carry over ', completedTask, ': resolved carry action ✅', {
+          source: 'carry_over',
+          originScriptDate: twoDaysAgo,
+          originBlockId: completedOrigin.id,
+          originSource: 'manual',
+        }),
+      ],
+    })
+    const doneUpdate = await page.request.put(`/api/tasks/${doneTask.id}`, {
+      data: { status: 'DONE' },
+    })
+    expect(doneUpdate.ok()).toBeTruthy()
+
+    const carryRes = await page.request.get(`/api/day-scripts/${today}/carry-over-blocks`)
+    expect(carryRes.ok()).toBeTruthy()
+    const carryBlocks = await carryRes.json()
+    const carryText = carryBlocks.map((block: any) => block.headerText).join('\n')
+    expect(carryText).toContain('latest carry action')
+    expect(carryText).not.toContain('original carry action')
+    expect(carryText).not.toContain('too old carry action')
+    expect(carryText).not.toContain('resolved carry action')
+    expect(carryText).not.toContain('done task carry action')
+    expect(carryBlocks.find((block: any) => block.headerText.includes('latest carry action'))).toMatchObject({
+      source: 'carry_over',
+      originScriptDate: sevenDaysAgo,
+      originBlockId: originalBlock.id,
+      originSource: 'manual',
+    })
+
+    const draftRes = await page.request.post(`/api/day-scripts/${today}/plan-today-draft`)
+    expect(draftRes.ok()).toBeTruthy()
+    const draft = await draftRes.json()
+    const draftText = docText(draft.document)
+    expect(draftText).toContain('latest carry action')
+    expect(draftText).not.toContain('too old carry action')
+      expect(draftText).not.toContain('resolved carry action')
+      expect(draftText).not.toContain('done task carry action')
+      expect(draft.sources.carriedBlockCount).toBe(1)
+      expect(draft.sources.taskCount).toBe(countNodes(draft.document, (node) => node.attrs?.source === 'task_next_step' || node.attrs?.source === 'task_recommended_next_step'))
+      expect(draft.sources.recommendedTaskCount).toBe(countNodes(draft.document, (node) => node.attrs?.source === 'task_recommended_next_step'))
+      expect(draft.sources.carriedBlockCount).toBe(countNodes(draft.document, (node) => node.attrs?.source === 'carry_over'))
+      expect((draft.document.content ?? []).filter((node: any) => node.type === 'horizontalRule')).toHaveLength(0)
+  })
+
+  test('excludes stale or failed task summaries from plan counts', async ({ page }) => {
+    const today = uniqueScriptDate(uniqueDayOffset() + 80)
+    const failedTask = await createTask(page, `PlanFailedSummary-${Date.now()}`)
+    const freshTask = await createTask(page, `PlanFreshSummary-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+
+    try {
+      await page.request.post(`/api/tasks/${failedTask.id}/logs`, {
+        data: { content: '<p>下一步：do not show failed</p>', type: 'log' },
+      })
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: 'http://127.0.0.1:1/v1', model: 'unreachable-model' },
+      })
+      const failedSummary = await page.request.post('/api/task-context/summarize', { data: { taskIds: [failedTask.id] } })
+      expect(failedSummary.ok()).toBeTruthy()
+
+      await page.request.post(`/api/tasks/${freshTask.id}/logs`, {
+        data: { content: '<p>下一步：show fresh next step</p>', type: 'log' },
+      })
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: '', model: '' },
+      })
+      const freshSummary = await page.request.post('/api/task-context/summarize', { data: { taskIds: [freshTask.id] } })
+      expect(freshSummary.ok()).toBeTruthy()
+
+      const draftRes = await page.request.post(`/api/day-scripts/${today}/plan-today-draft`)
+      expect(draftRes.ok()).toBeTruthy()
+      const draft = await draftRes.json()
+      const draftText = docText(draft.document)
+      expect(draftText).not.toContain('do not show failed')
+      expect(draftText).toContain('show fresh next step')
     } finally {
       await page.request.put('/api/settings/llm', { data: originalSettings })
     }

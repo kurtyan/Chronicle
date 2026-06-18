@@ -331,6 +331,19 @@ app.post('/api/tasks/:id/takeover', async (c) => {
   return c.json(session, 201)
 })
 
+app.post('/api/tasks/:id/resume-from-afk', async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  const startedAt = Number(body.startedAt)
+  if (!Number.isFinite(startedAt) || startedAt <= 0) {
+    return c.json({ error: 'startedAt must be a positive timestamp' }, 400)
+  }
+  const { session, task: changedTask } = await service.resumeTaskFromAfk(c.req.param('id'), startedAt)
+  saveConversationId(c, c.req.param('id'))
+  if (changedTask) emitTaskChange(c, changedTask)
+  broadcastEvent('session_started', { taskId: c.req.param('id'), startedAt: session.startedAt }, c.get('clientId'))
+  return c.json(session, 201)
+})
+
 app.post('/api/afk', async (c) => {
   await service.doAfk()
   broadcastEvent('session_ended', {}, c.get('clientId'))
@@ -440,7 +453,15 @@ app.post('/api/tasks/:id/pin', async (c) => {
 app.post('/api/afk-events', async (c) => {
   const body = await c.req.json()
   try {
-    const event = await service.createAfkEvent(body.reason, body.triggeredAt ?? Date.now(), body.userNote)
+    const triggeredAt = body.triggeredAt === undefined ? Date.now() : Number(body.triggeredAt)
+    if (!Number.isFinite(triggeredAt) || triggeredAt <= 0) {
+      return c.json({ error: 'triggeredAt must be a positive timestamp' }, 400)
+    }
+    const submittedAt = body.submittedAt === undefined ? undefined : Number(body.submittedAt)
+    if (submittedAt !== undefined && (!Number.isFinite(submittedAt) || submittedAt <= 0)) {
+      return c.json({ error: 'submittedAt must be a positive timestamp' }, 400)
+    }
+    const event = await service.createAfkEvent(body.reason, triggeredAt, body.userNote, submittedAt)
     return c.json(event, 201)
   } catch (e: any) {
     return c.json({ error: e.message }, 409)
@@ -503,6 +524,10 @@ app.post('/api/search/rebuild', async (c) => {
 // --- Day Script API ---
 app.get('/api/day-scripts/:date', async (c) => {
   return c.json(await service.getDayScript(c.req.param('date')))
+})
+
+app.get('/api/day-scripts/:date/carry-over-blocks', async (c) => {
+  return c.json(await service.getCarryOverDayScriptBlocks(c.req.param('date')))
 })
 
 app.get('/api/day-scripts/:date/execution-records', async (c) => {

@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -17,6 +17,7 @@ export interface ApiInterface {
   saveTaskLogDraft(taskId: string, content: string): Promise<TaskLogDraft | null>
   deleteTaskLogDraft(taskId: string): Promise<void>
   takeOverTask(taskId: string): Promise<WorkSession>
+  resumeTaskFromAfk(taskId: string, startedAt: number): Promise<WorkSession>
   doAfk(): Promise<void>
   getCurrentSession(): Promise<WorkSession | null>
   fetchSessions(start: number, end: number): Promise<WorkSession[]>
@@ -51,7 +52,7 @@ export interface ApiInterface {
   togglePinned(taskId: string): Promise<boolean>
   getPinnedTaskIds(): Promise<string[]>
   // AFK Events
-  createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent>
+  createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt?: number): Promise<AfkEvent>
   updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null>
   getAfkEvents(start?: number, end?: number): Promise<AfkEvent[]>
   // Report tasks
@@ -61,6 +62,7 @@ export interface ApiInterface {
     hasMore: boolean
   }>
   getDayScript(date: string): Promise<DayScriptDocument>
+  getCarryOverDayScriptBlocks(date: string): Promise<DayScriptBlock[]>
   saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult>
   submitDayScriptProgress(date: string, body?: { focusActivity?: DayScriptFocusActivity[] }): Promise<SubmitDayScriptProgressResult>
   confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }>

@@ -57,6 +57,7 @@ interface TaskState {
   commitDraft: () => Promise<void>
   cancelDraft: () => void
   takeOver: (taskId: string) => Promise<WorkSession>
+  resumeFromAfk: (taskId: string, startedAt: number) => Promise<WorkSession>
   doAfk: () => Promise<void>
   autoTakeOver: (taskId: string) => Promise<void>
   doDrop: (id: string, reason: string) => Promise<Task | null>
@@ -477,6 +478,20 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   takeOver: async (taskId) => {
     const session = await api.takeOverTask(taskId)
     // Server now handles PENDING→DOING in takeOverTask, re-fetch updated task
+    const updated = await api.getTaskById(taskId)
+    if (updated) {
+      set((state) => ({
+        tasks: state.tasks.map((t) => (t.id === taskId ? updated : t)),
+        selectedTask: state.activeTaskId === taskId ? updated : state.selectedTask,
+      }))
+    }
+    set({ currentSession: session, lastAfkTime: null })
+    localStorage.removeItem('chronicle_lastAfkTime')
+    return session
+  },
+
+  resumeFromAfk: async (taskId, startedAt) => {
+    const session = await api.resumeTaskFromAfk(taskId, startedAt)
     const updated = await api.getTaskById(taskId)
     if (updated) {
       set((state) => ({

@@ -8,8 +8,8 @@ import {
   type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent,
 } from './taskService'
 import {
-  getDayScript, saveDayScript, submitDayScriptProgress, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
-  type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
+  getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
+  type DayScriptBlock, type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
 } from './dayScriptService'
 import {
   getTaskContexts, refreshTaskContexts,
@@ -109,6 +109,17 @@ export class AppService {
       changedTask = await updateTask(taskId, { status: 'DOING' })
     }
     const session = startWorkSession(taskId)
+    return { session, task: changedTask }
+  }
+
+  async resumeTaskFromAfk(taskId: string, startedAt: number): Promise<{ session: WorkSession; task: Task | null }> {
+    let changedTask: Task | null = null
+    const task = getTaskById(taskId)
+    if (!task) throw new Error('Task not found')
+    if (task.status === 'PENDING') {
+      changedTask = await updateTask(taskId, { status: 'DOING' })
+    }
+    const session = startWorkSession(taskId, startedAt)
     return { session, task: changedTask }
   }
 
@@ -323,8 +334,8 @@ export class AppService {
 
   // --- AFK Events ---
 
-  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string): Promise<AfkEvent> {
-    return createAfkEvent(reason, triggeredAt, userNote)
+  async createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt?: number): Promise<AfkEvent> {
+    return createAfkEvent(reason, triggeredAt, userNote, submittedAt)
   }
 
   async updateAfkEvent(id: string, userNote: string): Promise<AfkEvent | null> {
@@ -339,6 +350,10 @@ export class AppService {
 
   async getDayScript(scriptDate: string): Promise<DayScriptDocument> {
     return getDayScript(scriptDate)
+  }
+
+  async getCarryOverDayScriptBlocks(scriptDate: string): Promise<DayScriptBlock[]> {
+    return getCarryOverDayScriptBlocks(scriptDate)
   }
 
   async saveDayScript(scriptDate: string, document: any, expectedRevision: number, focusActivities?: DayScriptFocusActivity[]): Promise<SaveDayScriptResult> {
