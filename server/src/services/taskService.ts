@@ -1,5 +1,19 @@
-import { getDb } from '../db'
+import { getDb, getMetaValue, setMetaValue } from '../db'
 import { indexTask, removeTaskFromIndex, indexEntry, removeEntryFromIndex } from './searchService'
+
+const AGENT_CONVERSATIONS_KEY = 'agent_conversations'
+const AGENT_CONVERSATIONS_BACKFILL_VERSION_KEY = 'agent_conversations_backfill_version'
+const CURRENT_AGENT_CONVERSATIONS_BACKFILL_VERSION = '1'
+
+export type AgentConversationAgent = 'devin' | 'claude'
+
+export interface AgentConversation {
+  agent: AgentConversationAgent
+  conversationId: string
+  command: string
+  createdAt: number
+  sourceEntryId?: string
+}
 
 function generateTaskId(): string {
   const row = getDb().prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as maxId FROM tasks').get() as { maxId: number | null }
@@ -37,6 +51,106 @@ export interface TaskLogDraft {
   taskId: string
   content: string
   updatedAt: number
+}
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
+}
+
+function htmlToSearchableText(content: string): string {
+  return decodeHtmlEntities(content
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|li|pre|h[1-6]|blockquote)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function extractAgentConversationsFromContent(content: string, options: { sourceEntryId?: string; createdAt?: number } = {}): AgentConversation[] {
+  const text = htmlToSearchableText(content)
+  const createdAt = options.createdAt ?? Date.now()
+  const conversations: AgentConversation[] = []
+  const seen = new Set<string>()
+  const pattern = /\b(devin|claude|cladue)\s+-r\s+([^\s<>"'`]+)/gi
+  let match: RegExpExecArray | null
+
+  while ((match = pattern.exec(text)) !== null) {
+    const agent = match[1].toLowerCase() === 'devin' ? 'devin' : 'claude'
+    const conversationId = match[2].trim()
+    if (!conversationId) continue
+
+    const key = `${agent}:${conversationId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    conversations.push({
+      agent,
+      conversationId,
+      command: `${agent} -r ${conversationId}`,
+      createdAt,
+      ...(options.sourceEntryId ? { sourceEntryId: options.sourceEntryId } : {}),
+    })
+  }
+
+  return conversations
+}
+
+function normalizeAgentConversation(value: any): AgentConversation | null {
+  const agent = value?.agent === 'devin' ? 'devin' : value?.agent === 'claude' ? 'claude' : null
+  const conversationId = typeof value?.conversationId === 'string' ? value.conversationId.trim() : ''
+  if (!agent || !conversationId) return null
+
+  return {
+    agent,
+    conversationId,
+    command: `${agent} -r ${conversationId}`,
+    createdAt: Number.isFinite(value?.createdAt) ? Number(value.createdAt) : 0,
+    ...(typeof value?.sourceEntryId === 'string' && value.sourceEntryId ? { sourceEntryId: value.sourceEntryId } : {}),
+  }
+}
+
+function parseStoredAgentConversations(value: string | null): AgentConversation[] {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(normalizeAgentConversation).filter((item): item is AgentConversation => Boolean(item))
+  } catch {
+    return []
+  }
+}
+
+function mergeAgentConversations(existing: AgentConversation[], incoming: AgentConversation[]): AgentConversation[] {
+  const result: AgentConversation[] = []
+  const seen = new Set<string>()
+
+  for (const item of [...existing, ...incoming]) {
+    const normalized = normalizeAgentConversation(item)
+    if (!normalized) continue
+    const key = `${normalized.agent}:${normalized.conversationId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(normalized)
+  }
+
+  return result.sort((a, b) => a.createdAt - b.createdAt)
+}
+
+function getStoredAgentConversations(taskId: string): AgentConversation[] {
+  return parseStoredAgentConversations(getTaskExtraInfoValue(taskId, AGENT_CONVERSATIONS_KEY))
+}
+
+function saveStoredAgentConversations(taskId: string, conversations: AgentConversation[]) {
+  if (conversations.length === 0) return
+  setTaskExtraInfo(taskId, AGENT_CONVERSATIONS_KEY, JSON.stringify(conversations))
 }
 
 function rowToTask(row: any): Task {
@@ -496,6 +610,65 @@ export function deleteTaskExtraInfo(taskId: string, key: string): boolean {
     [taskId, key]
   )
   return result.changes > 0
+}
+
+export function addAgentConversationsForTask(taskId: string, conversations: AgentConversation[]): AgentConversation[] {
+  if (conversations.length === 0) return getTaskAgentConversations(taskId)
+  const merged = mergeAgentConversations(getStoredAgentConversations(taskId), conversations)
+  saveStoredAgentConversations(taskId, merged)
+  return getTaskAgentConversations(taskId)
+}
+
+export function extractAndAddAgentConversationsFromEntry(entry: TaskEntry): AgentConversation[] {
+  if (entry.type !== 'log') return getTaskAgentConversations(entry.taskId)
+  const extracted = extractAgentConversationsFromContent(entry.content, {
+    sourceEntryId: entry.id,
+    createdAt: entry.createdAt,
+  })
+  return addAgentConversationsForTask(entry.taskId, extracted)
+}
+
+export function getTaskAgentConversations(taskId: string): AgentConversation[] {
+  const stored = getStoredAgentConversations(taskId)
+  const legacyClaudeId = getTaskExtraInfoValue(taskId, 'claude_conversation_id')?.trim()
+  const legacy = legacyClaudeId
+    ? [{
+        agent: 'claude' as const,
+        conversationId: legacyClaudeId,
+        command: `claude -r ${legacyClaudeId}`,
+        createdAt: 0,
+      }]
+    : []
+  return mergeAgentConversations(legacy, stored)
+}
+
+export function backfillAgentConversationsFromTaskLogs(): void {
+  if (getMetaValue(AGENT_CONVERSATIONS_BACKFILL_VERSION_KEY) === CURRENT_AGENT_CONVERSATIONS_BACKFILL_VERSION) return
+
+  const rows = queryAll(`
+    SELECT id, task_id, content, type, created_at
+    FROM task_entries
+    WHERE type = 'log'
+    ORDER BY created_at ASC
+  `)
+  const byTask = new Map<string, AgentConversation[]>()
+
+  for (const row of rows) {
+    const taskId = row.task_id
+    const extracted = extractAgentConversationsFromContent(row.content, {
+      sourceEntryId: row.id,
+      createdAt: row.created_at,
+    })
+    if (extracted.length === 0) continue
+    byTask.set(taskId, mergeAgentConversations(byTask.get(taskId) ?? [], extracted))
+  }
+
+  for (const [taskId, conversations] of byTask.entries()) {
+    const merged = mergeAgentConversations(getStoredAgentConversations(taskId), conversations)
+    saveStoredAgentConversations(taskId, merged)
+  }
+
+  setMetaValue(AGENT_CONVERSATIONS_BACKFILL_VERSION_KEY, CURRENT_AGENT_CONVERSATIONS_BACKFILL_VERSION)
 }
 
 export function getAllTasksWithPinned(): Array<Task & { pinned: boolean }> {

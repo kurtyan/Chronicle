@@ -51,6 +51,14 @@ export interface TaskLogDraft {
   updatedAt: number
 }
 
+export interface AgentConversation {
+  agent: 'devin' | 'claude'
+  conversationId: string
+  command: string
+  createdAt: number
+  sourceEntryId?: string
+}
+
 export interface WorkSession {
   id: string
   taskId: string

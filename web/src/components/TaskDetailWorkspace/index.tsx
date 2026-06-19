@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
 import { useI18n } from '@/i18n/context'
-import type { TaskEntry, WorkSession, Task, TaskProgressContext } from '@/types'
+import type { AgentConversation, TaskEntry, WorkSession, Task, TaskProgressContext } from '@/types'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
-import { deleteTaskLogDraft, fetchTaskLogDraft, getTaskExtraInfoValue, saveTaskLogDraft } from '@/services/api'
+import { deleteTaskLogDraft, fetchTaskAgentConversations, fetchTaskLogDraft, saveTaskLogDraft } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
 import { Copy, AlertTriangle } from 'lucide-react'
@@ -48,6 +48,8 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const [showDropDialog, setShowDropDialog] = useState(false)
   const [dropReason, setDropReason] = useState('')
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
+  const [agentConversations, setAgentConversations] = useState<AgentConversation[]>([])
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const workspaceScrollRef = useRef<HTMLDivElement | null>(null)
 
   // Serialize draft saves per taskId so rapid Cmd+S presses cannot race.
@@ -144,12 +146,8 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     if (e.key === 'Escape') setEditingTitle(false)
   }
 
-  const handleClaudeSession = async () => {
-    if (!activeTaskId) return
-    const conversationId = await getTaskExtraInfoValue(activeTaskId, 'claude_conversation_id')
-    const cmd = conversationId
-      ? `cd ~/IdeaProjects && claude -r ${conversationId}`
-      : `cd ~/IdeaProjects && claude 'chronicle taskId: ${activeTaskId}'`
+  const runAgentConversation = async (conversation: AgentConversation) => {
+    const cmd = `cd ~/IdeaProjects && ${conversation.command}`
     if (isTauriEnv) {
       try {
         const { invoke } = await import('@tauri-apps/api/core')
@@ -159,6 +157,15 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     }
     await navigator.clipboard.writeText(cmd)
     alert(`Copied to clipboard:\n${cmd}`)
+  }
+
+  const handleAgentClick = async () => {
+    if (agentConversations.length === 0) return
+    if (agentConversations.length === 1) {
+      await runAgentConversation(agentConversations[0])
+      return
+    }
+    setAgentMenuOpen((open) => !open)
   }
 
   // Submit entry from the new-entry editor
@@ -236,6 +243,25 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
       window.clearTimeout(delayedScroll)
     }
   }, [activeTaskId, entryLoading, entries, scrollWorkspaceToBottom])
+
+  useEffect(() => {
+    if (!activeTaskId || activeTaskId === DRAFT_ID) {
+      setAgentConversations([])
+      setAgentMenuOpen(false)
+      return
+    }
+
+    let cancelled = false
+    fetchTaskAgentConversations(activeTaskId)
+      .then((items) => {
+        if (!cancelled) setAgentConversations(items)
+      })
+      .catch((error) => {
+        console.error('Failed to load agent conversations:', error)
+        if (!cancelled) setAgentConversations([])
+      })
+    return () => { cancelled = true }
+  }, [activeTaskId, entries.length])
 
   // Register task-detail keyboard shortcuts (work on both Board and Today pages)
   useEffect(() => {
@@ -443,9 +469,35 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
             <button className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(selectedTask.id) }} title="Copy ID">
               <Copy className="w-3 h-3" />
             </button>
-            <button className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded text-xs font-medium" onClick={(e) => { e.stopPropagation(); handleClaudeSession() }} title={t('workspace.claude')}>
-              {t('workspace.claude')}
-            </button>
+            <div className="relative">
+              <button
+                className={`transition p-1 hover:bg-muted rounded text-xs font-medium ${agentConversations.length === 0 ? 'opacity-30 cursor-default' : 'opacity-70 hover:opacity-100'}`}
+                onClick={(e) => { e.stopPropagation(); handleAgentClick() }}
+                disabled={agentConversations.length === 0}
+                title={t('workspace.agent')}
+                data-testid="task-agent-button"
+              >
+                {t('workspace.agent')}
+              </button>
+              {agentMenuOpen && agentConversations.length > 1 && (
+                <div className="absolute right-0 top-full z-50 mt-1 min-w-56 overflow-hidden rounded-md border border-border bg-popover py-1 shadow-lg" data-testid="task-agent-menu">
+                  {agentConversations.map((conversation) => (
+                    <button
+                      key={`${conversation.agent}:${conversation.conversationId}`}
+                      className="block w-full px-3 py-2 text-left text-xs hover:bg-muted"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setAgentMenuOpen(false)
+                        runAgentConversation(conversation)
+                      }}
+                    >
+                      <span className="font-medium capitalize">{conversation.agent}</span>
+                      <span className="ml-2 font-mono text-muted-foreground">{conversation.conversationId}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {activeTaskId && !isDraftActive && (

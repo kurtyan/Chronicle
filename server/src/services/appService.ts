@@ -4,8 +4,9 @@ import {
   getTaskLogDraft, saveTaskLogDraft, deleteTaskLogDraft,
   startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
   setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
+  extractAndAddAgentConversationsFromEntry, getTaskAgentConversations,
   createAfkEvent, updateAfkEvent, getAfkEvents, getNextTaskId,
-  type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent,
+  type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent, type AgentConversation,
 } from './taskService'
 import {
   getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
@@ -77,6 +78,14 @@ export class AppService {
 
   async submitTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' = 'log'): Promise<TaskEntry[]> {
     return createTaskEntries(taskIds, content, type)
+  }
+
+  async extractAgentConversationsFromEntry(entry: TaskEntry): Promise<AgentConversation[]> {
+    return extractAndAddAgentConversationsFromEntry(entry)
+  }
+
+  async getTaskAgentConversations(taskId: string): Promise<AgentConversation[]> {
+    return getTaskAgentConversations(taskId)
   }
 
   async updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {

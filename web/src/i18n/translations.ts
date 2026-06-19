@@ -222,6 +222,7 @@ export const translations: Record<string, TranslationEntry> = {
   'task.pin': { 'zh-CN': '置顶', en: 'Pin' },
   'task.unpin': { 'zh-CN': '取消置顶', en: 'Unpin' },
 
-  // Claude
+  // Agent
+  'workspace.agent': { 'zh-CN': 'Agent', en: 'Agent' },
   'workspace.claude': { 'zh-CN': 'Claude', en: 'Claude' },
 }

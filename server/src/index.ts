@@ -68,7 +68,7 @@ function backgroundPreview(value: string): string {
 
 app.use('/*', cors())
 
-import { getTaskById as getTaskByIdSync, setTaskExtraInfo } from './services/taskService'
+import { backfillAgentConversationsFromTaskLogs, getTaskById as getTaskByIdSync, setTaskExtraInfo } from './services/taskService'
 
 // Extract client ID from header for SSE source tracking
 app.use('/*', async (c, next) => {
@@ -240,6 +240,7 @@ app.get('/api/tasks/:id/logs', async (c) => {
 app.post('/api/tasks/:id/logs', async (c) => {
   const body = await c.req.json()
   const entry = await service.submitTaskEntry(c.req.param('id'), body.content, body.type ?? 'log')
+  await service.extractAgentConversationsFromEntry(entry)
   saveConversationId(c, c.req.param('id'))
   if (!body.silent) {
     broadcastEvent('entry_created', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
@@ -258,6 +259,7 @@ app.post('/api/tasks/logs/batch', async (c) => {
   try {
     const entries = await service.submitTaskEntries(taskIds, body.content, body.type ?? 'log')
     for (const entry of entries) {
+      await service.extractAgentConversationsFromEntry(entry)
       saveConversationId(c, entry.taskId)
       if (!body.silent) {
         broadcastEvent('entry_created', { taskId: entry.taskId, entryId: entry.id, type: entry.type }, c.get('clientId'))
@@ -272,6 +274,10 @@ app.post('/api/tasks/logs/batch', async (c) => {
     const status = message.includes('Task not found') ? 404 : 400
     return c.json({ error: message }, status)
   }
+})
+
+app.get('/api/tasks/:id/agent-conversations', async (c) => {
+  return c.json(await service.getTaskAgentConversations(c.req.param('id')))
 })
 
 app.get('/api/tasks/:id/log-draft', async (c) => {
@@ -856,6 +862,7 @@ const host = config.server.host
 
 initDb()
 for (const task of interruptRunningBackgroundTasks()) emitBackgroundTask(task)
+backfillAgentConversationsFromTaskLogs()
 
 // Auto-rebuild FTS index when tokenizer version changes
 const FTS_INDEX_VERSION_KEY = 'fts_tokenizer_version'
