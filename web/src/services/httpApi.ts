@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -327,6 +327,16 @@ export const httpApi: ApiInterface = {
 
   async buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult> {
     const { data } = await (await withClientId()).post<PlanTodayDraftResult>(`/api/day-scripts/${encodeURIComponent(date)}/plan-today-draft`)
+    return data
+  },
+
+  async fetchWorkOverviewHiddenSignals(): Promise<WorkOverviewHiddenSignal[]> {
+    const { data } = await (await withClientId()).get<WorkOverviewHiddenSignal[]>('/api/work-overview/hidden-signals')
+    return data
+  },
+
+  async hideWorkOverviewSignal(input: { taskId: string; sourceType: WorkOverviewHidableSignalSourceType; signalKey: string }): Promise<WorkOverviewHiddenSignal> {
+    const { data } = await (await withClientId()).post<WorkOverviewHiddenSignal>('/api/work-overview/hidden-signals', input)
     return data
   },
 

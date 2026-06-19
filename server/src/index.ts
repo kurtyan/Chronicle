@@ -23,6 +23,11 @@ import { createSSEStream, broadcastEvent } from './services/eventBus'
 import { testTaskSummaryPrompt } from './services/taskContextService'
 import { buildPlanTodayDraft, generateDailySummary, getDailySummaryCache } from './services/dayScriptLlmService'
 import {
+  hideWorkOverviewSignal,
+  isWorkOverviewHidableSignalSourceType,
+  listWorkOverviewHiddenSignals,
+} from './services/workOverviewHiddenSignalService'
+import {
   cleanupBackgroundTasks,
   consumeBackgroundTask,
   createOrReuseRunningTask,
@@ -654,6 +659,32 @@ app.post('/api/day-scripts/:date/plan-today-draft', async (c) => {
     return c.json(buildPlanTodayDraft(c.req.param('date')))
   } catch (err: any) {
     return c.json({ error: err?.message || 'Plan today draft failed' }, 400)
+  }
+})
+
+app.get('/api/work-overview/hidden-signals', async (c) => {
+  return c.json(listWorkOverviewHiddenSignals())
+})
+
+app.post('/api/work-overview/hidden-signals', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    if (typeof body.taskId !== 'string' || !body.taskId.trim()) {
+      return c.json({ error: 'taskId is required' }, 400)
+    }
+    if (!isWorkOverviewHidableSignalSourceType(body.sourceType)) {
+      return c.json({ error: 'Invalid sourceType' }, 400)
+    }
+    if (typeof body.signalKey !== 'string' || !body.signalKey.trim()) {
+      return c.json({ error: 'signalKey is required' }, 400)
+    }
+    return c.json(hideWorkOverviewSignal({
+      taskId: body.taskId,
+      sourceType: body.sourceType,
+      signalKey: body.signalKey,
+    }))
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Hide work overview signal failed' }, 400)
   }
 })
 

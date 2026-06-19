@@ -9,6 +9,11 @@ import {
   insertLlmCallLog,
 } from './llmService'
 import { getTaskContexts } from './taskContextService'
+import {
+  getWorkOverviewHiddenSignalKeySet,
+  isWorkOverviewHidableSignalSourceType,
+  workOverviewHiddenSignalCompositeKey,
+} from './workOverviewHiddenSignalService'
 
 type JsonNode = {
   type?: string
@@ -38,6 +43,29 @@ export interface PlanTodayDraftResult {
     recommendedTaskCount: number
     carriedBlockCount: number
   }
+}
+
+type WorkOverviewSourceType = 'focus' | 'carry_over' | 'explicit' | 'recommended'
+
+interface WorkOverviewSignal {
+  id: string
+  taskId: string
+  sourceType: WorkOverviewSourceType
+  signalKey: string
+  blockSource: DayScriptBlockSource
+  originScriptDate: string | null
+  originBlockId: string | null
+  originSource: DayScriptBlockSource | null
+  text: string
+  progressText: string
+  createdAt: number
+}
+
+interface WorkOverviewItem {
+  taskId: string
+  task: Task
+  primarySignal: WorkOverviewSignal
+  signals: WorkOverviewSignal[]
 }
 
 interface SessionWithTask extends WorkSession {
@@ -183,7 +211,12 @@ function sourceAttrs(source: DayScriptBlockSource, origin?: Pick<DayScriptBlock,
 }
 
 function normalizeActionText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim().toLowerCase()
+  return value
+    .replace(/\b(next step|recommended|carry[- ]over)\b\s*:?\s*/gi, '')
+    .replace(/[，。；;：:、,.!?！？()[\]{}"'`]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
 }
 
 function actionTextForTask(value: string, task?: Task): string {
@@ -194,6 +227,174 @@ function actionTextForTask(value: string, task?: Task): string {
   if (mentionIndex < 0) return trimmed
   const afterMention = trimmed.slice(mentionIndex + mention.length).trim()
   return afterMention.replace(/^:/, '').trim() || trimmed
+}
+
+function getBlockActionText(block: Pick<DayScriptBlock, 'headerText' | 'progressText' | 'startTime' | 'endTime'>): string {
+  const header = block.headerText.trim()
+  const progress = block.progressText.trim()
+  if (header && progress) return `${header}: ${progress}`
+  return header || progress || `${block.startTime}-${block.endTime}`
+}
+
+function areSimilarActions(a: string, b: string): boolean {
+  const left = normalizeActionText(a)
+  const right = normalizeActionText(b)
+  if (!left || !right) return false
+  return left === right || left.includes(right) || right.includes(left)
+}
+
+function workOverviewRank(sourceType: WorkOverviewSourceType): number {
+  return {
+    focus: 0,
+    carry_over: 1,
+    explicit: 2,
+    recommended: 3,
+  }[sourceType]
+}
+
+function signalKeyForCarryOverBlock(block: DayScriptBlock): string {
+  return `${block.originScriptDate ?? ''}:${block.originBlockId ?? block.id}`
+}
+
+function signalKeyForActionText(text: string): string {
+  return normalizeActionText(text)
+}
+
+function sourceAttrsForSignal(signal: WorkOverviewSignal): Record<string, any> {
+  return {
+    source: signal.blockSource,
+    ...(signal.originScriptDate ? { originScriptDate: signal.originScriptDate } : {}),
+    ...(signal.originBlockId ? { originBlockId: signal.originBlockId } : {}),
+    ...(signal.originSource ? { originSource: signal.originSource } : {}),
+  }
+}
+
+function buildWorkOverviewItems(options: {
+  tasksById: Map<string, Task>
+  existingToday: DayScriptBlock[]
+  carryOverBlocks: DayScriptBlock[]
+  contexts: ReturnType<typeof getTaskContexts>
+  includeTodayFocus: boolean
+}): WorkOverviewItem[] {
+  const items = new Map<string, WorkOverviewItem>()
+  const hiddenSignalKeys = getWorkOverviewHiddenSignalKeySet()
+
+  const addSignal = (signal: WorkOverviewSignal) => {
+    const task = options.tasksById.get(signal.taskId)
+    if (!task) return
+    if (
+      isWorkOverviewHidableSignalSourceType(signal.sourceType)
+      && hiddenSignalKeys.has(workOverviewHiddenSignalCompositeKey({
+        taskId: signal.taskId,
+        sourceType: signal.sourceType,
+        signalKey: signal.signalKey,
+      }))
+    ) {
+      return
+    }
+
+    const existing = items.get(signal.taskId)
+    if (existing) {
+      if (!existing.signals.some((item) => item.sourceType === signal.sourceType && areSimilarActions(item.text, signal.text))) {
+        existing.signals.push(signal)
+      }
+      existing.signals.sort((a, b) => workOverviewRank(a.sourceType) - workOverviewRank(b.sourceType) || b.createdAt - a.createdAt)
+      existing.primarySignal = existing.signals[0]
+      return
+    }
+
+    items.set(signal.taskId, {
+      taskId: signal.taskId,
+      task,
+      primarySignal: signal,
+      signals: [signal],
+    })
+  }
+
+  if (options.includeTodayFocus) {
+    for (const block of options.existingToday) {
+      if (block.completed) continue
+      const taskId = block.taskIds[0]
+      if (!taskId) continue
+      addSignal({
+        id: `focus:${block.id}:${taskId}`,
+        taskId,
+        sourceType: 'focus',
+        signalKey: '',
+        blockSource: block.source,
+        originScriptDate: block.originScriptDate,
+        originBlockId: block.originBlockId,
+        originSource: block.originSource,
+        text: getBlockActionText(block),
+        progressText: block.progressText.trim(),
+        createdAt: block.sortOrder,
+      })
+    }
+  }
+
+  for (const block of options.carryOverBlocks) {
+    if (block.completed) continue
+    const taskId = block.taskIds[0]
+    if (!taskId) continue
+    addSignal({
+      id: `carry_over:${block.id}:${taskId}`,
+      taskId,
+      sourceType: 'carry_over',
+      signalKey: signalKeyForCarryOverBlock(block),
+      blockSource: 'carry_over',
+      originScriptDate: block.originScriptDate,
+      originBlockId: block.originBlockId,
+      originSource: block.originSource,
+      text: getBlockActionText(block),
+      progressText: block.progressText.trim(),
+      createdAt: block.sortOrder,
+    })
+  }
+
+  for (const context of options.contexts) {
+    const task = options.tasksById.get(context.taskId)
+    if (!task) continue
+    if (context.summary.errorMessage || context.summary.stale) continue
+    const explicit = context.summary.nextStep.trim()
+    const recommended = context.summary.recommendedNextStep.trim()
+    if (explicit) {
+      addSignal({
+        id: `explicit:${context.taskId}`,
+        taskId: context.taskId,
+        sourceType: 'explicit',
+        signalKey: signalKeyForActionText(explicit),
+        blockSource: 'task_next_step',
+        originScriptDate: null,
+        originBlockId: null,
+        originSource: null,
+        text: explicit,
+        progressText: '',
+        createdAt: context.lastActivityAt ?? task.updatedAt,
+      })
+    } else if (recommended) {
+      addSignal({
+        id: `recommended:${context.taskId}`,
+        taskId: context.taskId,
+        sourceType: 'recommended',
+        signalKey: signalKeyForActionText(recommended),
+        blockSource: 'task_recommended_next_step',
+        originScriptDate: null,
+        originBlockId: null,
+        originSource: null,
+        text: recommended,
+        progressText: '',
+        createdAt: context.lastActivityAt ?? task.updatedAt,
+      })
+    }
+  }
+
+  return [...items.values()]
+    .map((item) => ({
+      ...item,
+      signals: item.signals.sort((a, b) => workOverviewRank(a.sourceType) - workOverviewRank(b.sourceType) || b.createdAt - a.createdAt),
+      primarySignal: item.signals.sort((a, b) => workOverviewRank(a.sourceType) - workOverviewRank(b.sourceType) || b.createdAt - a.createdAt)[0],
+    }))
+    .sort((a, b) => workOverviewRank(a.primarySignal.sourceType) - workOverviewRank(b.primarySignal.sourceType) || b.primarySignal.createdAt - a.primarySignal.createdAt)
 }
 
 function extractDocText(node: JsonNode | null | undefined): string {
@@ -462,62 +663,41 @@ export function buildPlanTodayDraft(date: string): PlanTodayDraftResult {
   const tasksById = new Map(getAllTasks().map((task) => [task.id, task]))
   const contexts = getTaskContexts(['PENDING', 'DOING'])
   const existingToday = getDayScript(date).blocks
-  const existingKeys = new Set(existingToday.flatMap((block) =>
-    block.taskIds.map((taskId) => `${taskId}:${normalizeActionText(actionTextForTask(block.headerText, tasksById.get(taskId)))}`)
-  ))
+  const existingTaskIds = new Set(existingToday.flatMap((block) => block.taskIds))
   const carryNodes: JsonNode[] = []
   const taskNodes: JsonNode[] = []
   let recommendedTaskCount = 0
   let taskCount = 0
   let carriedBlockCount = 0
-  const actionKeys = new Set<string>(existingKeys)
-
-  const pushAction = (target: JsonNode[], taskId: string, textValue: string, node: JsonNode) => {
-    const key = `${taskId}:${normalizeActionText(actionTextForTask(textValue, tasksById.get(taskId)))}`
-    if (actionKeys.has(key)) return false
-    actionKeys.add(key)
-    target.push(node)
-    return true
-  }
-
   const carryOverBlocks = getCarryOverDayScriptBlocks(date)
-  for (const block of carryOverBlocks) {
-    const taskId = block.taskIds[0]
-    if (!taskId) continue
-    const added = pushAction(
-      carryNodes,
-      taskId,
-      block.headerText,
-      paragraph(carriedBlockHeader(block, tasksById), sourceAttrs('carry_over', block))
-    )
-    if (added) {
-      carriedBlockCount += 1
-      if (block.progressText.trim()) carryNodes.push(paragraph([text(block.progressText.trim())]))
-    }
-  }
+  const workItems = buildWorkOverviewItems({
+    tasksById,
+    existingToday,
+    carryOverBlocks,
+    contexts,
+    includeTodayFocus: false,
+  })
 
-  for (const context of contexts) {
-    const task = tasksById.get(context.taskId)
-    if (!task) continue
-    if (context.summary.errorMessage || context.summary.stale) continue
-    const explicit = context.summary.nextStep.trim()
-    const recommended = context.summary.recommendedNextStep.trim()
-    const action = explicit || recommended
-    if (!action) continue
-    const added = pushAction(
-      taskNodes,
-      context.taskId,
-      `@${task.title}: ${action}`,
-      paragraph([
-        text(explicit ? 'Next step ' : 'Recommended '),
-        makeTaskMention(task),
-        text(`: ${action}`),
-      ], sourceAttrs(explicit ? 'task_next_step' : 'task_recommended_next_step'))
-    )
-    if (added) {
-      taskCount += 1
-      if (!explicit && recommended) recommendedTaskCount += 1
+  for (const item of workItems) {
+    if (existingTaskIds.has(item.taskId)) continue
+    const signal = item.primarySignal
+
+    if (signal.sourceType === 'carry_over') {
+      const block = carryOverBlocks.find((candidate) => candidate.id === signal.id.split(':')[1])
+      if (!block) continue
+      carryNodes.push(paragraph(carriedBlockHeader(block, tasksById), sourceAttrsForSignal(signal)))
+      carriedBlockCount += 1
+      if (signal.progressText.trim()) carryNodes.push(paragraph([text(signal.progressText.trim())]))
+      continue
     }
+
+    taskNodes.push(paragraph([
+      text(signal.sourceType === 'recommended' ? 'Recommended ' : 'Next step '),
+      makeTaskMention(item.task),
+      text(`: ${signal.text}`),
+    ], sourceAttrsForSignal(signal)))
+    taskCount += 1
+    if (signal.sourceType === 'recommended') recommendedTaskCount += 1
   }
 
   const nodes = [

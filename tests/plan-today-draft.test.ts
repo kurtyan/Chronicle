@@ -83,6 +83,12 @@ function findTaskLink(node: any, taskId: string): any | null {
   return null
 }
 
+function countTaskLinks(node: any, taskId: string): number {
+  if (!node) return 0
+  const current = node.type === 'text' && node.marks?.some((mark: any) => mark.type === 'link' && mark.attrs?.taskId === taskId) ? 1 : 0
+  return current + (node.content ?? []).reduce((sum: number, child: any) => sum + countTaskLinks(child, taskId), 0)
+}
+
 function focusParagraph(prefix: string, task: any, suffix: string, attrs?: Record<string, any>) {
   return {
     type: 'paragraph',
@@ -259,6 +265,162 @@ test.describe('Plan Today draft', () => {
       const carriedBlock = saved.script.blocks.find((block: any) => block.headerText.includes('昨日未完成事项'))
       expect(carriedBlock?.taskIds).toContain(carriedTask.id)
       expect(carriedBlock?.source).toBe('carry_over')
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+    }
+  })
+
+  test('dedupes plan draft by work item when carry-over and explicit next step describe the same task', async ({ page }) => {
+    const today = uniqueScriptDate(uniqueDayOffset() + 33)
+    const yesterday = dateOffset(today, -1)
+    const task = await createTask(page, `PlanDedupe-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    await page.request.put('/api/settings/llm', {
+      data: { ...originalSettings, baseUrl: '', model: '' },
+    })
+
+    try {
+      await saveDayScript(page, yesterday, {
+        type: 'doc',
+        content: [
+          focusParagraph('09:00-09:30 ', task, ' finish duplicate action'),
+          { type: 'paragraph', content: [{ type: 'text', text: 'carry context should stay with the carried item' }] },
+        ],
+      })
+      await page.request.post(`/api/tasks/${task.id}/logs`, {
+        data: { content: '<p>下一步：finish duplicate action</p>', type: 'log' },
+      })
+      const summarize = await page.request.post('/api/task-context/summarize', { data: { taskIds: [task.id] } })
+      expect(summarize.ok()).toBeTruthy()
+
+      const draftRes = await page.request.post(`/api/day-scripts/${today}/plan-today-draft`)
+      expect(draftRes.ok()).toBeTruthy()
+      const draft = await draftRes.json()
+      const draftText = docText(draft.document)
+
+      expect(countTaskLinks(draft.document, task.id)).toBe(1)
+      expect(draftText).toContain('finish duplicate action')
+      expect(draftText).toContain('carry context should stay with the carried item')
+      expect(draft.sources.carriedBlockCount).toBe(1)
+      expect(draftText).not.toContain(`Next step @${task.title}`)
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+    }
+  })
+
+  test('Work Overview groups duplicate sources for the same task into one item', async ({ page }) => {
+    const today = workdayDate(5, 0)
+    const yesterday = dateOffset(today, -1)
+    const task = await createTask(page, `OverviewDedupe-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    await page.request.put('/api/settings/llm', {
+      data: { ...originalSettings, baseUrl: '', model: '' },
+    })
+
+    try {
+      await saveDayScript(page, yesterday, {
+        type: 'doc',
+        content: [
+          focusParagraph('09:00-09:30 ', task, ' review duplicate overview action'),
+        ],
+      })
+      await page.request.post(`/api/tasks/${task.id}/logs`, {
+        data: { content: '<p>下一步：review duplicate overview action</p>', type: 'log' },
+      })
+      const summarize = await page.request.post('/api/task-context/summarize', { data: { taskIds: [task.id] } })
+      expect(summarize.ok()).toBeTruthy()
+
+      await page.goto(`/today?date=${today}&lang=en`)
+      await page.waitForLoadState('load')
+      const board = page.getByTestId('overall-next-steps-board')
+      await expect(board).toBeVisible()
+      await expect(board).toContainText('Work overview')
+      await expect(board.locator(`[title="${task.title}"]`)).toHaveCount(1)
+      await expect(board).toContainText('Carry-over')
+      await expect(board).toContainText('Explicit')
+      await expect(board).toContainText('2 signals')
+
+      const card = board.locator('[data-next-step-source="carry_over"]').filter({ hasText: task.title })
+      await card.getByRole('button', { name: 'Carry-over' }).click()
+      await card.getByRole('button', { name: 'Hide signal' }).click()
+
+      const remainingCard = board.locator('[data-next-step-source="explicit"]').filter({ hasText: task.title })
+      await expect(remainingCard).toBeVisible()
+      await expect(remainingCard).toContainText('Explicit')
+      await expect(remainingCard).not.toContainText('Carry-over')
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+    }
+  })
+
+  test('hidden Work Overview signals are filtered from Plan Today across carry-over days', async ({ page }) => {
+    const today = uniqueScriptDate(uniqueDayOffset() + 44)
+    const yesterday = dateOffset(today, -1)
+    const tomorrow = dateOffset(today, 1)
+    const carryTask = await createTask(page, `HiddenCarry-${Date.now()}`)
+    const explicitTask = await createTask(page, `HiddenExplicit-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    await page.request.put('/api/settings/llm', {
+      data: { ...originalSettings, baseUrl: '', model: '' },
+    })
+
+    try {
+      await saveDayScript(page, yesterday, {
+        type: 'doc',
+        content: [
+          focusParagraph('09:00-09:30 ', carryTask, ' hidden carry action'),
+        ],
+      })
+      await page.request.post(`/api/tasks/${explicitTask.id}/logs`, {
+        data: { content: '<p>下一步：hidden explicit action</p>', type: 'log' },
+      })
+      const summarize = await page.request.post('/api/task-context/summarize', { data: { taskIds: [explicitTask.id] } })
+      expect(summarize.ok()).toBeTruthy()
+
+      const carryRes = await page.request.get(`/api/day-scripts/${today}/carry-over-blocks`)
+      expect(carryRes.ok()).toBeTruthy()
+      const carryBlocks = await carryRes.json()
+      const carryBlock = carryBlocks.find((block: any) => block.headerText.includes('hidden carry action'))
+      expect(carryBlock).toBeTruthy()
+
+      const hideCarry = await page.request.post('/api/work-overview/hidden-signals', {
+        data: {
+          taskId: carryTask.id,
+          sourceType: 'carry_over',
+          signalKey: `${carryBlock.originScriptDate ?? ''}:${carryBlock.originBlockId ?? carryBlock.id}`,
+        },
+      })
+      expect(hideCarry.ok()).toBeTruthy()
+      const hideExplicit = await page.request.post('/api/work-overview/hidden-signals', {
+        data: {
+          taskId: explicitTask.id,
+          sourceType: 'explicit',
+          signalKey: 'hidden explicit action',
+        },
+      })
+      expect(hideExplicit.ok()).toBeTruthy()
+
+      const rawCarryAfterHide = await page.request.get(`/api/day-scripts/${today}/carry-over-blocks`)
+      expect(rawCarryAfterHide.ok()).toBeTruthy()
+      expect(docText({ content: (await rawCarryAfterHide.json()).map((block: any) => ({ content: [{ type: 'text', text: block.headerText }] })) })).toContain('hidden carry action')
+
+      const todayDraftRes = await page.request.post(`/api/day-scripts/${today}/plan-today-draft`)
+      expect(todayDraftRes.ok()).toBeTruthy()
+      const todayDraft = await todayDraftRes.json()
+      const todayText = docText(todayDraft.document)
+      expect(todayText).not.toContain('hidden carry action')
+      expect(todayText).not.toContain('hidden explicit action')
+      expect(countTaskLinks(todayDraft.document, carryTask.id)).toBe(0)
+      expect(countTaskLinks(todayDraft.document, explicitTask.id)).toBe(0)
+
+      const tomorrowDraftRes = await page.request.post(`/api/day-scripts/${tomorrow}/plan-today-draft`)
+      expect(tomorrowDraftRes.ok()).toBeTruthy()
+      const tomorrowDraft = await tomorrowDraftRes.json()
+      const tomorrowText = docText(tomorrowDraft.document)
+      expect(tomorrowText).not.toContain('hidden carry action')
+      expect(tomorrowText).not.toContain('hidden explicit action')
+      expect(countTaskLinks(tomorrowDraft.document, carryTask.id)).toBe(0)
+      expect(countTaskLinks(tomorrowDraft.document, explicitTask.id)).toBe(0)
     } finally {
       await page.request.put('/api/settings/llm', { data: originalSettings })
     }

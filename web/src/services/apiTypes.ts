@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -72,6 +72,8 @@ export interface ApiInterface {
   fetchDailySummaryCache(date: string): Promise<DailySummaryCacheResult | null>
   generateDailySummaryInBackground(date: string): Promise<BackgroundTask>
   buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult>
+  fetchWorkOverviewHiddenSignals(): Promise<WorkOverviewHiddenSignal[]>
+  hideWorkOverviewSignal(input: { taskId: string; sourceType: WorkOverviewHidableSignalSourceType; signalKey: string }): Promise<WorkOverviewHiddenSignal>
   getTaskContexts(status?: string): Promise<TaskProgressContext[]>
   refreshTaskContexts(taskIds?: string[]): Promise<TaskProgressContext[]>
   testTaskSummaryPrompt(taskId: string): Promise<TaskSummaryTestResult>

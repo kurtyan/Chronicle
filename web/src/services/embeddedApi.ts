@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -52,6 +52,7 @@ function sessionRowToWorkSession(row: any): WorkSession {
 export class EmbeddedApiProvider implements ApiInterface {
   private db: Database | null = null
   private initPromise: Promise<void> | null = null
+  private hiddenOverviewSignals = new Map<string, WorkOverviewHiddenSignal>()
 
   private async ensureDb(): Promise<Database> {
     if (this.db) return this.db
@@ -784,6 +785,22 @@ export class EmbeddedApiProvider implements ApiInterface {
   }
   async buildPlanTodayDraft(date: string): Promise<PlanTodayDraftResult> {
     return { date, document: { type: 'doc', content: [{ type: 'paragraph' }] }, sources: { taskCount: 0, recommendedTaskCount: 0, carriedBlockCount: 0 } }
+  }
+  async fetchWorkOverviewHiddenSignals(): Promise<WorkOverviewHiddenSignal[]> {
+    return [...this.hiddenOverviewSignals.values()].sort((a, b) => b.hiddenAt - a.hiddenAt)
+  }
+  async hideWorkOverviewSignal(input: { taskId: string; sourceType: WorkOverviewHidableSignalSourceType; signalKey: string }): Promise<WorkOverviewHiddenSignal> {
+    const key = `${input.taskId}:${input.sourceType}:${input.signalKey}`
+    const existing = this.hiddenOverviewSignals.get(key)
+    const hidden: WorkOverviewHiddenSignal = {
+      id: existing?.id ?? crypto.randomUUID(),
+      taskId: input.taskId,
+      sourceType: input.sourceType,
+      signalKey: input.signalKey,
+      hiddenAt: Date.now(),
+    }
+    this.hiddenOverviewSignals.set(key, hidden)
+    return hidden
   }
   async getTaskContexts(): Promise<TaskProgressContext[]> {
     return []

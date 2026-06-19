@@ -98,6 +98,21 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS work_overview_hidden_signals (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      signal_key TEXT NOT NULL,
+      hidden_at INTEGER NOT NULL,
+      UNIQUE(task_id, source_type, signal_key)
+    )
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_work_overview_hidden_signals_lookup
+    ON work_overview_hidden_signals(task_id, source_type, signal_key)
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS llm_call_logs (
       id TEXT PRIMARY KEY,
       feature TEXT NOT NULL,

@@ -4,8 +4,8 @@ import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Maximize2, Plus,
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
-import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress } from '@/services/api'
-import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext } from '@/types'
+import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, fetchWorkOverviewHiddenSignals, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, hideWorkOverviewSignal, saveDayScript, submitDayScriptProgress } from '@/services/api'
+import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext, WorkOverviewHidableSignalSourceType, WorkOverviewHiddenSignal } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 import { dailySummarySourceKey, useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
@@ -28,10 +28,25 @@ type NextStepAction = {
   originScriptDate: string | null
   originBlockId: string | null
   originSource: DayScriptBlockSource | null
+  signalKey: string
+  canHideSignal: boolean
   text: string
   state: 'updating' | 'stale' | 'failed' | 'current' | 'pending'
   lastActivityAt: number | null
   timeLabel?: string
+  inFocus: boolean
+  canPlan: boolean
+}
+
+type WorkOverviewItem = {
+  id: string
+  taskId: string | null
+  taskTitle: string
+  taskStatus: string
+  primaryAction: NextStepAction
+  actions: NextStepAction[]
+  state: NextStepAction['state']
+  lastActivityAt: number | null
   inFocus: boolean
   canPlan: boolean
 }
@@ -135,7 +150,28 @@ function getBlockActionText(block: DayScriptBlock): string {
 }
 
 function normalizeActionText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().toLowerCase()
+  return text
+    .replace(/\b(next step|recommended|carry[- ]over)\b\s*:?\s*/gi, '')
+    .replace(/[，。；;：:、,.!?！？()[\]{}"'`]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function signalKeyForActionText(text: string): string {
+  return normalizeActionText(text)
+}
+
+function signalKeyForCarryOverBlock(block: DayScriptBlock): string {
+  return `${block.originScriptDate ?? ''}:${block.originBlockId ?? block.id}`
+}
+
+function isHidableSignalSource(sourceType: NextStepSourceType): sourceType is WorkOverviewHidableSignalSourceType {
+  return sourceType === 'carry_over' || sourceType === 'explicit' || sourceType === 'recommended'
+}
+
+function hiddenSignalKey(input: { taskId: string; sourceType: WorkOverviewHidableSignalSourceType; signalKey: string }): string {
+  return `${input.taskId}:${input.sourceType}:${input.signalKey}`
 }
 
 function actionTextForTask(text: string, taskTitle: string): string {
@@ -148,6 +184,13 @@ function actionTextForTask(text: string, taskTitle: string): string {
   }
   const colonIndex = trimmed.indexOf(':')
   return colonIndex >= 0 ? trimmed.slice(colonIndex + 1).trim() : trimmed
+}
+
+function areSimilarActions(leftText: string, rightText: string): boolean {
+  const left = normalizeActionText(leftText)
+  const right = normalizeActionText(rightText)
+  if (!left || !right) return false
+  return left === right || left.includes(right) || right.includes(left)
 }
 
 function getActionState(context: TaskProgressContext, updatingIds: Set<string>): NextStepAction['state'] {
@@ -192,21 +235,24 @@ function FocusStatusBar({ blocks, tasks, scriptDate, todayScriptDate }: { blocks
 }
 
 function OverallNextStepsBoard({
-  actions,
+  items,
   onPlan,
   onOpen,
+  onHideSignal,
   maximized = false,
   onMaximize,
   onCloseMaximized,
 }: {
-  actions: NextStepAction[]
+  items: WorkOverviewItem[]
   onPlan: (action: NextStepAction) => void
   onOpen: (action: NextStepAction) => void
+  onHideSignal: (action: NextStepAction) => void
   maximized?: boolean
   onMaximize?: () => void
   onCloseMaximized?: () => void
 }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(OVERALL_NEXT_STEPS_COLLAPSED_KEY) === '1')
+  const [openSignalMenu, setOpenSignalMenu] = useState<string | null>(null)
 
   const toggle = () => {
     const next = !collapsed
@@ -214,15 +260,25 @@ function OverallNextStepsBoard({
     localStorage.setItem(OVERALL_NEXT_STEPS_COLLAPSED_KEY, next ? '1' : '0')
   }
 
-  if (actions.length === 0) return null
+  if (items.length === 0) return null
 
-  const sectionDefs: Array<{ key: NextStepSourceType; label: string }> = [
+  const sectionDefs: Array<{ key: 'now' | 'planned' | 'suggested'; label: string }> = [
     { key: 'now', label: 'Now' },
-    { key: 'focus', label: 'Focus Plan' },
-    { key: 'explicit', label: 'Explicit Next' },
-    { key: 'recommended', label: 'Recommended' },
-    { key: 'carry_over', label: 'Carry-over' },
+    { key: 'planned', label: 'Planned / carried' },
+    { key: 'suggested', label: 'Suggested' },
   ]
+  const sourceLabel: Record<NextStepSourceType, string> = {
+    now: 'Now',
+    focus: 'Focus',
+    explicit: 'Explicit',
+    recommended: 'Recommended',
+    carry_over: 'Carry-over',
+  }
+  const sectionForItem = (item: WorkOverviewItem): 'now' | 'planned' | 'suggested' => {
+    if (item.primaryAction.sourceType === 'now') return 'now'
+    if (item.primaryAction.sourceType === 'focus' || item.primaryAction.sourceType === 'carry_over') return 'planned'
+    return 'suggested'
+  }
   const stateLabel: Record<NextStepAction['state'], string> = {
     updating: 'Updating',
     stale: 'Stale',
@@ -237,6 +293,16 @@ function OverallNextStepsBoard({
     current: 'bg-green-500/10 text-green-600',
     pending: 'bg-muted text-muted-foreground',
   }
+  const sourceActionsForItem = (item: WorkOverviewItem): NextStepAction[] => {
+    const seen = new Set<NextStepSourceType>()
+    const sourceActions: NextStepAction[] = []
+    for (const action of item.actions) {
+      if (seen.has(action.sourceType)) continue
+      seen.add(action.sourceType)
+      sourceActions.push(action)
+    }
+    return sourceActions
+  }
 
   return (
     <div
@@ -249,9 +315,9 @@ function OverallNextStepsBoard({
       <div className="flex items-center justify-between gap-3">
         <button className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={maximized ? undefined : toggle}>
           <span className={maximized ? 'text-base font-semibold text-foreground' : 'text-xs font-semibold uppercase tracking-normal text-muted-foreground'}>
-            Overall next steps
+            Work overview
           </span>
-          <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{actions.length}</span>
+          <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{items.length}</span>
         </button>
         <div className="flex shrink-0 items-center gap-1">
           {!maximized && onMaximize && (
@@ -279,58 +345,97 @@ function OverallNextStepsBoard({
       {(maximized || !collapsed) && (
         <div className={maximized ? 'mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1' : 'mt-2 max-h-64 space-y-3 overflow-y-auto pr-1'}>
           {sectionDefs.map((section) => {
-            const sectionActions = actions.filter((action) => action.sourceType === section.key)
-            if (sectionActions.length === 0) return null
+            const sectionItems = items.filter((item) => sectionForItem(item) === section.key)
+            if (sectionItems.length === 0) return null
             return (
               <section key={section.key} className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-normal text-muted-foreground">
                   <span>{section.label}</span>
-                  <span>{sectionActions.length}</span>
+                  <span>{sectionItems.length}</span>
                 </div>
-                {sectionActions.map((action) => (
+                {sectionItems.map((item) => (
                   <div
-                    key={action.id}
-                    data-next-step-action-id={action.id}
-                    data-next-step-source={action.sourceType}
-                    className={`rounded-md border border-border/70 bg-background/80 px-2.5 py-2 ${action.taskId ? 'cursor-pointer hover:bg-muted/50' : ''}`}
+                    key={item.id}
+                    data-next-step-action-id={item.primaryAction.id}
+                    data-next-step-source={item.primaryAction.sourceType}
+                    className={`rounded-md border border-border/70 bg-background/80 px-2.5 py-2 ${item.taskId ? 'cursor-pointer hover:bg-muted/50' : ''}`}
                     onClick={() => {
-                      if (action.taskId) onOpen(action)
+                      if (item.taskId) onOpen(item.primaryAction)
                     }}
-                    role={action.taskId ? 'button' : undefined}
-                    aria-label={action.taskId ? `Open task ${action.taskId}` : undefined}
-                    tabIndex={action.taskId ? 0 : undefined}
+                    role={item.taskId ? 'button' : undefined}
+                    aria-label={item.taskId ? `Open task ${item.taskId}` : undefined}
+                    tabIndex={item.taskId ? 0 : undefined}
                     onKeyDown={(event) => {
-                      if (!action.taskId) return
+                      if (!item.taskId) return
                       if (event.key === 'Enter' || event.key === ' ') {
                         event.preventDefault()
-                        onOpen(action)
+                        onOpen(item.primaryAction)
                       }
                     }}
                   >
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <span className="truncate text-xs font-medium text-muted-foreground" title={action.taskTitle}>{action.taskTitle}</span>
-                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{action.taskStatus}</span>
-                          {action.timeLabel && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{action.timeLabel}</span>}
-                          {action.inFocus && <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">In Focus</span>}
-                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateClass[action.state]}`}>{stateLabel[action.state]}</span>
+                          <span className="truncate text-xs font-medium text-muted-foreground" title={item.taskTitle}>{item.taskTitle}</span>
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.taskStatus}</span>
+                          {item.primaryAction.timeLabel && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.primaryAction.timeLabel}</span>}
+                          {item.inFocus && <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">In Focus</span>}
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateClass[item.state]}`}>{stateLabel[item.state]}</span>
+                          {sourceActionsForItem(item).map((action) => {
+                            const menuKey = `${item.id}:${action.sourceType}:${action.signalKey}`
+                            if (!action.canHideSignal) {
+                              return <span key={menuKey} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{sourceLabel[action.sourceType]}</span>
+                            }
+                            return (
+                              <span key={menuKey} className="relative inline-flex">
+                                <button
+                                  type="button"
+                                  className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    setOpenSignalMenu((current) => current === menuKey ? null : menuKey)
+                                  }}
+                                  title={`Signal actions: ${sourceLabel[action.sourceType]}`}
+                                >
+                                  {sourceLabel[action.sourceType]}
+                                </button>
+                                {openSignalMenu === menuKey && (
+                                  <div
+                                    className="absolute left-0 top-full z-50 mt-1 min-w-28 rounded-md border border-border bg-popover p-1 text-xs shadow-lg"
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="block w-full rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      onClick={() => {
+                                        setOpenSignalMenu(null)
+                                        onHideSignal(action)
+                                      }}
+                                    >
+                                      Hide signal
+                                    </button>
+                                  </div>
+                                )}
+                              </span>
+                            )
+                          })}
+                          {item.actions.length > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.actions.length} signals</span>}
                         </div>
-                        <div className={maximized ? 'mt-1 text-sm leading-6 text-foreground' : 'mt-1 line-clamp-2 text-sm text-foreground'}>{action.text}</div>
+                        <div className={maximized ? 'mt-1 text-sm leading-6 text-foreground' : 'mt-1 line-clamp-2 text-sm text-foreground'}>{item.primaryAction.text}</div>
                       </div>
                       <div className="flex shrink-0 items-center gap-1">
-                        {action.canPlan && (
+                        {item.canPlan && (
                           <button
                             className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:cursor-default disabled:opacity-50"
-                            disabled={action.inFocus}
+                            disabled={item.inFocus}
                             onClick={(event) => {
                               event.stopPropagation()
-                              onPlan(action)
+                              onPlan(item.primaryAction)
                             }}
-                            title={action.inFocus ? 'Already in Focus' : 'Plan in Focus'}
+                            title={item.inFocus ? 'Already in Focus' : 'Plan in Focus'}
                           >
                             <Plus className="h-3 w-3" />
-                            {action.inFocus ? 'In Focus' : 'Plan'}
+                            {item.inFocus ? 'In Focus' : 'Plan'}
                           </button>
                         )}
                       </div>
@@ -372,6 +477,7 @@ export function TodayPage() {
   const [planDraftPreviewError, setPlanDraftPreviewError] = useState('')
   const [planDraftLoading, setPlanDraftLoading] = useState(false)
   const [carryOverBlocks, setCarryOverBlocks] = useState<DayScriptBlock[]>([])
+  const [hiddenOverviewSignals, setHiddenOverviewSignals] = useState<WorkOverviewHiddenSignal[]>([])
   const [nextStepsMaximized, setNextStepsMaximized] = useState(false)
   const backgroundTasks = useBackgroundTaskStore((s) => s.tasks)
   const loadBackgroundTasks = useBackgroundTaskStore((s) => s.loadTasks)
@@ -535,6 +641,21 @@ export function TodayPage() {
   }, [displayDate])
 
   useEffect(() => {
+    let cancelled = false
+    fetchWorkOverviewHiddenSignals()
+      .then((data) => {
+        if (!cancelled) setHiddenOverviewSignals(data)
+      })
+      .catch((error) => {
+        console.warn('Failed to load hidden Work overview signals:', error)
+        if (!cancelled) setHiddenOverviewSignals([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     if (!nextStepsMaximized) return
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setNextStepsMaximized(false)
@@ -547,13 +668,13 @@ export function TodayPage() {
     () => tasks.filter((task) => task.status === 'PENDING' || task.status === 'DOING').sort((a, b) => b.updatedAt - a.updatedAt),
     [tasks]
   )
-  const nextStepActions = useMemo(() => {
+  const workOverviewItems = useMemo(() => {
     const pendingIds = new Set(pendingTasks.map((task) => task.id))
     const tasksById = new Map(tasks.map((task) => [task.id, task]))
     const currentBlocks = script?.blocks ?? []
     const currentFocusTaskIds = new Set(currentBlocks.flatMap((block) => block.taskIds))
     const actions: NextStepAction[] = []
-    const actionIndexes = new Map<string, number>()
+    const hiddenSignals = new Set(hiddenOverviewSignals.map(hiddenSignalKey))
     const sourceRank: Record<NextStepSourceType, number> = {
       now: 0,
       focus: 1,
@@ -564,15 +685,14 @@ export function TodayPage() {
 
     const pushAction = (action: NextStepAction) => {
       if (!action.text.trim()) return
-      const semanticKey = action.taskId ? `${action.taskId}:${normalizeActionText(actionTextForTask(action.text, action.taskTitle))}` : action.id
-      const existingIndex = actionIndexes.get(semanticKey)
-      if (existingIndex !== undefined) {
-        if (sourceRank[action.sourceType] < sourceRank[actions[existingIndex].sourceType]) {
-          actions[existingIndex] = action
-        }
+      if (
+        action.taskId
+        && action.canHideSignal
+        && isHidableSignalSource(action.sourceType)
+        && hiddenSignals.has(hiddenSignalKey({ taskId: action.taskId, sourceType: action.sourceType, signalKey: action.signalKey }))
+      ) {
         return
       }
-      actionIndexes.set(semanticKey, actions.length)
       actions.push(action)
     }
 
@@ -591,6 +711,8 @@ export function TodayPage() {
         originScriptDate: activeBlock.originScriptDate,
         originBlockId: activeBlock.originBlockId,
         originSource: activeBlock.originSource,
+        signalKey: '',
+        canHideSignal: false,
         text: getBlockActionText(activeBlock),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -614,6 +736,8 @@ export function TodayPage() {
         originScriptDate: block.originScriptDate,
         originBlockId: block.originBlockId,
         originSource: block.originSource,
+        signalKey: '',
+        canHideSignal: false,
         text: getBlockActionText(block),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -639,6 +763,8 @@ export function TodayPage() {
         originScriptDate: null,
         originBlockId: null,
         originSource: null,
+        signalKey: '',
+        canHideSignal: false,
       } satisfies Omit<NextStepAction, 'id' | 'sourceType' | 'blockSource' | 'text'>
       if (nextStep) {
         pushAction({
@@ -646,6 +772,8 @@ export function TodayPage() {
           id: `explicit:${context.taskId}`,
           sourceType: 'explicit',
           blockSource: 'task_next_step',
+          signalKey: signalKeyForActionText(nextStep),
+          canHideSignal: true,
           text: nextStep,
         })
       } else if (recommended) {
@@ -654,6 +782,8 @@ export function TodayPage() {
           id: `recommended:${context.taskId}`,
           sourceType: 'recommended',
           blockSource: 'task_recommended_next_step',
+          signalKey: signalKeyForActionText(recommended),
+          canHideSignal: true,
           text: recommended,
         })
       }
@@ -662,7 +792,6 @@ export function TodayPage() {
     for (const block of carryOverBlocks) {
       if (block.completed) continue
       const taskId = block.taskIds[0] ?? null
-      if (taskId && currentFocusTaskIds.has(taskId)) continue
       const task = taskId ? tasksById.get(taskId) : null
       pushAction({
         id: `carry_over:${block.id}:${taskId ?? 'none'}`,
@@ -674,6 +803,8 @@ export function TodayPage() {
         originScriptDate: block.originScriptDate,
         originBlockId: block.originBlockId,
         originSource: block.originSource,
+        signalKey: signalKeyForCarryOverBlock(block),
+        canHideSignal: Boolean(taskId),
         text: getBlockActionText(block),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -685,8 +816,63 @@ export function TodayPage() {
       })
     }
 
-    return actions.sort((a, b) => sourceRank[a.sourceType] - sourceRank[b.sourceType] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
-  }, [carryOverBlocks, displayDate, insertedNextStepIds, pendingTasks, script, taskContexts, taskSummaryUpdating, tasks, todayScriptDate])
+    const items = new Map<string, WorkOverviewItem>()
+
+    for (const action of actions) {
+      const key = action.taskId ?? action.id
+      const existing = items.get(key)
+      if (!existing) {
+        items.set(key, {
+          id: key,
+          taskId: action.taskId,
+          taskTitle: action.taskTitle,
+          taskStatus: action.taskStatus,
+          primaryAction: action,
+          actions: [action],
+          state: action.state,
+          lastActivityAt: action.lastActivityAt,
+          inFocus: action.inFocus,
+          canPlan: action.canPlan,
+        })
+        continue
+      }
+
+      const duplicateSignal = existing.actions.some((item) =>
+        item.sourceType === action.sourceType
+        && areSimilarActions(actionTextForTask(item.text, item.taskTitle), actionTextForTask(action.text, action.taskTitle))
+      )
+      if (!duplicateSignal) existing.actions.push(action)
+      existing.actions.sort((a, b) => sourceRank[a.sourceType] - sourceRank[b.sourceType] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+      existing.primaryAction = existing.actions[0]
+      existing.state = existing.primaryAction.state
+      existing.lastActivityAt = Math.max(...existing.actions.map((item) => item.lastActivityAt ?? 0)) || null
+      existing.inFocus = existing.actions.some((item) => item.inFocus)
+      existing.canPlan = existing.actions.some((item) => item.canPlan)
+    }
+
+    return [...items.values()].sort((a, b) =>
+      sourceRank[a.primaryAction.sourceType] - sourceRank[b.primaryAction.sourceType]
+      || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
+    )
+  }, [carryOverBlocks, displayDate, hiddenOverviewSignals, insertedNextStepIds, pendingTasks, script, taskContexts, taskSummaryUpdating, tasks, todayScriptDate])
+
+  async function hideOverviewSignal(action: NextStepAction) {
+    if (!action.taskId || !action.canHideSignal || !isHidableSignalSource(action.sourceType)) return
+    try {
+      const hidden = await hideWorkOverviewSignal({
+        taskId: action.taskId,
+        sourceType: action.sourceType,
+        signalKey: action.signalKey,
+      })
+      setHiddenOverviewSignals((current) => {
+        const next = current.filter((item) => hiddenSignalKey(item) !== hiddenSignalKey(hidden))
+        return [hidden, ...next]
+      })
+    } catch (error) {
+      console.error('Failed to hide Work overview signal:', error)
+      setSaveError('Failed to hide Work overview signal.')
+    }
+  }
 
   function appendNextStep(action: NextStepAction) {
     if (!script) return
@@ -1060,9 +1246,10 @@ export function TodayPage() {
                   </div>
                 )}
                 <OverallNextStepsBoard
-                  actions={nextStepActions}
+                  items={workOverviewItems}
                   onPlan={appendNextStep}
                   onOpen={openNextStepAction}
+                  onHideSignal={hideOverviewSignal}
                   onMaximize={() => setNextStepsMaximized(true)}
                 />
                 <DayScriptEditor
@@ -1142,9 +1329,10 @@ export function TodayPage() {
           className="absolute inset-0 z-50 min-h-0 bg-background/95 p-5 backdrop-blur-sm"
         >
           <OverallNextStepsBoard
-            actions={nextStepActions}
+            items={workOverviewItems}
             onPlan={appendNextStep}
             onOpen={openNextStepAction}
+            onHideSignal={hideOverviewSignal}
             maximized
             onCloseMaximized={() => setNextStepsMaximized(false)}
           />

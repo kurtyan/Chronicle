@@ -51,6 +51,16 @@ export interface TaskLogDraft {
   updatedAt: number
 }
 
+export type WorkOverviewHidableSignalSourceType = 'carry_over' | 'explicit' | 'recommended'
+
+export interface WorkOverviewHiddenSignal {
+  id: string
+  taskId: string
+  sourceType: WorkOverviewHidableSignalSourceType
+  signalKey: string
+  hiddenAt: number
+}
+
 export interface AgentConversation {
   agent: 'devin' | 'claude'
   conversationId: string
