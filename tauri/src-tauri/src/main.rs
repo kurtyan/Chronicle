@@ -183,6 +183,7 @@ fn emit_auto_afk_resume(app: &tauri::AppHandle, reason: &str) {
     }
 
     LAST_AUTO_AFK_RESUME_EMIT.store(now, Ordering::Relaxed);
+    LAST_AUTO_AFK_EMIT.store(0, Ordering::Relaxed);
     AUTO_AFK_RESUME_MODE.store(0, Ordering::Relaxed);
     let returned_at = unix_millis();
     let _ = write_client_log(format!("[Auto-AFK] resume detected, reason: {}, returnedAt={}", reason, returned_at));
@@ -200,7 +201,10 @@ fn get_auto_afk_config() -> Result<AutoAfkConfig, String> {
 #[tauri::command]
 fn set_auto_afk_config(app: tauri::AppHandle, config: AutoAfkConfig) -> Result<(), String> {
     write_auto_afk_config(&config)?;
-    // Restart idle checker if toggled on
+    if config.screen_lock_enabled {
+        #[cfg(target_os = "macos")]
+        setup_screen_lock_detection(&app);
+    }
     setup_idle_checker(&app, &config);
     Ok(())
 }
@@ -317,22 +321,32 @@ fn run_terminal_command(command: String) -> Result<(), String> {
     Ok(())
 }
 
-// Screen lock detection via polling
+// Screen lock detection via polling.
+// CGSessionCopyCurrentDictionary() can return NULL during lock screen transitions
+// on modern macOS (Sonoma+). Fix: retry up to 3 times (200ms apart) when NULL;
+// if all retries fail, treat it as "unknown" and don't emit — the idle checker
+// (default 180s) serves as the fallback.
+#[cfg(target_os = "macos")]
+static SCREEN_LOCK_DETECTOR_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(target_os = "macos")]
 fn setup_screen_lock_detection(app: &tauri::AppHandle) {
-    let app_handle = app.clone();
+    if SCREEN_LOCK_DETECTOR_STARTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
 
+    let app_handle = app.clone();
     std::thread::spawn(move || {
         let mut was_locked = false;
         let _ = write_client_log("[Auto-AFK] screen lock detection thread started".to_string());
         loop {
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs(3));
             let config = read_auto_afk_config();
             if !config.enabled || !config.screen_lock_enabled {
                 was_locked = false;
                 continue;
             }
-            let is_locked = is_screen_locked();
+            let is_locked = detect_screen_lock();
             let _ = write_client_log(format!("[Auto-AFK] screen lock check: is_locked={}, was_locked={}", is_locked, was_locked));
             if is_locked && !was_locked {
                 let _ = write_client_log("[Auto-AFK] triggering AFK due to screen lock".to_string());
@@ -353,8 +367,11 @@ extern "C" {
     fn CGSessionCopyCurrentDictionary() -> core_foundation_sys::dictionary::CFDictionaryRef;
 }
 
+/// Try to determine screen lock state via CGSessionCopyCurrentDictionary.
+/// Returns Some(true) if locked, Some(false) if unlocked, or None if the
+/// API returned NULL (e.g. during lock screen transition).
 #[cfg(target_os = "macos")]
-fn is_screen_locked() -> bool {
+fn try_cg_session_screen_is_locked() -> Option<bool> {
     use core_foundation_sys::base::{CFTypeRef, CFRelease};
     use core_foundation_sys::dictionary::CFDictionaryGetValue;
     use core_foundation_sys::number::{CFBooleanGetValue, CFBooleanRef};
@@ -364,7 +381,7 @@ fn is_screen_locked() -> bool {
     unsafe {
         let dict_ref = CGSessionCopyCurrentDictionary();
         if dict_ref.is_null() {
-            return false;
+            return None;
         }
 
         let key_ref = CFStringCreateWithCString(
@@ -374,18 +391,69 @@ fn is_screen_locked() -> bool {
         );
         if key_ref.is_null() {
             CFRelease(dict_ref as CFTypeRef);
-            return false;
+            return None;
         }
 
         let value_ref = CFDictionaryGetValue(dict_ref, key_ref as *const c_void);
         CFRelease(key_ref as CFTypeRef);
+
+        // Read the boolean value BEFORE releasing dict_ref — value_ref is
+        // a borrowed pointer owned by dict_ref.
+        let result = if value_ref.is_null() {
+            Some(false)
+        } else {
+            Some(CFBooleanGetValue(value_ref as CFBooleanRef))
+        };
+
         CFRelease(dict_ref as CFTypeRef);
+        result
+    }
+}
 
-        if value_ref.is_null() {
-            return false;
+/// Detect screen lock with retry. Retries up to 3 times (200ms apart) when
+/// CGSessionCopyCurrentDictionary returns NULL. If all retries fail, returns
+/// false — the idle checker (default 180s timeout) serves as the fallback.
+#[cfg(target_os = "macos")]
+fn detect_screen_lock() -> bool {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(200));
         }
+        match try_cg_session_screen_is_locked() {
+            Some(locked) => return locked,
+            None => {
+                let _ = write_client_log(format!(
+                    "[Auto-AFK] CGSessionCopyCurrentDictionary returned NULL (attempt {})",
+                    attempt + 1
+                ));
+            }
+        }
+    }
+    let _ = write_client_log(
+        "[Auto-AFK] CGSession API failed all retries, skipping this cycle".to_string(),
+    );
+    false
+}
 
-        CFBooleanGetValue(value_ref as CFBooleanRef)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_cg_session_handles_null() {
+        // Can't truly test the C API in unit tests, but verify the function exists
+        // and has the correct return type.
+        let result: Option<bool> = try_cg_session_screen_is_locked();
+        // On non-macOS or when CGSession fails, result may be None or Some(...)
+        // Just verify it doesn't panic.
+        let _ = result;
+    }
+
+    #[test]
+    fn detect_screen_lock_does_not_panic() {
+        // Verify the retry logic doesn't panic.
+        // On non-macOS this is not compiled, so this test is macOS-only via cfg.
+        let _ = detect_screen_lock();
     }
 }
 
