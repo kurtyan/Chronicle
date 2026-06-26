@@ -19,6 +19,7 @@ interface TaskState {
   activeTaskId: string | null
   selectedTask: Task | null
   entries: TaskEntry[]
+  pinnedEntry: TaskEntry | null
   entryLoading: boolean
   filterTypes: TaskType[]
   statusFilter: 'DONE' | 'DROPPED' | 'ON_HOLD' | null
@@ -47,8 +48,10 @@ interface TaskState {
   markDone: (id: string) => Promise<Task | null>
   setOnHold: (id: string) => Promise<Task | null>
   submitEntry: (taskId: string, content: string, type?: 'body' | 'log') => Promise<TaskEntry>
-  updateEntry: (taskId: string, entryId: string, content: string) => Promise<TaskEntry | null>
+  updateEntry: (taskId: string, entryId: string, content: string, type?: 'body' | 'log') => Promise<TaskEntry | null>
   deleteEntry: (taskId: string, entryId: string) => Promise<void>
+  appendToPinned: (taskId: string, content: string) => Promise<TaskEntry>
+  unpinEntry: (taskId: string, entryId: string) => Promise<TaskEntry | null>
   setFilterTypes: (types: TaskType[]) => void
   toggleFilterType: (type: TaskType) => void
   setStatusFilter: (filter: 'DONE' | 'DROPPED' | 'ON_HOLD' | null) => void
@@ -84,6 +87,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   activeTaskId: null,
   selectedTask: null,
   entries: [],
+  pinnedEntry: null,
   entryLoading: false,
   filterTypes: [],
   statusFilter: null,
@@ -216,11 +220,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   setActiveTask: async (id) => {
-    set({ activeTaskId: id, entryLoading: true })
+    set({ activeTaskId: id, entryLoading: true, pinnedEntry: null })
     try {
-      const [task, entries] = id
-        ? await Promise.all([api.getTaskById(id), api.fetchTaskEntries(id)])
-        : [null, []]
+      const [task, entries, pinnedEntry] = id
+        ? await Promise.all([api.getTaskById(id), api.fetchTaskEntries(id), api.fetchPinnedEntry(id)])
+        : [null, [], null]
       // Guard against stale async result: if activeTaskId changed during fetch, skip
       if (get().activeTaskId !== id) return
       if (task) {
@@ -230,14 +234,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             tasks: exists ? state.tasks.map((t) => (t.id === id ? task : t)) : state.tasks,
             selectedTask: task,
             entries,
+            pinnedEntry,
             entryLoading: false,
           }
         })
       } else {
-        set({ entries, entryLoading: false, selectedTask: null })
+        set({ entries, pinnedEntry, entryLoading: false, selectedTask: null })
       }
     } catch {
-      set({ entries: [], entryLoading: false, selectedTask: null })
+      set({ entries: [], pinnedEntry: null, entryLoading: false, selectedTask: null })
     }
   },
 
@@ -264,6 +269,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       activeTaskId: state.activeTaskId === id ? null : state.activeTaskId,
       selectedTask: state.activeTaskId === id ? null : state.selectedTask,
       entries: state.activeTaskId === id ? [] : state.entries,
+      pinnedEntry: state.activeTaskId === id ? null : state.pinnedEntry,
     }))
   },
 
@@ -298,6 +304,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         activeTaskId: nextActiveId,
         selectedTask: nextSelectedTask,
         entries: state.activeTaskId === id && nextActiveId !== id ? [] : state.entries,
+        pinnedEntry: state.activeTaskId === id && nextActiveId !== id ? null : state.pinnedEntry,
         entryLoading: state.activeTaskId === id && nextActiveId !== null && nextActiveId !== id,
       }
     })
@@ -337,6 +344,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         activeTaskId: nextActiveId,
         selectedTask: nextSelectedTask,
         entries: state.activeTaskId === id && nextActiveId !== id ? [] : state.entries,
+        pinnedEntry: state.activeTaskId === id && nextActiveId !== id ? null : state.pinnedEntry,
         entryLoading: state.activeTaskId === id && nextActiveId !== null && nextActiveId !== id,
       }
     })
@@ -353,10 +361,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const { [taskId]: _, ...rest } = state.logContentDraft
       return { logContentDraft: rest }
     })
-    // Re-fetch the task to get updated updated_at, and refresh entries
-    const [updatedTask, freshEntries] = await Promise.all([
+    // Re-fetch the task to get updated updated_at, and refresh entries + pinned
+    const [updatedTask, freshEntries, freshPinned] = await Promise.all([
       api.getTaskById(taskId),
       api.fetchTaskEntries(taskId),
+      api.fetchPinnedEntry(taskId),
     ])
     set((state) => {
       const nextTasks = updatedTask
@@ -364,6 +373,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         : state.tasks
       return {
         entries: freshEntries,
+        pinnedEntry: freshPinned,
         tasks: nextTasks,
         selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
       }
@@ -371,13 +381,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     return entry
   },
 
-  updateEntry: async (taskId, entryId, content) => {
-    const entry = await api.updateTaskEntry(taskId, entryId, content)
+  updateEntry: async (taskId, entryId, content, type) => {
+    const entry = await api.updateTaskEntry(taskId, entryId, content, type)
     if (!entry) return null
-    // Re-fetch the task to get updated updated_at, and refresh entries
-    const [updatedTask, freshEntries] = await Promise.all([
+    // Re-fetch the task to get updated updated_at, and refresh entries + pinned
+    const [updatedTask, freshEntries, freshPinned] = await Promise.all([
       api.getTaskById(taskId),
       api.fetchTaskEntries(taskId),
+      api.fetchPinnedEntry(taskId),
     ])
     set((state) => {
       const nextTasks = updatedTask
@@ -385,6 +396,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         : state.tasks
       return {
         entries: freshEntries,
+        pinnedEntry: freshPinned,
         tasks: nextTasks,
         selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
       }
@@ -394,10 +406,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   deleteEntry: async (taskId, entryId) => {
     await api.deleteTaskEntry(taskId, entryId)
-    // Re-fetch the task and refresh entries
-    const [updatedTask, freshEntries] = await Promise.all([
+    // Re-fetch the task and refresh entries + pinned
+    const [updatedTask, freshEntries, freshPinned] = await Promise.all([
       api.getTaskById(taskId),
       api.fetchTaskEntries(taskId),
+      api.fetchPinnedEntry(taskId),
     ])
     set((state) => {
       const nextTasks = updatedTask
@@ -405,10 +418,53 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         : state.tasks
       return {
         entries: freshEntries,
+        pinnedEntry: freshPinned,
         tasks: nextTasks,
         selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
       }
     })
+  },
+
+  appendToPinned: async (taskId, content) => {
+    const entry = await api.appendToPinnedEntry(taskId, content)
+    const [updatedTask, freshEntries, freshPinned] = await Promise.all([
+      api.getTaskById(taskId),
+      api.fetchTaskEntries(taskId),
+      api.fetchPinnedEntry(taskId),
+    ])
+    set((state) => {
+      const nextTasks = updatedTask
+        ? state.tasks.map((t) => (t.id === taskId ? updatedTask : t)).sort((a, b) => b.updatedAt - a.updatedAt)
+        : state.tasks
+      return {
+        entries: freshEntries,
+        pinnedEntry: freshPinned,
+        tasks: nextTasks,
+        selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
+      }
+    })
+    return entry
+  },
+
+  unpinEntry: async (taskId, entryId) => {
+    const entry = await api.unpinEntry(taskId, entryId)
+    const [updatedTask, freshEntries, freshPinned] = await Promise.all([
+      api.getTaskById(taskId),
+      api.fetchTaskEntries(taskId),
+      api.fetchPinnedEntry(taskId),
+    ])
+    set((state) => {
+      const nextTasks = updatedTask
+        ? state.tasks.map((t) => (t.id === taskId ? updatedTask : t)).sort((a, b) => b.updatedAt - a.updatedAt)
+        : state.tasks
+      return {
+        entries: freshEntries,
+        pinnedEntry: freshPinned,
+        tasks: nextTasks,
+        selectedTask: state.activeTaskId === taskId && updatedTask ? updatedTask : state.selectedTask,
+      }
+    })
+    return entry
   },
 
   setFilterTypes: (types) => set({ filterTypes: types }),

@@ -3,6 +3,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import { useI18n } from '@/i18n/context'
 import type { AgentConversation, TaskEntry, WorkSession, Task, TaskProgressContext } from '@/types'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
+import { PinnedSection } from '@/components/PinnedSection'
 import { deleteTaskLogDraft, fetchTaskAgentConversations, fetchTaskLogDraft, saveTaskLogDraft } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
@@ -24,11 +25,12 @@ interface TaskDetailWorkspaceProps {
 export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true, keepCompletedTaskVisible = false }: TaskDetailWorkspaceProps) {
   const { t } = useI18n()
   const {
-    selectedTask, entries, entryLoading, activeTaskId, tasks,
+    selectedTask, entries, entryLoading, activeTaskId, tasks, pinnedEntry,
     currentSession, searchMode, searchTokens,
     updateTask, markDone, submitEntry, updateEntry, deleteEntry,
     takeOver, doAfk, autoTakeOver, doDrop,
     setActiveTask, setLogContentDraft, clearLogContentDraft,
+    appendToPinned, unpinEntry,
   } = useTaskStore()
   const taskContexts = useTaskStore((s) => s.taskContexts)
   const taskSummaryUpdating = useTaskStore((s) => s.taskSummaryUpdating)
@@ -505,6 +507,17 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
             <TaskSummaryWidget context={activeSummaryContext} updating={activeSummaryUpdating} />
           </div>
         )}
+        {activeTaskId && !isDraftActive && pinnedEntry?.taskId === activeTaskId && (
+          <div className="px-[30px] pb-2">
+            <PinnedSection
+              entry={pinnedEntry}
+              taskId={activeTaskId}
+              onUpdate={async (entryId, content) => { await updateEntry(activeTaskId, entryId, content) }}
+              onUnpin={async (entryId) => { await unpinEntry(activeTaskId, entryId) }}
+              highlightTokens={searchMode ? searchTokens : undefined}
+            />
+          </div>
+        )}
       </div>
 
       {/* Drop dialog */}
@@ -552,6 +565,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
                   entry={entry}
                   onSave={(id, newContent) => updateEntry(selectedTask.id, id, newContent)}
                   onDelete={(id) => deleteEntry(selectedTask.id, id)}
+                  onPin={(content) => appendToPinned(selectedTask.id, content)}
                   editing={editingEntryId === entry.id}
                   highlightTokens={searchMode ? searchTokens : undefined}
                   highlightPlan={entry.id === highlightEntryId}

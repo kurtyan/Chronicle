@@ -12,8 +12,11 @@ export interface ApiInterface {
   submitTaskEntry(taskId: string, content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry>
   submitTaskEntries(taskIds: string[], content: string, type?: 'body' | 'log', silent?: boolean): Promise<TaskEntry[]>
   fetchTaskAgentConversations(taskId: string): Promise<AgentConversation[]>
-  updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null>
+  updateTaskEntry(taskId: string, entryId: string, content: string, type?: 'body' | 'log'): Promise<TaskEntry | null>
   deleteTaskEntry(taskId: string, entryId: string): Promise<void>
+  fetchPinnedEntry(taskId: string): Promise<TaskEntry | null>
+  appendToPinnedEntry(taskId: string, content: string): Promise<TaskEntry>
+  unpinEntry(taskId: string, entryId: string): Promise<TaskEntry | null>
   fetchTaskLogDraft(taskId: string): Promise<TaskLogDraft | null>
   saveTaskLogDraft(taskId: string, content: string): Promise<TaskLogDraft | null>
   deleteTaskLogDraft(taskId: string): Promise<void>

@@ -188,6 +188,7 @@ export const translations: Record<string, TranslationEntry> = {
   'search.matchTitle': { 'zh-CN': '标题', en: 'Title' },
   'search.matchBody': { 'zh-CN': '正文', en: 'Body' },
   'search.matchLog': { 'zh-CN': '记录', en: 'Log' },
+  'search.matchPinned': { 'zh-CN': '置顶', en: 'Pinned' },
   'search.matchPlan': { 'zh-CN': '计划', en: 'Plan' },
   'search.close': { 'zh-CN': '关闭', en: 'Close' },
 
@@ -221,6 +222,16 @@ export const translations: Record<string, TranslationEntry> = {
   // Pin
   'task.pin': { 'zh-CN': '置顶', en: 'Pin' },
   'task.unpin': { 'zh-CN': '取消置顶', en: 'Unpin' },
+
+  // Pinned content
+  'pinned.title': { 'zh-CN': '置顶内容', en: 'Pinned' },
+  'pinned.pinThisLog': { 'zh-CN': '置顶这条记录', en: 'Pin this log' },
+  'pinned.addToPin': { 'zh-CN': '加入置顶', en: 'Add to pin' },
+  'pinned.unpin': { 'zh-CN': '取消置顶', en: 'Unpin' },
+  'pinned.edit': { 'zh-CN': '编辑置顶', en: 'Edit pinned' },
+  'pinned.collapse': { 'zh-CN': '收起', en: 'Collapse' },
+  'pinned.expand': { 'zh-CN': '展开', en: 'Expand' },
+  'pinned.emptyHint': { 'zh-CN': '选择记录中的文字或点击记录上的图钉按钮，即可添加置顶内容', en: 'Select text in a log or click the pin button on a log to add pinned content' },
 
   // Agent
   'workspace.agent': { 'zh-CN': 'Agent', en: 'Agent' },

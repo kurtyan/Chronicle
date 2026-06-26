@@ -43,7 +43,7 @@ export interface TaskEntry {
   id: string
   taskId: string
   content: string
-  type: 'body' | 'log'
+  type: 'body' | 'log' | 'pinned'
   createdAt: number
 }
 
@@ -174,7 +174,7 @@ function rowToTaskEntry(row: any): TaskEntry {
     id: row.id,
     taskId: row.task_id,
     content: row.content,
-    type: row.type === 'body' ? 'body' : 'log',
+    type: row.type === 'body' ? 'body' : row.type === 'pinned' ? 'pinned' : 'log',
     createdAt: row.created_at,
   }
 }
@@ -357,13 +357,25 @@ export function getTaskEntries(taskId: string): TaskEntry[] {
   return queryAll(
     `SELECT *
      FROM task_entries
-     WHERE task_id = ?
+     WHERE task_id = ? AND type != 'pinned'
      ORDER BY created_at ASC`,
     [taskId]
   ).map(rowToTaskEntry)
 }
 
-export function createTaskEntry(taskId: string, content: string, type: 'body' | 'log' = 'log'): TaskEntry {
+export function getPinnedEntry(taskId: string): TaskEntry | undefined {
+  const row = queryOne(
+    `SELECT *
+     FROM task_entries
+     WHERE task_id = ? AND type = 'pinned'
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [taskId]
+  )
+  return row ? rowToTaskEntry(row) : undefined
+}
+
+export function createTaskEntry(taskId: string, content: string, type: 'body' | 'log' | 'pinned' = 'log'): TaskEntry {
   const task = getTaskById(taskId)
   if (!task) throw new Error('Task not found')
 
@@ -381,7 +393,7 @@ export function createTaskEntry(taskId: string, content: string, type: 'body' | 
   return { id, taskId, content, type, createdAt: now }
 }
 
-export function createTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' = 'log'): TaskEntry[] {
+export function createTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' | 'pinned' = 'log'): TaskEntry[] {
   const uniqueTaskIds = [...new Set(taskIds.filter(Boolean))]
   if (uniqueTaskIds.length === 0) return []
 
@@ -416,13 +428,22 @@ export function createTaskEntries(taskIds: string[], content: string, type: 'bod
   return entries
 }
 
-export function updateTaskEntry(taskId: string, entryId: string, content: string): TaskEntry | null {
+export function updateTaskEntry(taskId: string, entryId: string, content: string, type?: 'body' | 'log' | 'pinned'): TaskEntry | null {
   const existing = queryOne('SELECT * FROM task_entries WHERE id = ? AND task_id = ?', [entryId, taskId])
   if (!existing) return null
 
-  run('UPDATE task_entries SET content = ? WHERE id = ?', [content, entryId])
+  const updates: string[] = ['content = ?']
+  const params: any[] = [content]
+  if (type !== undefined) {
+    updates.push('type = ?')
+    params.push(type)
+  }
+  params.push(entryId)
+
+  run(`UPDATE task_entries SET ${updates.join(', ')} WHERE id = ?`, params)
   run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), taskId])
-  indexEntry(taskId, entryId, content, existing.type === 'body' ? 'body' : 'log')
+  const nextType = type ?? (existing.type === 'body' ? 'body' : existing.type === 'pinned' ? 'pinned' : 'log')
+  indexEntry(taskId, entryId, content, nextType)
   const updated = queryOne(
     `SELECT *
      FROM task_entries
@@ -430,6 +451,38 @@ export function updateTaskEntry(taskId: string, entryId: string, content: string
     [entryId, taskId]
   )
   return updated ? rowToTaskEntry(updated) : null
+}
+
+export function appendToPinnedEntry(taskId: string, content: string): TaskEntry {
+  const task = getTaskById(taskId)
+  if (!task) throw new Error('Task not found')
+  if (!content.trim()) throw new Error('Content is required')
+
+  const now = Date.now()
+  const existing = getPinnedEntry(taskId)
+
+  if (existing) {
+    const separator = existing.content.trim().endsWith('<hr>') || existing.content.trim().endsWith('<hr />') || existing.content.trim().endsWith('<hr/>') ? '' : '<hr>'
+    const newContent = `${existing.content.trim()}${separator}${content.trim()}`
+    run('UPDATE task_entries SET content = ? WHERE id = ?', [newContent, existing.id])
+    run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, taskId])
+    indexEntry(taskId, existing.id, newContent, 'pinned')
+    const updated = queryOne('SELECT * FROM task_entries WHERE id = ?', [existing.id])
+    return updated ? rowToTaskEntry(updated) : existing
+  }
+
+  return createTaskEntry(taskId, content.trim(), 'pinned')
+}
+
+export function unpinEntry(taskId: string, entryId: string): TaskEntry | null {
+  const existing = queryOne('SELECT * FROM task_entries WHERE id = ? AND task_id = ? AND type = ?', [entryId, taskId, 'pinned'])
+  if (!existing) return null
+
+  if (!existing.content || !existing.content.trim()) {
+    return deleteTaskEntry(taskId, entryId) ? null : null
+  }
+
+  return updateTaskEntry(taskId, entryId, existing.content, 'log')
 }
 
 export function deleteTaskEntry(taskId: string, entryId: string): boolean {

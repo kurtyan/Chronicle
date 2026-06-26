@@ -58,6 +58,13 @@ const publicDir = findPublicDir()
 const app = new Hono()
 const service = new AppService()
 
+type PublicTaskEntryType = 'body' | 'log'
+
+function parsePublicTaskEntryType(value: unknown): PublicTaskEntryType | null {
+  if (value === undefined || value === null) return 'log'
+  return value === 'body' || value === 'log' ? value : null
+}
+
 function emitBackgroundTask(task: any) {
   if (task) broadcastEvent('background_task_updated', task)
 }
@@ -242,9 +249,50 @@ app.get('/api/tasks/:id/logs', async (c) => {
   return c.json(await service.fetchTaskEntries(c.req.param('id')))
 })
 
+app.get('/api/tasks/:id/pinned', async (c) => {
+  const entry = await service.getPinnedEntry(c.req.param('id'))
+  return c.json({ entry: entry ?? null })
+})
+
+app.post('/api/tasks/:id/pinned/append', async (c) => {
+  const body = await c.req.json()
+  if (typeof body.content !== 'string' || body.content.trim().length === 0) {
+    return c.json({ error: 'content is required' }, 400)
+  }
+  try {
+    const entry = await service.appendToPinnedEntry(c.req.param('id'), body.content.trim())
+    saveConversationId(c, c.req.param('id'))
+    broadcastEvent('entry_updated', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
+    return c.json(entry)
+  } catch (err: any) {
+    const message = err?.message || 'Failed to append to pinned entry'
+    const status = message.includes('Task not found') ? 404 : 400
+    return c.json({ error: message }, status)
+  }
+})
+
+app.post('/api/tasks/:id/pinned/unpin', async (c) => {
+  const body = await c.req.json()
+  if (typeof body.entryId !== 'string' || !body.entryId) {
+    return c.json({ error: 'entryId is required' }, 400)
+  }
+  const entry = await service.unpinEntry(c.req.param('id'), body.entryId)
+  saveConversationId(c, c.req.param('id'))
+  if (!entry) {
+    // Either the pinned entry was empty and deleted, or it was not found.
+    // The store will refresh its local state on the next active-task load.
+    return c.json({ success: true })
+  }
+  broadcastEvent('entry_updated', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
+  scheduleTaskSummaryRefresh([c.req.param('id')])
+  return c.json(entry)
+})
+
 app.post('/api/tasks/:id/logs', async (c) => {
   const body = await c.req.json()
-  const entry = await service.submitTaskEntry(c.req.param('id'), body.content, body.type ?? 'log')
+  const type = parsePublicTaskEntryType(body.type)
+  if (!type) return c.json({ error: 'type must be "log" or "body"' }, 400)
+  const entry = await service.submitTaskEntry(c.req.param('id'), body.content, type)
   await service.extractAgentConversationsFromEntry(entry)
   saveConversationId(c, c.req.param('id'))
   if (!body.silent) {
@@ -260,9 +308,11 @@ app.post('/api/tasks/logs/batch', async (c) => {
   if (taskIds.length === 0 || typeof body.content !== 'string' || body.content.trim().length === 0) {
     return c.json({ error: 'taskIds and content are required' }, 400)
   }
+  const type = parsePublicTaskEntryType(body.type)
+  if (!type) return c.json({ error: 'type must be "log" or "body"' }, 400)
 
   try {
-    const entries = await service.submitTaskEntries(taskIds, body.content, body.type ?? 'log')
+    const entries = await service.submitTaskEntries(taskIds, body.content, type)
     for (const entry of entries) {
       await service.extractAgentConversationsFromEntry(entry)
       saveConversationId(c, entry.taskId)
@@ -308,10 +358,12 @@ app.delete('/api/tasks/:id/log-draft', async (c) => {
 
 app.put('/api/tasks/:id/logs/:entryId', async (c) => {
   const body = await c.req.json()
-  const entry = await service.updateTaskEntry(c.req.param('id'), c.req.param('entryId'), body.content)
+  const type = parsePublicTaskEntryType(body.type)
+  if (!type) return c.json({ error: 'type must be "log" or "body"' }, 400)
+  const entry = await service.updateTaskEntry(c.req.param('id'), c.req.param('entryId'), body.content, body.type === undefined ? undefined : type)
   if (!entry) return c.json({ error: 'Not found' }, 404)
   saveConversationId(c, c.req.param('id'))
-  broadcastEvent('entry_updated', { taskId: c.req.param('id'), entryId: entry.id }, c.get('clientId'))
+  broadcastEvent('entry_updated', { taskId: c.req.param('id'), entryId: entry.id, type: entry.type }, c.get('clientId'))
   if (entry.type === 'log') scheduleTaskSummaryRefresh([c.req.param('id')])
   return c.json(entry)
 })

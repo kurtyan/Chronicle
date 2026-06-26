@@ -121,13 +121,29 @@ export const httpApi: ApiInterface = {
     return data
   },
 
-  async updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
-    const { data } = await (await withClientId()).put<TaskEntry>(`/api/tasks/${taskId}/logs/${entryId}`, { content })
+  async updateTaskEntry(taskId: string, entryId: string, content: string, type?: 'body' | 'log'): Promise<TaskEntry | null> {
+    const { data } = await (await withClientId()).put<TaskEntry>(`/api/tasks/${taskId}/logs/${entryId}`, { content, type })
     return data
   },
 
   async deleteTaskEntry(taskId: string, entryId: string): Promise<void> {
     await (await withClientId()).delete(`/api/tasks/${taskId}/logs/${entryId}`)
+  },
+
+  async fetchPinnedEntry(taskId: string): Promise<TaskEntry | null> {
+    const { data } = await (await withClientId()).get<{ entry: TaskEntry | null }>(`/api/tasks/${taskId}/pinned`)
+    return data.entry
+  },
+
+  async appendToPinnedEntry(taskId: string, content: string): Promise<TaskEntry> {
+    const { data } = await (await withClientId()).post<TaskEntry>(`/api/tasks/${taskId}/pinned/append`, { content })
+    return data
+  },
+
+  async unpinEntry(taskId: string, entryId: string): Promise<TaskEntry | null> {
+    const { data } = await (await withClientId()).post<TaskEntry | { success: boolean }>(`/api/tasks/${taskId}/pinned/unpin`, { entryId })
+    if ('success' in data && data.success) return null
+    return data as TaskEntry
   },
 
   async fetchTaskLogDraft(taskId: string): Promise<TaskLogDraft | null> {

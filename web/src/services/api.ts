@@ -49,11 +49,20 @@ export async function submitTaskEntries(taskIds: string[], content: string, type
 export async function fetchTaskAgentConversations(taskId: string): Promise<AgentConversation[]> {
   return (await getApi()).fetchTaskAgentConversations(taskId)
 }
-export async function updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
-  return (await getApi()).updateTaskEntry(taskId, entryId, content)
+export async function updateTaskEntry(taskId: string, entryId: string, content: string, type?: 'body' | 'log'): Promise<TaskEntry | null> {
+  return (await getApi()).updateTaskEntry(taskId, entryId, content, type)
 }
 export async function deleteTaskEntry(taskId: string, entryId: string): Promise<void> {
   return (await getApi()).deleteTaskEntry(taskId, entryId)
+}
+export async function fetchPinnedEntry(taskId: string): Promise<TaskEntry | null> {
+  return (await getApi()).fetchPinnedEntry(taskId)
+}
+export async function appendToPinnedEntry(taskId: string, content: string): Promise<TaskEntry> {
+  return (await getApi()).appendToPinnedEntry(taskId, content)
+}
+export async function unpinEntry(taskId: string, entryId: string): Promise<TaskEntry | null> {
+  return (await getApi()).unpinEntry(taskId, entryId)
 }
 export async function fetchTaskLogDraft(taskId: string): Promise<TaskLogDraft | null> {
   return (await getApi()).fetchTaskLogDraft(taskId)

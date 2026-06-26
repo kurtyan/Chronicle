@@ -41,7 +41,7 @@ export interface TaskEntry {
   id: string
   taskId: string
   content: string
-  type: 'body' | 'log'
+  type: 'body' | 'log' | 'pinned'
   createdAt: number
 }
 
@@ -82,7 +82,7 @@ export interface SearchResult {
   taskType: TaskType
   taskStatus: TaskStatus
   taskTags: string[]
-  matchType: 'task' | 'entry_body' | 'entry_log'
+  matchType: 'task' | 'entry_body' | 'entry_log' | 'entry_pinned'
   matchedContent: string
   originalTitle: string
   matchedOriginal: string

@@ -233,10 +233,10 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         taskId: z.string().describe('The task ID.'),
         content: z.string().describe('Log content.'),
         type: z
-          .string()
+          .enum(['log', 'body'])
           .optional()
           .describe(
-            'Entry type: "log" for brief notes, "body" for detailed content. Default: log.'
+            'Entry type: "log" for brief notes or "body" for detailed content. Default: log.'
           ),
         conversationId: z
           .string()
@@ -253,7 +253,7 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         const entry = await service.submitTaskEntry(
           taskId,
           content,
-          (type as 'log' | 'body') ?? 'log'
+          type ?? 'log'
         )
         saveConversationIdIfPresent(conversationId || claudeConversationId, taskId)
         return { content: [{ type: 'text', text: JSON.stringify(entry, null, 2) }] }

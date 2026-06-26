@@ -5,7 +5,7 @@ import { RichEditor } from '@/components/RichEditor'
 import { useI18n } from '@/i18n/context'
 import { format } from 'date-fns'
 import { highlightHtml } from '@/lib/highlight'
-import { ZoomIn, ZoomOut, X, Trash2 } from 'lucide-react'
+import { ZoomIn, ZoomOut, X, Trash2, Pin } from 'lucide-react'
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -53,6 +53,7 @@ interface TaskEntryBlockProps {
   onSilentSave?: (content: string) => void
   onChange?: (content: string) => void
   onFirstMeaningfulEdit?: () => void
+  onPin?: (content: string) => void
   initialContent?: string
   highlightTokens?: string[]
   highlightPlan?: boolean
@@ -146,9 +147,11 @@ function ImageViewer({ src, onClose }: ImageViewerProps) {
   )
 }
 
-export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, onFirstMeaningfulEdit, initialContent, highlightTokens, highlightPlan, taskId }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, onFirstMeaningfulEdit, onPin, initialContent, highlightTokens, highlightPlan, taskId }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
+  const [selectionToolbar, setSelectionToolbar] = useState<{ x: number; y: number; text: string } | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
 
   // localStorage key for draft content persistence
   const draftKey = taskId ? `chronicle:entry_draft:${taskId}:${entry?.id ?? '__new__'}` : null
@@ -301,6 +304,19 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     }, 30000)
     return () => clearInterval(timer)
   }, [isNewEntry, editing, draftContent, onSilentSave])
+
+  // Hide selection toolbar when clicking outside or when selection is cleared
+  useEffect(() => {
+    if (!selectionToolbar) return
+    const handleDocMouseDown = () => {
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed) {
+        setSelectionToolbar(null)
+      }
+    }
+    document.addEventListener('mousedown', handleDocMouseDown)
+    return () => document.removeEventListener('mousedown', handleDocMouseDown)
+  }, [selectionToolbar])
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -479,6 +495,47 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     mouseDownPos.current = { x: e.clientX, y: e.clientY }
   }
 
+  const handlePinClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!entry || entry.type !== 'log' || !onPin) return
+    onPin(entry.content)
+  }
+
+  const handleSelectionMouseUp = (_e: React.MouseEvent) => {
+    if (!onPin || !contentRef.current) return
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      setSelectionToolbar(null)
+      return
+    }
+    const range = selection.getRangeAt(0)
+    if (!contentRef.current.contains(range.commonAncestorContainer)) {
+      setSelectionToolbar(null)
+      return
+    }
+    const text = selection.toString().trim()
+    if (!text) {
+      setSelectionToolbar(null)
+      return
+    }
+    const rect = range.getBoundingClientRect()
+    setSelectionToolbar({ x: rect.left + rect.width / 2, y: rect.top - 40, text })
+  }
+
+  const handleAddSelectionToPin = () => {
+    if (!selectionToolbar) return
+    const selection = window.getSelection()
+    let html = ''
+    if (selection && selection.rangeCount > 0) {
+      const container = document.createElement('div')
+      container.appendChild(selection.getRangeAt(0).cloneContents())
+      html = container.innerHTML
+    }
+    onPin?.(html || `<p>${selectionToolbar.text}</p>`)
+    setSelectionToolbar(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
   // Display mode — show existing entry content
   if (!entry) return null
 
@@ -488,6 +545,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
         data-testid="task-entry-block"
         className={`py-2 cursor-pointer hover:bg-muted/40 rounded group ${highlightPlan ? 'bg-primary/10 ring-1 ring-primary animate-highlight-flash' : ''}`}
         onMouseDown={handleMouseDown}
+        onMouseUp={handleSelectionMouseUp}
         onClick={handleContainerClick}
       >
         <div className="flex items-center gap-2 mb-2">
@@ -495,6 +553,15 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
             {format(new Date(entry.createdAt), 'yyyy-MM-dd HH:mm', { locale: dateLocale })}
           </span>
           <div className="ml-auto flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+            {entry.type === 'log' && onPin && (
+              <button
+                className="p-1 rounded text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 transition"
+                onClick={handlePinClick}
+                title={t('pinned.pinThisLog')}
+              >
+                <Pin className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               className={`p-1 rounded transition ${confirmDelete ? 'bg-red-500 text-white' : 'text-muted-foreground hover:text-red-500 hover:bg-red-500/10'}`}
               onClick={handleDeleteClick}
@@ -505,11 +572,26 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
           </div>
         </div>
         <div
+          ref={contentRef}
           data-testid="entry-content"
           className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"
           dangerouslySetInnerHTML={{ __html: withCodeBlockWrapButtons(DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(convertImageSrcs(entry.content), highlightTokens) : convertImageSrcs(entry.content), { ALLOW_UNKNOWN_PROTOCOLS: true })) }}
         />
       </div>
+      {selectionToolbar && (
+        <div
+          className="fixed z-[100] bg-popover border rounded-md shadow-md py-1 px-1.5 flex items-center gap-1"
+          style={{ left: selectionToolbar.x, top: selectionToolbar.y, transform: 'translateX(-50%)' }}
+        >
+          <button
+            className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-muted transition"
+            onClick={handleAddSelectionToPin}
+          >
+            <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
+            {t('pinned.addToPin')}
+          </button>
+        </div>
+      )}
       {imageViewerSrc && (
         <ImageViewer src={imageViewerSrc} onClose={() => setImageViewerSrc(null)} />
       )}

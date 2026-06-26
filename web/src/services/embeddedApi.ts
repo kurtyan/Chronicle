@@ -27,7 +27,7 @@ function entryRowToTaskEntry(row: any): TaskEntry {
     id: row.id,
     taskId: row.task_id,
     content: row.content,
-    type: row.type === 'body' ? 'body' : 'log',
+    type: row.type === 'body' ? 'body' : row.type === 'pinned' ? 'pinned' : 'log',
     createdAt: row.created_at,
   }
 }
@@ -311,27 +311,79 @@ export class EmbeddedApiProvider implements ApiInterface {
   async fetchTaskEntries(taskId: string): Promise<TaskEntry[]> {
     await this.ensureDb()
     return this.queryAll(
-      'SELECT * FROM task_entries WHERE task_id = ? ORDER BY created_at ASC',
+      "SELECT * FROM task_entries WHERE task_id = ? AND type != 'pinned' ORDER BY created_at ASC",
       [taskId]
     ).map(entryRowToTaskEntry)
   }
 
-  async submitTaskEntry(taskId: string, content: string, type: 'body' | 'log' = 'log', _silent?: boolean): Promise<TaskEntry> {
+  async fetchPinnedEntry(taskId: string): Promise<TaskEntry | null> {
+    await this.ensureDb()
+    const row = this.queryOne(
+      "SELECT * FROM task_entries WHERE task_id = ? AND type = 'pinned' ORDER BY created_at ASC LIMIT 1",
+      [taskId]
+    )
+    return row ? entryRowToTaskEntry(row) : null
+  }
+
+  async appendToPinnedEntry(taskId: string, content: string): Promise<TaskEntry> {
     await this.ensureDb()
     const task = await this.getTaskById(taskId)
     if (!task) throw new Error('Task not found')
+    if (!content.trim()) throw new Error('Content is required')
+
+    const existing = await this.fetchPinnedEntry(taskId)
+    const now = Date.now()
+
+    if (existing) {
+      const separator = existing.content.trim().endsWith('<hr>') || existing.content.trim().endsWith('<hr />') || existing.content.trim().endsWith('<hr/>') ? '' : '<hr>'
+      const newContent = `${existing.content.trim()}${separator}${content.trim()}`
+      await this.runAndPersist('UPDATE task_entries SET content = ? WHERE id = ?', [newContent, existing.id])
+      await this.runAndPersist('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, taskId])
+      const updated = this.queryOne('SELECT * FROM task_entries WHERE id = ?', [existing.id])
+      return updated ? entryRowToTaskEntry(updated) : existing
+    }
+
+    const id = crypto.randomUUID()
+    await this.runAndPersist(
+      'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
+      [id, taskId, content.trim(), 'pinned', now]
+    )
+    return { id, taskId, content: content.trim(), type: 'pinned', createdAt: now }
+  }
+
+  async unpinEntry(taskId: string, entryId: string): Promise<TaskEntry | null> {
+    await this.ensureDb()
+    const existing = this.queryOne("SELECT * FROM task_entries WHERE id = ? AND task_id = ? AND type = 'pinned'", [entryId, taskId])
+    if (!existing) return null
+    if (!existing.content || !existing.content.trim()) {
+      await this.runAndPersist('DELETE FROM task_entries WHERE id = ?', [entryId])
+      return null
+    }
+    await this.runAndPersist('UPDATE task_entries SET type = ? WHERE id = ?', ['log', entryId])
+    const updated = this.queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])
+    return updated ? entryRowToTaskEntry(updated) : null
+  }
+
+  async submitTaskEntry(taskId: string, content: string, type: 'body' | 'log' | string = 'log', _silent?: boolean): Promise<TaskEntry> {
+    await this.ensureDb()
+    const task = await this.getTaskById(taskId)
+    if (!task) throw new Error('Task not found')
+    if (type !== 'body' && type !== 'log') throw new Error('type must be "log" or "body"')
+    const entryType: 'body' | 'log' = type
 
     const id = crypto.randomUUID()
     const now = Date.now()
     await this.runAndPersist(
       'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
-      [id, taskId, content, type, now]
+      [id, taskId, content, entryType, now]
     )
-    return { id, taskId, content, type, createdAt: now }
+    return { id, taskId, content, type: entryType, createdAt: now }
   }
 
-  async submitTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' = 'log', _silent?: boolean): Promise<TaskEntry[]> {
+  async submitTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' | string = 'log', _silent?: boolean): Promise<TaskEntry[]> {
     await this.ensureDb()
+    if (type !== 'body' && type !== 'log') throw new Error('type must be "log" or "body"')
+    const entryType: 'body' | 'log' = type
     const uniqueTaskIds = [...new Set(taskIds.filter(Boolean))]
     for (const taskId of uniqueTaskIds) {
       const task = await this.getTaskById(taskId)
@@ -343,7 +395,7 @@ export class EmbeddedApiProvider implements ApiInterface {
       id: crypto.randomUUID(),
       taskId,
       content,
-      type,
+      type: entryType,
       createdAt: now,
     }))
 
@@ -369,12 +421,21 @@ export class EmbeddedApiProvider implements ApiInterface {
     return []
   }
 
-  async updateTaskEntry(_taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
+  async updateTaskEntry(_taskId: string, entryId: string, content: string, type?: 'body' | 'log' | string): Promise<TaskEntry | null> {
     await this.ensureDb()
     const existing = this.queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])
     if (!existing) return null
+    if (type !== undefined && type !== 'body' && type !== 'log') throw new Error('type must be "log" or "body"')
 
-    await this.runAndPersist('UPDATE task_entries SET content = ? WHERE id = ?', [content, entryId])
+    const updates: string[] = ['content = ?']
+    const params: any[] = [content]
+    if (type !== undefined) {
+      updates.push('type = ?')
+      params.push(type)
+    }
+    params.push(entryId)
+
+    await this.runAndPersist(`UPDATE task_entries SET ${updates.join(', ')} WHERE id = ?`, params)
     const updated = this.queryOne('SELECT * FROM task_entries WHERE id = ?', [entryId])
     return updated ? entryRowToTaskEntry(updated) : null
   }
@@ -633,7 +694,7 @@ export class EmbeddedApiProvider implements ApiInterface {
       taskType: 'TODO' as TaskType,
       taskStatus: 'PENDING' as TaskStatus,
       taskTags: [] as string[],
-      matchType: (row.type === 'body' ? 'entry_body' : 'entry_log') as SearchResult['matchType'],
+      matchType: (row.type === 'body' ? 'entry_body' : row.type === 'pinned' ? 'entry_pinned' : 'entry_log') as SearchResult['matchType'],
       matchedContent: row.content,
       originalTitle: '',
       matchedOriginal: row.content,

@@ -6,6 +6,7 @@ import {
   setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
   extractAndAddAgentConversationsFromEntry, getTaskAgentConversations,
   createAfkEvent, updateAfkEvent, getAfkEvents, getNextTaskId,
+  getPinnedEntry, appendToPinnedEntry, unpinEntry,
   type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent, type AgentConversation,
 } from './taskService'
 import {
@@ -72,11 +73,23 @@ export class AppService {
     return getTaskEntries(taskId)
   }
 
-  async submitTaskEntry(taskId: string, content: string, type: 'body' | 'log' = 'log'): Promise<TaskEntry> {
+  async getPinnedEntry(taskId: string): Promise<TaskEntry | undefined> {
+    return getPinnedEntry(taskId)
+  }
+
+  async appendToPinnedEntry(taskId: string, content: string): Promise<TaskEntry> {
+    return appendToPinnedEntry(taskId, content)
+  }
+
+  async unpinEntry(taskId: string, entryId: string): Promise<TaskEntry | null> {
+    return unpinEntry(taskId, entryId)
+  }
+
+  async submitTaskEntry(taskId: string, content: string, type: 'body' | 'log' | 'pinned' = 'log'): Promise<TaskEntry> {
     return createTaskEntry(taskId, content, type)
   }
 
-  async submitTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' = 'log'): Promise<TaskEntry[]> {
+  async submitTaskEntries(taskIds: string[], content: string, type: 'body' | 'log' | 'pinned' = 'log'): Promise<TaskEntry[]> {
     return createTaskEntries(taskIds, content, type)
   }
 
@@ -88,8 +101,8 @@ export class AppService {
     return getTaskAgentConversations(taskId)
   }
 
-  async updateTaskEntry(taskId: string, entryId: string, content: string): Promise<TaskEntry | null> {
-    return updateTaskEntry(taskId, entryId, content)
+  async updateTaskEntry(taskId: string, entryId: string, content: string, type?: 'body' | 'log' | 'pinned'): Promise<TaskEntry | null> {
+    return updateTaskEntry(taskId, entryId, content, type)
   }
 
   async deleteTaskEntry(taskId: string, entryId: string): Promise<boolean> {
