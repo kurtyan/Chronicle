@@ -2,6 +2,7 @@ import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
 import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
+import { DEFAULT_DAILY_SUMMARY_PROMPT, DEFAULT_MEETING_EXTRACTION_PROMPT, DEFAULT_TASK_SUMMARY_PROMPT } from '../../../shared/llmPrompts'
 
 const DB_FILENAME = 'tasks.db'
 const DB_DIR = BaseDirectory.AppData
@@ -882,45 +883,11 @@ export class EmbeddedApiProvider implements ApiInterface {
       taskSummaryMaxTokens: 1200,
       dailySummaryMaxTokens: 4000,
       meetingExtractionPrompt: '',
-      defaultMeetingExtractionPrompt: `You extract meeting notes from raw user input.
-The user input may contain HTML rich text. Use both the HTML and plain-text versions when provided.
-Return only valid JSON matching the meeting extraction schema.`,
+      defaultMeetingExtractionPrompt: DEFAULT_MEETING_EXTRACTION_PROMPT,
       taskSummaryPrompt: '',
-      defaultTaskSummaryPrompt: `Summarize the latest task state.
-Return only valid JSON matching this exact shape:
-{
-  "latestProgress": "non-empty string",
-  "nextStep": "string",
-  "recommendedNextStep": "string"
-}
-Rules:
-- Return exactly these three keys: latestProgress, nextStep, and recommendedNextStep.
-- Do not add, remove, rename, or nest fields.
-- Use the same language as the task logs when possible.
-- Base the answer only on the supplied task data.
-- latestProgress must synthesize the current task state from all supplied Recent Task Entries, not only the latest entry.
-- latestProgress should include important progress, decisions, feedback, and current outcome from the full entry history.
-- latestProgress must be concise, ideally 1-2 short sentences.
-- latestProgress must not be empty.
-- nextStep must represent the latest explicit next step that is still pending at the end of the supplied entry timeline.
-- For nextStep, read entries in Submitted At order and reason about whether later entries completed, solved, canceled, replaced, or superseded earlier next-step items.
-- If a later entry clearly completes, solves, cancels, replaces, or supersedes an earlier next step, do not return that earlier next step.
-- If a later entry records unrelated progress but does not complete, solve, cancel, replace, or supersede an earlier next step, keep that earlier next step.
-- If a later entry states a new explicit next step, that new next step replaces earlier next steps unless it is itself completed, canceled, or replaced by an even later entry.
-- Do not use the latest entry as the sole basis for latestProgress unless it is the only supplied entry.
-- If there is no explicit next step still pending at the end of the timeline, nextStep must be an empty string.
-- nextStep must never be null.
-- recommendedNextStep must only be filled when nextStep is an empty string.
-- recommendedNextStep should suggest one concise next action based on the current task state and supplied task logs.
-- recommendedNextStep must not invent external facts or commitments; it should be a practical recommendation inferred from the task history.
-- For PENDING or DOING tasks, prefer providing a recommendedNextStep when nextStep is empty and the logs contain enough context for a useful recommendation.
-- If the task appears complete or there is no useful recommendation, recommendedNextStep must be an empty string.
-- recommendedNextStep must never be null.
-- Keep all JSON string values on one line. Replace any line breaks with spaces.
-- Do not include markdown fences or prose outside JSON.`,
+      defaultTaskSummaryPrompt: DEFAULT_TASK_SUMMARY_PROMPT,
       dailySummaryPrompt: '',
-      defaultDailySummaryPrompt: `You generate a daily work review from Chronicle focus data and work sessions.
-Return Markdown only. Include sessions timeline, AFK/time analysis, hourly activity, task review, and suggestions for tomorrow.`,
+      defaultDailySummaryPrompt: DEFAULT_DAILY_SUMMARY_PROMPT,
     }
   }
   async saveLlmSettings(settings: Partial<LlmSettings>): Promise<LlmSettings> {

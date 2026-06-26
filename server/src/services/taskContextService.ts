@@ -2,7 +2,7 @@ import { createHash } from 'crypto'
 import { z } from 'zod'
 import { getDb } from '../db'
 import { getTaskById, getTaskEntries, getAllTasks } from './taskService'
-import { DEFAULT_TASK_SUMMARY_PROMPT, getLlmSettings, insertLlmCallLog, linkLlmCallLogToTask } from './llmService'
+import { DEFAULT_TASK_SUMMARY_PROMPT, TASK_SUMMARY_DEFAULT_PROMPT_VERSION, getLlmSettings, insertLlmCallLog, linkLlmCallLogToTask } from './llmService'
 
 export interface TaskProgressSummary {
   taskId: string
@@ -63,13 +63,26 @@ function escapeJson(text: string): string {
   return text.replace(/\u0000/g, '')
 }
 
+function getEffectiveTaskSummaryPrompt(): { prompt: string; version: string } {
+  const settings = getLlmSettings()
+  const customPrompt = settings.taskSummaryPrompt.trim()
+  if (customPrompt) {
+    const hash = createHash('sha1').update(customPrompt).digest('hex').slice(0, 12)
+    return { prompt: customPrompt, version: `task_summary_custom_${hash}` }
+  }
+  return { prompt: DEFAULT_TASK_SUMMARY_PROMPT, version: TASK_SUMMARY_DEFAULT_PROMPT_VERSION }
+}
+
 function makeFingerprint(taskId: string): string {
   const task = getTaskById(taskId)
   if (!task) return ''
   const entries = getRecentSummaryEntries(taskId).map((entry) => `${entry.type}:${entry.createdAt}:${entry.content}`)
+  const { prompt, version } = getEffectiveTaskSummaryPrompt()
 
   return createHash('sha1')
     .update(JSON.stringify({
+      promptVersion: version,
+      prompt,
       title: task.title,
       status: task.status,
       updatedAt: task.updatedAt,
@@ -243,8 +256,7 @@ async function callSummaryModel(taskId: string, mode: 'record' | 'test' = 'recor
   const task = getTaskById(taskId)
   if (!task) return { taskId, ...fallbackSummary(taskId), llmCallLogId: null }
   const entries = getRecentSummaryEntries(taskId)
-  const prompt = settings.taskSummaryPrompt.trim() || DEFAULT_TASK_SUMMARY_PROMPT
-  const promptVersion = settings.taskSummaryPrompt.trim() ? 'task_summary_custom' : 'task_summary_default_v1'
+  const { prompt, version: promptVersion } = getEffectiveTaskSummaryPrompt()
 
   const input = {
     taskId,
