@@ -15,6 +15,7 @@ import '@/styles/prose-display.css'
 import DOMPurify from 'dompurify'
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { BACKGROUND_TASK_TOAST_TTL_MS, useBackgroundTaskStore, type BackgroundTask } from '@/stores/backgroundTaskStore'
+import { APP_ERROR_TOAST_TTL_MS, useAppErrorStore } from '@/stores/appErrorStore'
 import { MarkdownView } from '@/components/MarkdownView'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 import type { MeetingExtractionResult } from '@/types'
@@ -166,6 +167,9 @@ function Sidebar() {
   const tasks = useBackgroundTaskStore((s) => s.tasks)
   const panelOpen = useBackgroundTaskStore((s) => s.panelOpen)
   const setPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
+  const appErrors = useAppErrorStore((s) => s.errors)
+  const errorsPanelOpen = useAppErrorStore((s) => s.panelOpen)
+  const setErrorsPanelOpen = useAppErrorStore((s) => s.setPanelOpen)
   const runningCount = tasks.filter((task) => task.status === 'running').length
   const hasErrors = tasks.some((task) => task.status === 'error')
 
@@ -225,6 +229,25 @@ function Sidebar() {
           {runningCount > 0 && (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">
               {runningCount}
+            </span>
+          )}
+        </button>
+        <button
+          data-app-errors-trigger="true"
+          className={`relative w-8 h-8 rounded-md flex items-center justify-center transition ${
+            errorsPanelOpen
+              ? 'bg-primary text-primary-foreground'
+              : appErrors.length > 0
+                ? 'text-red-600 hover:bg-red-500/10'
+                : 'hover:bg-muted text-muted-foreground'
+          }`}
+          onClick={() => setErrorsPanelOpen(!errorsPanelOpen)}
+          title={errorsPanelOpen ? 'Hide Errors' : 'Show Errors'}
+        >
+          <AlertCircle className="w-5 h-5" />
+          {appErrors.length > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+              {appErrors.length}
             </span>
           )}
         </button>
@@ -477,6 +500,122 @@ function BackgroundTasksPanel() {
         }}
         onOpenChange={(open) => { if (!open) setMeetingRoute(null) }}
       />
+    </>,
+    document.body
+  )
+}
+
+function AppErrorsOverlay() {
+  const errors = useAppErrorStore((s) => s.errors)
+  const toasts = useAppErrorStore((s) => s.toasts)
+  const panelOpen = useAppErrorStore((s) => s.panelOpen)
+  const dismissError = useAppErrorStore((s) => s.dismissError)
+  const clearErrors = useAppErrorStore((s) => s.clearErrors)
+  const removeToast = useAppErrorStore((s) => s.removeToast)
+  const setPanelOpen = useAppErrorStore((s) => s.setPanelOpen)
+
+  useEffect(() => {
+    if (toasts.length === 0) return
+    const timers = toasts.map((toast) => window.setTimeout(
+      () => removeToast(toast.id),
+      Math.max(0, toast.createdAt + APP_ERROR_TOAST_TTL_MS - Date.now())
+    ))
+    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  }, [removeToast, toasts])
+
+  useEffect(() => {
+    if (!panelOpen) return
+    const closeOnOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-app-errors-panel="true"]')) return
+      if (target?.closest('[data-app-errors-trigger="true"]')) return
+      if (target?.closest('[role="dialog"]')) return
+      setPanelOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointerDown, true)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointerDown, true)
+  }, [panelOpen, setPanelOpen])
+
+  return createPortal(
+    <>
+      {panelOpen && (
+        <div
+          data-app-errors-panel="true"
+          className="fixed bottom-0 left-16 right-0 z-40 border-t border-red-500/30 bg-background shadow-[0_-18px_55px_-36px_hsl(var(--foreground)/0.55)]"
+        >
+          <div className="flex items-center justify-between border-b border-border/70 px-4 py-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+              <div className="text-sm font-semibold">Errors</div>
+              <div className="text-xs text-muted-foreground">{errors.length}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={clearErrors}>
+                Clear
+              </button>
+              <button className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setPanelOpen(false)} title="Close">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+          <div className="h-80 overflow-y-auto">
+            {errors.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">No errors in the last 30 days.</div>
+            ) : (
+              <div className="divide-y divide-border/60">
+                {errors.map((error) => (
+                  <div key={error.id} className="grid grid-cols-[24px_minmax(0,1fr)_180px_36px] items-start gap-3 px-4 py-3 text-sm hover:bg-muted/50">
+                    <AlertCircle className="mt-0.5 h-4 w-4 text-red-500" />
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-red-600">{error.endpoint}</div>
+                      <div className="mt-0.5 whitespace-pre-wrap break-words text-foreground">{error.message}</div>
+                      {error.stack && (
+                        <details className="mt-1 text-xs">
+                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Stack</summary>
+                          <pre className="mt-1 max-h-28 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-2 text-[11px] text-muted-foreground">{error.stack}</pre>
+                        </details>
+                      )}
+                    </div>
+                    <div className="pt-0.5 text-right text-xs text-muted-foreground">{new Date(error.createdAt).toLocaleString()}</div>
+                    <button className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => dismissError(error.id)} aria-label="Dismiss error">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {toasts.length > 0 && (
+        <div className="fixed bottom-6 right-6 z-[55] flex w-80 flex-col gap-2">
+          {toasts.map((toast) => (
+            <div key={toast.id} className="rounded-lg border border-red-500/30 bg-background p-3 text-left text-sm shadow-lg">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                <button
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => removeToast(toast.id)}
+                >
+                  <div className="font-medium">Operation failed</div>
+                  <div className="mt-0.5 truncate text-xs text-muted-foreground">{toast.endpoint}</div>
+                  <div className="mt-0.5 truncate text-xs text-red-600">{toast.message}</div>
+                </button>
+                <button
+                  className="rounded p-0.5 text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    removeToast(toast.id)
+                  }}
+                  aria-label="Dismiss error notification"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </>,
     document.body
   )
@@ -862,6 +1001,7 @@ function Layout() {
         </Routes>
       </main>
       <BackgroundTasksPanel />
+      <AppErrorsOverlay />
       {afkDialog.resumeToast.open && (
         <div className="fixed bottom-6 right-6 z-[60] w-80 rounded-lg border border-border bg-background p-3 text-sm shadow-lg">
           <div className="flex items-start gap-2">

@@ -7,21 +7,22 @@ import StarterKit from '@tiptap/starter-kit'
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DayScriptDocument, Task } from '@/types'
-import { buildDayScriptActivityKey, findActiveBlock, parseDayScriptDocument } from '@/lib/dayScript'
+import { buildDayScriptActivityKey, findActiveBlock, isNewTaskHeaderText, parseDayScriptDocument } from '@/lib/dayScript'
 import { ChronicleImage, isTauri, resolveImageSrcsInEditor, uploadAndInsertImage } from '@/components/RichEditor'
 import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
 
 interface DayScriptEditorProps {
   value: DayScriptDocument['document']
+  blocks: DayScriptDocument['blocks']
   tasks: Task[]
   scriptDate: string
   todayScriptDate: string
   onChange: (document: Record<string, any>) => void
   onSave: () => void
-  onSubmitProgress?: () => void
+  onSubmitProgress?: (getCurrentDocument?: () => Record<string, any>) => void
   onNavigateTask: (taskId: string) => void
   onEditingTask?: (activity: { taskId: string; blockKey: string }) => void
   onContentError?: (message: string, error?: unknown) => void
@@ -141,6 +142,16 @@ const LINE_NODE_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'listItem
 const LINE_ELEMENT_SELECTOR = 'p, h1, h2, h3, h4, blockquote, li, pre, hr, img'
 const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
 const TIME_HEADER_RE = new RegExp(`^${TIME_VALUE_PATTERN}\\s*-\\s*${TIME_VALUE_PATTERN}(?:\\s+|$)`)
+const TIME_HEADER_WITH_BODY_RE = new RegExp(`^${TIME_VALUE_PATTERN}\\s*-\\s*${TIME_VALUE_PATTERN}(?:\\s+|$)(.*)$`)
+
+function focusHeaderTextFromLine(text: string): string {
+  const visible = text.replace(/\u00a0/g, ' ').trimEnd()
+  return (visible.match(TIME_HEADER_WITH_BODY_RE)?.[1] ?? visible).trim()
+}
+
+function normalizedFocusHeaderText(text: string): string {
+  return focusHeaderTextFromLine(text).replace(/\s+/g, ' ').trim()
+}
 
 function hasTaskLinkNode(node: ProseMirrorNode): boolean {
   let found = false
@@ -154,17 +165,25 @@ function hasTaskLinkNode(node: ProseMirrorNode): boolean {
 
 const FocusLineDecorations = Extension.create({
   name: 'focusLineDecorations',
+  addStorage() {
+    return {
+      savedNewTaskHeaders: [] as string[],
+    }
+  },
   addProseMirrorPlugins() {
+    const extension = this
     return [
       new Plugin({
         key: new PluginKey('focusLineDecorations'),
         props: {
           decorations(state) {
             const decorations: Decoration[] = []
+            const savedNewTaskHeaders = new Set(extension.storage.savedNewTaskHeaders as string[])
             state.doc.descendants((node, pos) => {
               if (!LINE_NODE_TYPES.has(node.type.name)) return true
               const text = node.textBetween(0, node.content.size, '\n', '\n').replace(/\u00a0/g, ' ').trimEnd()
-              if (!TIME_HEADER_RE.test(text) && !hasTaskLinkNode(node)) return true
+              const isSavedNewTaskLine = savedNewTaskHeaders.has(normalizedFocusHeaderText(text))
+              if (!TIME_HEADER_RE.test(text) && !hasTaskLinkNode(node) && !isSavedNewTaskLine) return true
               const classes = ['day-script-line-header']
               if (text.includes('✅')) classes.push('day-script-line-complete')
               decorations.push(Decoration.node(pos, pos + node.nodeSize, { class: classes.join(' ') }))
@@ -302,8 +321,14 @@ function getMentionStateFromSelection(editor: Editor): MentionState {
   }
 }
 
-export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onChange, onSave, onSubmitProgress, onNavigateTask, onEditingTask, onContentError }: DayScriptEditorProps) {
+export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate, todayScriptDate, onChange, onSave, onSubmitProgress, onNavigateTask, onEditingTask, onContentError }: DayScriptEditorProps) {
   const safeValue = useMemo(() => sanitizeEditorDocument(value), [value])
+  const savedNewTaskHeaders = useMemo(() => new Set(
+    savedBlocks
+      .filter((block) => (block.taskIds?.length ?? 0) === 0 && isNewTaskHeaderText(block.headerText))
+      .map((block) => block.headerText.replace(/\s+/g, ' ').trim())
+  ), [savedBlocks])
+  const savedNewTaskHeaderKey = useMemo(() => [...savedNewTaskHeaders].sort().join('\n'), [savedNewTaskHeaders])
   const [mentionState, setMentionState] = useState<MentionState>(null)
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -375,7 +400,7 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
         }
         if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === 'Enter') {
           event.preventDefault()
-          onSubmitProgress?.()
+          onSubmitProgress?.(() => editorRef.current?.getJSON() ?? { type: 'doc', content: [{ type: 'paragraph' }] })
           return true
         }
         if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && (event.key === 'Home' || event.key === 'End')) {
@@ -496,9 +521,17 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
   }, [editor, safeValue, scriptDate])
 
   useEffect(() => {
-    if (!editor) return
-    scheduleApplyBlockClasses(editor)
+    const activeEditor = editorRef.current
+    if (!activeEditor) return
+    scheduleApplyBlockClasses(activeEditor)
   }, [editor, scriptDate, todayScriptDate])
+
+  useLayoutEffect(() => {
+    const activeEditor = editorRef.current
+    if (!activeEditor) return
+    ;(activeEditor.storage as any).focusLineDecorations.savedNewTaskHeaders = [...savedNewTaskHeaders]
+    activeEditor.view.dispatch(activeEditor.state.tr.setMeta('focusLineDecorations', savedNewTaskHeaderKey))
+  }, [editor, savedNewTaskHeaderKey])
 
   useEffect(() => {
     if (!editor) return
@@ -673,12 +706,13 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
     const lineElements = collectLineElements(root)
     const blocks = parseDayScriptDocument(nextEditor.getJSON())
     const currentIndex = scriptDate === todayScriptDate ? findActiveBlock(blocks, new Date()) : -1
-
     lineElements.forEach((child) => {
       child.classList.remove('day-script-line-header', 'day-script-line-active', 'day-script-line-complete')
+      const lineHeaderText = focusHeaderTextFromLine(child.textContent ?? '').replace(/\s+/g, ' ').trim()
       if (
         TIME_HEADER_RE.test((child.textContent ?? '').replace(/\u00a0/g, ' ').trimEnd())
         || Boolean(child.querySelector('a[data-task-id]'))
+        || savedNewTaskHeaders.has(lineHeaderText)
       ) {
         child.classList.add('day-script-line-header')
       }
@@ -864,6 +898,11 @@ export function DayScriptEditor({ value, tasks, scriptDate, todayScriptDate, onC
           margin: 0.5rem 0;
           -webkit-user-drag: none !important;
           user-select: none;
+        }
+        .day-script-editor.ProseMirror p.is-empty::before {
+          content: "\\200B";
+          color: transparent;
+          pointer-events: none;
         }
         .day-script-editor.ProseMirror p.is-editor-empty:first-child::before {
           content: attr(data-placeholder);

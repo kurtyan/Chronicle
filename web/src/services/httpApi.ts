@@ -2,6 +2,7 @@ import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
 import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
+import { recordAppError } from '@/stores/appErrorStore'
 
 // Server base URL:
 // - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
@@ -57,6 +58,24 @@ async function withClientId(): Promise<AxiosInstance> {
       config.headers['X-Client-Id'] = clientId
       return config
     })
+    client.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        const method = String(error?.config?.method ?? 'GET').toUpperCase()
+        const url = String(error?.config?.url ?? 'unknown')
+        const status = error?.response?.status
+        const responseError = error?.response?.data?.error
+        const message = typeof responseError === 'string' && responseError
+          ? responseError
+          : error?.message || 'Request failed'
+        recordAppError({
+          endpoint: `${method} ${url}${status ? ` (${status})` : ''}`,
+          message,
+          stack: error?.stack || '',
+        })
+        return Promise.reject(error)
+      }
+    )
     interceptorAdded = true
   }
   return client

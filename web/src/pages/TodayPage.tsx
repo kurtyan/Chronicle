@@ -9,6 +9,7 @@ import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScrip
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 import { dailySummarySourceKey, useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
+import { recordAppError } from '@/stores/appErrorStore'
 import { MarkdownView } from '@/components/MarkdownView'
 
 const TODAY_LEFT_PANE_PERCENT_KEY = 'chronicle_today_left_pane_percent'
@@ -49,6 +50,13 @@ type WorkOverviewItem = {
   lastActivityAt: number | null
   inFocus: boolean
   canPlan: boolean
+}
+
+type SaveDraftResult = {
+  ok: boolean
+  current: boolean
+  valid: boolean
+  validationMessage?: string
 }
 
 function dateOffset(date: string, offset: number): string {
@@ -521,8 +529,9 @@ export function TodayPage() {
   const scriptRef = useRef<DayScriptDocument | null>(null)
   const displayDateRef = useRef(displayDate)
   const autosaveTimerRef = useRef<number | null>(null)
-  const saveDraftInFlightRef = useRef<Promise<boolean> | null>(null)
+  const saveDraftInFlightRef = useRef<Promise<SaveDraftResult> | null>(null)
   const scriptDirtyRef = useRef(false)
+  const editVersionRef = useRef(0)
 
   useEffect(() => {
     scriptRef.current = script
@@ -541,6 +550,17 @@ export function TodayPage() {
     window.clearTimeout(autosaveTimerRef.current)
     autosaveTimerRef.current = null
   }, [])
+
+  function recordDayScriptValidationError(endpoint: string, validationErrors: Array<{ lineIndex: number; message: string }>): string {
+    const first = validationErrors[0]
+    const message = first ? `Line ${first.lineIndex + 1}: ${first.message}` : 'Invalid Focus content.'
+    recordAppError({
+      endpoint,
+      message,
+      stack: JSON.stringify(validationErrors, null, 2),
+    })
+    return message
+  }
 
   useEffect(() => {
     loadTodos()
@@ -915,16 +935,17 @@ export function TodayPage() {
     void setActiveTask(action.taskId)
   }
 
-  const saveDraft = useCallback(async (): Promise<boolean> => {
+  const saveDraft = useCallback(async (getCurrentDocument?: () => Record<string, any>): Promise<SaveDraftResult> => {
     if (saveDraftInFlightRef.current) return saveDraftInFlightRef.current
 
     const current = scriptRef.current
-    if (!current) return false
+    if (!current) return { ok: false, current: false, valid: false }
 
     clearAutosaveTimer()
     const date = displayDateRef.current
     const document = current.document
     const documentSnapshot = JSON.stringify(document)
+    const documentEditVersion = editVersionRef.current
     const focusActivity = [...focusActivityRef.current.values()]
 
     const savePromise = (async () => {
@@ -936,22 +957,41 @@ export function TodayPage() {
           document,
           focusActivity,
         })
+        const latest = scriptRef.current
+        const liveDocument = getCurrentDocument?.()
+        const latestDocument = liveDocument ?? latest?.document
+        const latestSnapshot = latestDocument ? JSON.stringify(latestDocument) : ''
+        const changedDuringSave = editVersionRef.current !== documentEditVersion
+          || Boolean(liveDocument && scriptDirtyRef.current && latestSnapshot !== documentSnapshot)
+        const savedCurrentSnapshot = !changedDuringSave
         if (result.validationErrors.length > 0) {
-          const first = result.validationErrors[0]
-          setSaveError(`Line ${first.lineIndex + 1}: ${first.message}`)
-          setSaveStatus('error')
-          return false
+          const validationMessage = recordDayScriptValidationError(`PUT /api/day-scripts/${date}`, result.validationErrors)
+          if (savedCurrentSnapshot) {
+            setScript(result.script)
+            setScriptDirty(false)
+            setSaveError(null)
+            setSaveStatus('saved')
+          } else {
+            setScript((prev) => prev ? {
+              ...prev,
+              ...(latestDocument ? { document: latestDocument } : {}),
+              revision: result.script.revision,
+              blocks: result.script.blocks,
+              updatedAt: result.script.updatedAt,
+            } : prev)
+            setSaveStatus('unsaved')
+          }
+          return { ok: true, current: savedCurrentSnapshot, valid: false, validationMessage }
         }
 
-        const latest = scriptRef.current
-        const latestSnapshot = latest ? JSON.stringify(latest.document) : ''
-        if (latestSnapshot === documentSnapshot) {
+        if (savedCurrentSnapshot) {
           setScript(result.script)
           setScriptDirty(false)
           setSaveStatus('saved')
         } else {
           setScript((prev) => prev ? {
             ...prev,
+            ...(latestDocument ? { document: latestDocument } : {}),
             revision: result.script.revision,
             blocks: result.script.blocks,
             updatedAt: result.script.updatedAt,
@@ -968,13 +1008,21 @@ export function TodayPage() {
           const activeId = useTaskStore.getState().activeTaskId
           if (activeId) await setActiveTask(activeId)
         }
-        return true
+        return { ok: true, current: savedCurrentSnapshot, valid: true }
       } catch (error: any) {
         console.error('Failed to save Day Script:', error)
         const status = error?.response?.status
-        setSaveError(status === 409 ? 'Save conflict. Reload this date before saving again.' : (error?.message ?? 'Failed to save Day Script.'))
+        const message = status === 409 ? 'Save conflict. Reload this date before saving again.' : (error?.message ?? 'Failed to save Day Script.')
+        if (!error?.config) {
+          recordAppError({
+            endpoint: `PUT /api/day-scripts/${date}`,
+            message,
+            stack: error?.stack || '',
+          })
+        }
+        setSaveError(message)
         setSaveStatus('error')
-        return false
+        return { ok: false, current: false, valid: false }
       }
     })()
 
@@ -998,31 +1046,60 @@ export function TodayPage() {
     await saveDraft()
   }
 
-  async function handleSubmitProgress() {
-    const saved = await saveDraft()
-    if (!saved) return
+  async function handleSubmitProgress(getCurrentDocument?: () => Record<string, any>) {
+    const saved = await saveDraft(getCurrentDocument)
+    if (!saved.ok) return
+    if (!saved.current) {
+      setSaveError('Focus changed while saving. Submit again after the latest draft is saved.')
+      setSaveStatus('unsaved')
+      return
+    }
+    if (!saved.valid) {
+      setSaveError(saved.validationMessage ?? 'Invalid Focus content.')
+      setSaveStatus('error')
+      return
+    }
     try {
       setSaveError(null)
       const focusActivity = [...focusActivityRef.current.values()]
       const result = await submitDayScriptProgress(displayDateRef.current, { focusActivity })
+      if (result.validationErrors.length > 0) {
+        const message = recordDayScriptValidationError(`POST /api/day-scripts/${displayDateRef.current}/submit-progress`, result.validationErrors)
+        setSaveError(message)
+        setSaveStatus('error')
+        return
+      }
+      setScript(result.script)
+      setScriptDirty(false)
+      setSaveStatus('saved')
       setConflicts(result.conflicts)
       if (result.executionRecords.length > 0) {
-        const currentScript = scriptRef.current
         for (const record of result.executionRecords) {
-          const block = currentScript?.blocks.find((item) => item.id === record.blockId)
+          const block = result.script.blocks.find((item) => item.id === record.blockId)
           if (!block) continue
           const blockKey = buildDayScriptActivityKey(block, record.taskId)
           focusActivityRef.current.delete(activityMapKey(blockKey, record.taskId))
         }
         saveStoredFocusActivity(displayDateRef.current, focusActivityRef.current)
       }
-      if (activeTaskId) await setActiveTask(activeTaskId)
+      await loadTodos()
+      const createdTaskId = result.createdTasks[0]?.id
+      if (createdTaskId) await setActiveTask(createdTaskId)
+      else if (activeTaskId) await setActiveTask(activeTaskId)
       if (result.createdLogs.length > 0) {
         await doAfk()
       }
     } catch (error: any) {
       console.error('Failed to submit Day Script progress:', error)
-      setSaveError(error?.response?.data?.error || error?.message || 'Failed to submit Focus progress.')
+      const message = error?.response?.data?.error || error?.message || 'Failed to submit Focus progress.'
+      if (!error?.config) {
+        recordAppError({
+          endpoint: `POST /api/day-scripts/${displayDateRef.current}/submit-progress`,
+          message,
+          stack: error?.stack || '',
+        })
+      }
+      setSaveError(message)
     }
   }
 
@@ -1044,7 +1121,7 @@ export function TodayPage() {
     try {
       if (scriptDirtyRef.current) {
         const saved = await saveDraft()
-        if (!saved) {
+        if (!saved.ok || !saved.current) {
           setDailySummary(null)
           setDailySummaryError('Save the Focus draft before generating a daily summary.')
           return
@@ -1098,7 +1175,7 @@ export function TodayPage() {
     try {
       if (scriptDirtyRef.current) {
         const saved = await saveDraft()
-        if (!saved) {
+        if (!saved.ok || !saved.current) {
           setDailySummaryError('Save the Focus draft before generating a daily summary.')
           return
         }
@@ -1119,7 +1196,7 @@ export function TodayPage() {
     try {
       if (scriptDirtyRef.current) {
         const saved = await saveDraft()
-        if (!saved) {
+        if (!saved.ok || !saved.current) {
           setPlanDraftError('Save the Focus draft before building a plan.')
           return
         }
@@ -1175,7 +1252,7 @@ export function TodayPage() {
   const shiftDisplayDate = useCallback(async (offset: number) => {
     if (scriptDirtyRef.current) {
       const saved = await saveDraft()
-      if (!saved) return
+      if (!saved.ok || !saved.current) return
     }
     const nextDate = dateOffset(displayDate, offset)
     setDisplayDate(nextDate)
@@ -1254,6 +1331,7 @@ export function TodayPage() {
                 />
                 <DayScriptEditor
                   value={script.document}
+                  blocks={script.blocks}
                   tasks={pendingTasks}
                   scriptDate={displayDate}
                   todayScriptDate={todayScriptDate}
@@ -1261,6 +1339,9 @@ export function TodayPage() {
                     setSaveError(null)
                     setSaveStatus('unsaved')
                     setScriptDirty(true)
+                    scriptDirtyRef.current = true
+                    editVersionRef.current += 1
+                    scriptRef.current = scriptRef.current ? { ...scriptRef.current, document } : scriptRef.current
                     setScript((prev) => prev ? { ...prev, document } : prev)
                     scheduleAutosave()
                   }}
@@ -1429,7 +1510,7 @@ export function TodayPage() {
               try {
                 if (scriptDirtyRef.current) {
                   const saved = await saveDraft()
-                  if (!saved) {
+                  if (!saved.ok || !saved.current) {
                     setDailySummaryError('Save the Focus draft before generating a daily summary.')
                     return
                   }
@@ -1476,6 +1557,7 @@ export function TodayPage() {
                   <DayScriptEditor
                     key={`plan-draft:${displayDate}:${planDraft?.sources.taskCount ?? 0}:${planDraft?.sources.carriedBlockCount ?? 0}`}
                     value={planDraftDoc}
+                    blocks={[]}
                     tasks={pendingTasks}
                     scriptDate={displayDate}
                     todayScriptDate={todayScriptDate}

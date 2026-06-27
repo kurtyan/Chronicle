@@ -830,8 +830,21 @@ export class EmbeddedApiProvider implements ApiInterface {
   async confirmDayScriptProgressSync(): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
     return { createdLogs: [] }
   }
-  async submitDayScriptProgress(): Promise<SubmitDayScriptProgressResult> {
-    return { createdLogs: [], executionRecords: [], conflicts: [] }
+  async submitDayScriptProgress(date: string): Promise<SubmitDayScriptProgressResult> {
+    return {
+      script: {
+        scriptDate: date,
+        revision: 0,
+        document: { type: 'doc', content: [{ type: 'paragraph' }] },
+        blocks: [],
+        updatedAt: Date.now(),
+      },
+      createdTasks: [],
+      createdLogs: [],
+      executionRecords: [],
+      validationErrors: [],
+      conflicts: [],
+    }
   }
   async getDayScriptExecutionRecords(): Promise<DayScriptExecutionRecord[]> {
     return []

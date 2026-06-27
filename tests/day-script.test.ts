@@ -879,44 +879,43 @@ test.describe('Day Script progress sync', () => {
       data: {
         expectedRevision: 0,
         document: doc([
-          { text: `10:00-10:30 new task ${title} ✅` },
+          { text: `10:00-10:30 new task ${title}` },
           { text: 'Investigated production incident' },
         ]),
       },
     })
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
-    expect(saved.createdTasks).toHaveLength(1)
-    expect(saved.createdTasks[0]).toMatchObject({
+    expect(saved.createdTasks).toHaveLength(0)
+    expect(saved.script.blocks[0].taskIds).toEqual([])
+    expect(saved.script.document.content[0].content[0].text).toBe(`10:00-10:30 new task ${title}`)
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.createdTasks[0]).toMatchObject({
       title,
       type: 'TODO',
       priority: 'MEDIUM',
       tags: ['ktlo'],
       status: 'PENDING',
     })
-    expect(saved.script.blocks[0].taskIds).toEqual([saved.createdTasks[0].id])
+    expect(submitted.script.blocks[0].taskIds).toEqual([submitted.createdTasks[0].id])
 
-    const header = saved.script.document.content[0].content
+    const header = submitted.script.document.content[0].content
     expect(header[1]).toMatchObject({ type: 'newTaskBadge' })
     expect(header[3]).toMatchObject({
       type: 'text',
       text: `@${title}`,
-      marks: [{ type: 'link', attrs: { taskId: saved.createdTasks[0].id } }],
+      marks: [{ type: 'link', attrs: { taskId: submitted.createdTasks[0].id } }],
     })
 
-    const entries = await getEntries(page, saved.createdTasks[0].id)
+    const entries = await getEntries(page, submitted.createdTasks[0].id)
     expect(entries).toHaveLength(1)
     expect(entries.some((entry: { type: string; content: string }) => entry.type === 'body' && entry.content.includes('Investigated production incident'))).toBeTruthy()
     expect(entries.some((entry: { type: string }) => entry.type === 'log')).toBeFalsy()
 
-    const repeat = await page.request.put(`/api/day-scripts/${date}`, {
-      data: {
-        expectedRevision: saved.script.revision,
-        document: saved.script.document,
-      },
-    })
-    expect(repeat.ok()).toBeTruthy()
-    expect((await repeat.json()).createdTasks).toHaveLength(0)
+    const repeat = await submitProgress(page, date)
+    expect(repeat.createdTasks).toHaveLength(0)
   })
 
   test('new task body baseline allows later completed deltas to become task logs', async ({ page }) => {
@@ -927,23 +926,32 @@ test.describe('Day Script progress sync', () => {
       data: {
         expectedRevision: 0,
         document: doc([
-          { text: `10:00-10:30 new task ${title} ✅` },
+          { text: `10:00-10:30 new task ${title}` },
           { text: 'Initial incident context' },
         ]),
       },
     })
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
-    const taskId = saved.createdTasks[0].id
+    expect(saved.createdTasks).toHaveLength(0)
     expect(saved.createdLogs).toHaveLength(0)
+    const submitted = await submitProgress(page, date)
+    const taskId = submitted.createdTasks[0].id
 
     const append = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
-        expectedRevision: saved.script.revision,
+        expectedRevision: submitted.script.revision,
         document: {
-          ...saved.script.document,
+          ...submitted.script.document,
           content: [
-            ...saved.script.document.content,
+            {
+              ...submitted.script.document.content[0],
+              content: [
+                ...submitted.script.document.content[0].content,
+                { type: 'text', text: ' ✅' },
+              ],
+            },
+            ...submitted.script.document.content.slice(1),
             { type: 'paragraph', content: [{ type: 'text', text: 'New investigation finding' }] },
           ],
         },
@@ -961,6 +969,401 @@ test.describe('Day Script progress sync', () => {
     const logEntry = entries.find((entry: { type: string }) => entry.type === 'log')
     expect(logEntry.content).toContain('New investigation finding')
     expect(logEntry.content).not.toContain('Initial incident context')
+  })
+
+  test('new task badge line without baseline still appends when completed later', async ({ page }) => {
+    const date = uniqueScriptDate(44)
+    const task = await createTask(page, `DayScript-NewTask-MissingBaseline-${Date.now()}`)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '10:00-10:30 ' },
+                { type: 'newTaskBadge', attrs: { label: 'new' } },
+                { type: 'text', text: ' ' },
+                {
+                  type: 'text',
+                  text: `@${task.title}`,
+                  marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
+                },
+              ],
+            },
+            { type: 'paragraph', content: [{ type: 'text', text: 'Existing progress before baseline was recorded' }] },
+          ],
+        },
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.script.blocks[0].taskIds).toEqual([task.id])
+
+    const append = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: saved.script.revision,
+        document: {
+          ...saved.script.document,
+          content: [
+            {
+              ...saved.script.document.content[0],
+              content: [
+                ...saved.script.document.content[0].content,
+                { type: 'text', text: ' ✅' },
+              ],
+            },
+            ...saved.script.document.content.slice(1),
+            { type: 'paragraph', content: [{ type: 'text', text: 'Progress after completion marker' }] },
+          ],
+        },
+      },
+    })
+    expect(append.ok()).toBeTruthy()
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdLogs).toEqual([{ taskId: task.id, entryId: expect.any(String), blockId: expect.any(String) }])
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ type: 'log' })
+    expect(entries[0].content).toContain('Existing progress before baseline was recorded')
+    expect(entries[0].content).toContain('Progress after completion marker')
+  })
+
+  test('dragon focus line appends deltas without completing and carries over', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Dragon-${Date.now()}`)
+    const date = uniqueScriptDate(23)
+    const nextDate = uniqueScriptDate(24)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} 🐲`, taskId: task.id },
+          { text: 'Long task step one' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.script.blocks[0]).toMatchObject({
+      completed: false,
+      headerText: `@${task.title}`,
+    })
+
+    const firstSubmit = await submitProgress(page, date)
+    expect(firstSubmit.createdLogs).toHaveLength(1)
+    expect(firstSubmit.executionRecords).toHaveLength(0)
+    expect(firstSubmit.script.blocks[0]).toMatchObject({ completed: false })
+
+    const append = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: firstSubmit.script.revision,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} 🐲`, taskId: task.id },
+          { text: 'Long task step one' },
+          { text: 'Long task step two' },
+        ]),
+      },
+    })
+    expect(append.ok()).toBeTruthy()
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
+
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(2)
+    expect(entries[0].content).toContain('Long task step one')
+    expect(entries[1].content).toContain('Long task step two')
+    expect(entries[1].content).not.toContain('Long task step one')
+
+    const carry = await page.request.get(`/api/day-scripts/${nextDate}/carry-over-blocks`)
+    expect(carry.ok()).toBeTruthy()
+    const carryBlocks = await carry.json()
+    expect(carryBlocks.some((block: any) => block.taskIds.includes(task.id) && block.headerText === `@${task.title}`)).toBeTruthy()
+  })
+
+  test('focus line rejects mutually exclusive completed and dragon markers', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Marker-Conflict-${Date.now()}`)
+    const date = uniqueScriptDate(25)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅ 🐲`, taskId: task.id },
+          { text: 'Ambiguous progress' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toContainEqual({ lineIndex: 0, message: 'Focus line cannot use both ✅ and 🐲.' })
+    expect(saved.createdTasks).toHaveLength(0)
+    expect(saved.createdLogs).toHaveLength(0)
+  })
+
+  test('new task line rejects completed and dragon markers', async ({ page }) => {
+    const date = uniqueScriptDate(28)
+    const doneTitle = `Invalid Done KTLO ${Date.now()}`
+    const dragonTitle = `Invalid Dragon KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 new task ${doneTitle} ✅` },
+          { text: `11:00-11:30 new task ${dragonTitle} 🐲` },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toContainEqual({ lineIndex: 0, message: 'Focus line cannot combine new task with ✅ or 🐲.' })
+    expect(saved.validationErrors).toContainEqual({ lineIndex: 1, message: 'Focus line cannot combine new task with ✅ or 🐲.' })
+    expect(saved.createdTasks).toHaveLength(0)
+  })
+
+  test('invalid focus draft still saves the document and advances revision', async ({ page }) => {
+    const date = uniqueScriptDate(31)
+    const title = `Invalid Saved KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 new task ${title} ✅` },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toContainEqual({ lineIndex: 0, message: 'Focus line cannot combine new task with ✅ or 🐲.' })
+    expect(saved.script.revision).toBe(1)
+
+    const fetched = await page.request.get(`/api/day-scripts/${date}`)
+    expect(fetched.ok()).toBeTruthy()
+    const fetchedScript = await fetched.json()
+    expect(fetchedScript.revision).toBe(1)
+    expect(JSON.stringify(fetchedScript.document)).toContain(title)
+    expect(JSON.stringify(fetchedScript.document)).toContain('✅')
+  })
+
+  test('incomplete new task draft on an empty focus area still saves', async ({ page }) => {
+    const date = uniqueScriptDate(32)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: 'new task' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toContainEqual({ lineIndex: 0, message: 'New task line needs a title.' })
+    expect(saved.script.revision).toBe(1)
+    expect(saved.script.blocks).toHaveLength(1)
+    expect(saved.script.blocks[0]).toMatchObject({
+      headerText: 'new task',
+      taskIds: [],
+      completed: false,
+    })
+    expect(JSON.stringify(saved.script.document)).toContain('new task')
+
+    const fetched = await page.request.get(`/api/day-scripts/${date}`)
+    expect(fetched.ok()).toBeTruthy()
+    const fetchedScript = await fetched.json()
+    expect(fetchedScript.revision).toBe(1)
+    expect(fetchedScript.blocks).toHaveLength(1)
+    expect(JSON.stringify(fetchedScript.document)).toContain('new task')
+  })
+
+  test('existing focus block followed by new task block saves and submits the new task', async ({ page }) => {
+    const existingTask = await createTask(page, `DayScript-Focus-Then-New-${Date.now()}`)
+    const date = uniqueScriptDate(33)
+    const title = `Followup KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `09:00-09:30 @${existingTask.title}`, taskId: existingTask.id },
+          { text: 'Existing task context' },
+          { text: `new task ${title}` },
+          { text: 'Additional task context' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toHaveLength(0)
+    expect(saved.createdTasks).toHaveLength(0)
+    expect(saved.script.blocks).toHaveLength(2)
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.createdTasks[0]).toMatchObject({ title })
+    const entries = await getEntries(page, submitted.createdTasks[0].id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ type: 'body' })
+    expect(entries[0].content).toContain('Additional task context')
+  })
+
+  test('mixed-case new task line creates ktlo task on submit', async ({ page }) => {
+    const date = uniqueScriptDate(45)
+    const title = `Mixed Case KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 New task ${title}` },
+          { text: 'Case-insensitive declaration context' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toHaveLength(0)
+    expect(saved.createdTasks).toHaveLength(0)
+    expect(saved.script.blocks).toHaveLength(1)
+    expect(saved.script.blocks[0]).toMatchObject({ headerText: `New task ${title}`, taskIds: [] })
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.createdTasks[0]).toMatchObject({ title })
+    expect(submitted.script.blocks[0].taskIds).toEqual([submitted.createdTasks[0].id])
+  })
+
+  test('mixed completed task and new task submit logs progress and creates the new task once', async ({ page }) => {
+    const existingTask = await createTask(page, `DayScript-Mixed-${Date.now()}`)
+    const date = uniqueScriptDate(29)
+    const title = `Mixed Inline KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `09:00-09:30 @${existingTask.title} ✅`, taskId: existingTask.id },
+          { text: 'Finished existing task step' },
+          { text: `10:00-10:30 new task ${title}` },
+          { text: 'Initial context for created item' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdTasks).toHaveLength(0)
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.createdTasks[0]).toMatchObject({ title })
+    expect(submitted.createdLogs).toEqual([{ taskId: existingTask.id, entryId: expect.any(String), blockId: expect.any(String) }])
+
+    const existingEntries = await getEntries(page, existingTask.id)
+    expect(existingEntries).toHaveLength(1)
+    expect(existingEntries[0].content).toContain('Finished existing task step')
+
+    const newEntries = await getEntries(page, submitted.createdTasks[0].id)
+    expect(newEntries).toHaveLength(1)
+    expect(newEntries[0]).toMatchObject({ type: 'body' })
+    expect(newEntries[0].content).toContain('Initial context for created item')
+
+    const repeat = await submitProgress(page, date)
+    expect(repeat.createdTasks).toHaveLength(0)
+    expect(repeat.createdLogs).toHaveLength(0)
+  })
+
+  test('new task line creates baseline task and remains carry-over eligible', async ({ page }) => {
+    const date = uniqueScriptDate(26)
+    const nextDate = uniqueScriptDate(27)
+    const title = `Inline Carry KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 new task ${title}` },
+          { text: 'Initial long-running context' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdTasks).toHaveLength(0)
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.createdLogs).toHaveLength(0)
+    expect(submitted.executionRecords).toHaveLength(0)
+    expect(submitted.script.blocks[0]).toMatchObject({
+      completed: false,
+      taskIds: [submitted.createdTasks[0].id],
+    })
+    const rewrittenHeader = submitted.script.document.content[0].content
+    expect(rewrittenHeader[rewrittenHeader.length - 1].text).toBe(`@${title}`)
+
+    const entries = await getEntries(page, submitted.createdTasks[0].id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ type: 'body' })
+    expect(entries[0].content).toContain('Initial long-running context')
+
+    const carry = await page.request.get(`/api/day-scripts/${nextDate}/carry-over-blocks`)
+    expect(carry.ok()).toBeTruthy()
+    const carryBlocks = await carry.json()
+    expect(carryBlocks.some((block: any) => block.taskIds.includes(submitted.createdTasks[0].id) && block.headerText === `@${title}`)).toBeTruthy()
+  })
+
+  test('bare new task baseline allows first later completed progress to become a task log', async ({ page }) => {
+    const date = uniqueScriptDate(30)
+    const title = `Bare Inline KTLO ${Date.now()}`
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 new task ${title}` },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.createdTasks).toHaveLength(0)
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.createdLogs).toHaveLength(0)
+    const taskId = submitted.createdTasks[0].id
+
+    const append = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: submitted.script.revision,
+        document: {
+          ...submitted.script.document,
+          content: [
+            {
+              ...submitted.script.document.content[0],
+              content: [
+                ...submitted.script.document.content[0].content,
+                { type: 'text', text: ' ✅' },
+              ],
+            },
+            { type: 'paragraph', content: [{ type: 'text', text: 'First concrete progress' }] },
+          ],
+        },
+      },
+    })
+    expect(append.ok()).toBeTruthy()
+
+    const completed = await submitProgress(page, date)
+    expect(completed.createdLogs).toEqual([{ taskId, entryId: expect.any(String), blockId: expect.any(String) }])
+    const entries = await getEntries(page, taskId)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ type: 'log' })
+    expect(entries[0].content).toContain('First concrete progress')
   })
 
   test('new task text inside code blocks does not create or rewrite tasks', async ({ page }) => {
@@ -998,22 +1401,24 @@ test.describe('Day Script progress sync', () => {
       data: {
         expectedRevision: 0,
         document: doc([
-          { text: `1443-1500 new task ${title} ✅` },
+          { text: `1443-1500 new task ${title}` },
           { text: 'Investigated compact-time production incident' },
         ]),
       },
     })
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
-    expect(saved.createdTasks).toHaveLength(1)
-    expect(saved.script.blocks[0]).toMatchObject({
+    expect(saved.createdTasks).toHaveLength(0)
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.script.blocks[0]).toMatchObject({
       startTime: '14:43',
       endTime: '15:00',
     })
-    expect(saved.script.document.content[0].content[0].text).toBe('14:43-15:00 ')
-    expect(saved.script.document.content[0].content[1]).toMatchObject({ type: 'newTaskBadge' })
+    expect(submitted.script.document.content[0].content[0].text).toBe('14:43-15:00 ')
+    expect(submitted.script.document.content[0].content[1]).toMatchObject({ type: 'newTaskBadge' })
 
-    const entries = await getEntries(page, saved.createdTasks[0].id)
+    const entries = await getEntries(page, submitted.createdTasks[0].id)
     expect(entries).toHaveLength(1)
     expect(entries.some((entry: { type: string; content: string }) => entry.type === 'body' && entry.content.includes('Investigated compact-time production incident'))).toBeTruthy()
     expect(entries.some((entry: { type: string }) => entry.type === 'log')).toBeFalsy()
@@ -1027,27 +1432,29 @@ test.describe('Day Script progress sync', () => {
       data: {
         expectedRevision: 0,
         document: doc([
-          { text: `new task ${title} ✅` },
+          { text: `new task ${title}` },
           { text: 'Untimed production incident context' },
         ]),
       },
     })
     expect(save.ok()).toBeTruthy()
     const saved = await save.json()
-    expect(saved.createdTasks).toHaveLength(1)
-    expect(saved.script.blocks[0]).toMatchObject({
+    expect(saved.createdTasks).toHaveLength(0)
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.script.blocks[0]).toMatchObject({
       startTime: '',
       endTime: '',
-      taskIds: [saved.createdTasks[0].id],
+      taskIds: [submitted.createdTasks[0].id],
     })
-    expect(saved.script.document.content[0].content[0]).toMatchObject({ type: 'newTaskBadge' })
-    expect(saved.script.document.content[0].content[2]).toMatchObject({
+    expect(submitted.script.document.content[0].content[0]).toMatchObject({ type: 'newTaskBadge' })
+    expect(submitted.script.document.content[0].content[2]).toMatchObject({
       type: 'text',
       text: `@${title}`,
-      marks: [{ type: 'link', attrs: { taskId: saved.createdTasks[0].id } }],
+      marks: [{ type: 'link', attrs: { taskId: submitted.createdTasks[0].id } }],
     })
 
-    const entries = await getEntries(page, saved.createdTasks[0].id)
+    const entries = await getEntries(page, submitted.createdTasks[0].id)
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ type: 'body' })
     expect(entries[0].content).toContain('Untimed production incident context')

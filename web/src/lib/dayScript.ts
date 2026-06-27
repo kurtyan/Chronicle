@@ -20,6 +20,8 @@ export interface ParsedDayScriptBlock extends Omit<DayScriptBlock, 'id'> {
 
 const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
 const TIME_HEADER_RE = new RegExp(`^(${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN})(?:\\s+|$)(.*)$`)
+const FOCUS_MARKER_RE = /\s*(?:✅|🐲)\s*/gu
+const NEW_TASK_HEADER_RE = new RegExp(`^(?:((${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN}))(?:\\s+))?new task(?:\\s+.*)?$`, 'iu')
 
 export function buildDayScriptActivityKey(block: Pick<DayScriptBlock, 'sortOrder' | 'startTime' | 'endTime' | 'headerText'>, taskId: string): string {
   return [
@@ -84,6 +86,10 @@ function parseTimeHeader(text: string): { startTime: string; endTime: string; bo
   return { startTime, endTime, bodyText: match[3] }
 }
 
+export function isNewTaskHeaderText(text: string): boolean {
+  return NEW_TASK_HEADER_RE.test(text.trimEnd())
+}
+
 export function extractDayScriptLines(document: JsonNode | null | undefined): ParsedDayScriptLine[] {
   const lines: ParsedDayScriptLine[] = []
   const visit = (node: JsonNode) => {
@@ -123,7 +129,7 @@ export function parseDayScriptDocument(document: JsonNode | null | undefined): P
         sortOrder: blocks.length,
         startTime: header?.startTime ?? '',
         endTime: header?.endTime ?? '',
-        headerText: bodyText.replace(/\s*✅\s*/g, ' ').trim(),
+        headerText: bodyText.replace(FOCUS_MARKER_RE, ' ').replace(/\s+/g, ' ').trim(),
         progressText: '',
         completed: bodyText.includes('✅'),
         taskIds: line.taskIds.slice(0, 1),

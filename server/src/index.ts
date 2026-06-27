@@ -648,6 +648,9 @@ app.post('/api/day-scripts/:date/submit-progress', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     const focusActivities = Array.isArray(body.focusActivity) ? body.focusActivity : undefined
     const result = await service.submitDayScriptProgress(c.req.param('date'), focusActivities)
+    for (const task of result.createdTasks) {
+      broadcastEvent('task_created', { id: task.id }, c.get('clientId'))
+    }
     for (const log of result.createdLogs) {
       broadcastEvent('entry_created', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
       const changedTask = await service.getTaskById(log.taskId)

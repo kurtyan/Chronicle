@@ -324,7 +324,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(page).toHaveURL(new RegExp(`task=${secondTask.id}`))
   })
 
-  test('saving a new focus task keeps the created task selected without route thrash', async ({ page }) => {
+  test('submitting a new focus task keeps the created task selected without route thrash', async ({ page }) => {
     const existingTask = await createTask(page, `RouteExisting-${Date.now()}`)
     const date = uniqueScriptDate(Date.now() % 20 + 56)
     const newTaskTitle = `RouteCreated-${Date.now()}`
@@ -336,10 +336,11 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(page.getByRole('heading', { name: existingTask.title })).toBeVisible()
 
     const editor = await clearFocusEditor(page)
-    await page.keyboard.type(`new task ${newTaskTitle} ✅`)
+    await page.keyboard.type(`new task ${newTaskTitle}`)
     await Promise.all([
       page.waitForResponse((response) => response.url().includes(`/api/day-scripts/${date}`) && response.request().method() === 'PUT'),
-      page.keyboard.press('ControlOrMeta+S'),
+      page.waitForResponse((response) => response.url().includes(`/api/day-scripts/${date}/submit-progress`) && response.request().method() === 'POST'),
+      page.keyboard.press('Control+Enter'),
     ])
 
     await expect(page.getByRole('heading', { name: newTaskTitle })).toBeVisible()

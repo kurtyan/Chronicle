@@ -230,8 +230,11 @@ export interface SaveDayScriptResult {
 }
 
 export interface SubmitDayScriptProgressResult {
+  script: DayScriptDocument
+  createdTasks: Task[]
   createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
   executionRecords: DayScriptExecutionRecord[]
+  validationErrors: DayScriptValidationError[]
   conflicts: ProgressSyncConflict[]
 }
 

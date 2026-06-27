@@ -60,8 +60,11 @@ export interface SaveDayScriptResult {
 }
 
 export interface SubmitDayScriptProgressResult {
+  script: DayScriptDocument
+  createdTasks: Task[]
   createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
   executionRecords: DayScriptExecutionRecord[]
+  validationErrors: DayScriptValidationError[]
   conflicts: ProgressSyncConflict[]
 }
 
@@ -108,6 +111,7 @@ interface ParsedBlock {
   progressHtml: string
   progressLines: ParsedLine[]
   completed: boolean
+  appendOnSubmit: boolean
   taskIds: string[]
   newTaskCreated: boolean
   source: DayScriptBlockSource
@@ -120,6 +124,7 @@ type RichDayScriptBlock = DayScriptBlock & {
   headerRemainder?: string
   headerRemainderHtml?: string
   progressLines?: ParsedLine[]
+  appendOnSubmit?: boolean
   newTaskCreated?: boolean
 }
 
@@ -135,7 +140,8 @@ type ActivityMap = Map<string, DayScriptFocusActivity>
 const TIME_VALUE_PATTERN = '(?:\\d{1,2}:\\d{2}|\\d{3,4})'
 const TIME_HEADER_RE = new RegExp(`^(${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN})(?:\\s+|$)(.*)$`)
 const TIME_LIKE_RE = new RegExp(`^${TIME_VALUE_PATTERN}\\s*-\\s*${TIME_VALUE_PATTERN}`)
-const NEW_TASK_HEADER_RE = new RegExp(`^(?:((${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN}))(\\s+))?new task\\s+(.+?)\\s*(✅)?\\s*$`, 'i')
+const FOCUS_MARKER_RE = /✅|🐲/gu
+const NEW_TASK_HEADER_RE = new RegExp(`^(?:((${TIME_VALUE_PATTERN})\\s*-\\s*(${TIME_VALUE_PATTERN}))(\\s+))?new task(?:\\s+(.+?))?\\s*((?:(?:✅|🐲)\\s*)*)$`, 'iu')
 const BLOCK_SOURCES: DayScriptBlockSource[] = ['manual', 'task_next_step', 'task_recommended_next_step', 'carry_over']
 
 function queryAll(sql: string, params: any[] = []): any[] {
@@ -304,6 +310,30 @@ function replaceLeadingText(nodes: JsonNode[] = [], length: number, replacement:
   })
 }
 
+function normalizeTimeHeaders(document: JsonNode): JsonNode {
+  const cloned = cloneNode(document)
+
+  const visit = (node: JsonNode) => {
+    const type = node.type ?? ''
+    if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem') {
+      const line = collectInlineText(node.content ?? [])
+      const header = parseTimeHeader(line.text.trimEnd())
+      if (!header) return
+
+      const normalizedRange = `${header.startTime}-${header.endTime}`
+      if (header.rangeText !== normalizedRange) {
+        node.content = replaceLeadingText(node.content, header.rangeText.length, normalizedRange)
+      }
+      return
+    }
+
+    for (const child of node.content ?? []) visit(child)
+  }
+
+  for (const child of cloned.content ?? []) visit(child)
+  return cloned
+}
+
 function rewriteNewTaskHeaders(document: JsonNode): { document: JsonNode; createdTasks: Task[] } {
   const cloned = cloneNode(document)
   const createdTasks: Task[] = []
@@ -323,7 +353,7 @@ function rewriteNewTaskHeaders(document: JsonNode): { document: JsonNode; create
       const match = line.text.trimEnd().match(NEW_TASK_HEADER_RE)
       if (!match) return
 
-      const title = match[5].replace(/\s*✅\s*/g, ' ').trim()
+      const title = stripFocusMarkers(match[5])
       if (!title) return
       const startTime = match[2] ? parseTimeValue(match[2]) : ''
       const endTime = match[3] ? parseTimeValue(match[3]) : ''
@@ -343,7 +373,7 @@ function rewriteNewTaskHeaders(document: JsonNode): { document: JsonNode; create
         newTaskBadgeNode(),
         { type: 'text', text: ' ' },
         taskMentionNode(task),
-        ...(match[6] ? [{ type: 'text', text: ' ✅' }] : []),
+        ...(match[6]?.trim() ? [{ type: 'text', text: ` ${match[6].trim().replace(/\s+/g, ' ')}` }] : []),
       ]
       return
     }
@@ -369,6 +399,21 @@ function normalizeProgress(progressText: string): string {
 
 function normalizeActionText(text: string): string {
   return normalizeProgress(text).replace(/\s+/g, ' ').toLowerCase()
+}
+
+function focusMarkers(text: string): string[] {
+  return text.match(FOCUS_MARKER_RE) ?? []
+}
+
+function markerState(text: string): { completed: boolean; appendOnSubmit: boolean; conflict: boolean } {
+  const markers = focusMarkers(text)
+  const completed = markers.includes('✅')
+  const appendOnSubmit = markers.includes('🐲')
+  return { completed, appendOnSubmit, conflict: completed && appendOnSubmit }
+}
+
+function stripFocusMarkers(text: string): string {
+  return text.replace(/\s*(?:✅|🐲)\s*/gu, ' ').replace(/\s+/g, ' ').trim()
 }
 
 function normalizeBlockSource(value: unknown): DayScriptBlockSource | null {
@@ -568,7 +613,7 @@ function extractHeaderRemainder(headerText: string, taskId?: string): string {
   const mention = `@${task.title}`
   const index = headerText.indexOf(mention)
   if (index < 0) return ''
-  return headerText.slice(index + mention.length).replace(/\s*✅\s*/g, ' ').trim()
+  return stripFocusMarkers(headerText.slice(index + mention.length))
 }
 
 function buildLogHtml(
@@ -585,6 +630,9 @@ function buildLogHtml(
 
 function buildBlockLogHtml(block: RichDayScriptBlock, progress: string, progressHtml?: string, includeHeaderRemainder = true): string {
   if (block.source !== 'manual') return progressHtml || progressToHtml(progress)
+  if (includeHeaderRemainder && progressHtml && block.headerRemainderHtml && progressHtml.startsWith(block.headerRemainderHtml)) {
+    return buildLogHtml('', block, progress, progressHtml, false)
+  }
   return buildLogHtml('', block, progress, progressHtml, includeHeaderRemainder)
 }
 
@@ -786,6 +834,21 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
       }
 
       const bodyText = (header?.bodyText ?? visible).trim()
+      const markers = markerState(bodyText)
+      if (newTaskHeader && (markers.completed || markers.appendOnSubmit)) {
+        validationErrors.push({ lineIndex, message: 'Focus line cannot combine new task with ✅ or 🐲.' })
+      }
+      if (newTaskHeader && !stripFocusMarkers(newTaskHeader[5] ?? '')) {
+        validationErrors.push({ lineIndex, message: 'New task line needs a title.' })
+      }
+      if (markers.conflict) {
+        validationErrors.push({ lineIndex, message: 'Focus line cannot use both ✅ and 🐲.' })
+        current = null
+        return
+      }
+      const effectiveMarkers = newTaskHeader
+        ? { completed: false, appendOnSubmit: false }
+        : markers
       const taskIds = line.taskIds.filter((taskId) => Boolean(getTaskById(taskId)))
       const headerRemainder = extractHeaderRemainder(bodyText, taskIds[0])
       const source = sourceFromLine(line, bodyText)
@@ -793,13 +856,14 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
         sortOrder: blocks.length,
         startTime,
         endTime,
-        headerText: bodyText.replace(/\s*✅\s*/g, ' ').trim(),
+        headerText: stripFocusMarkers(bodyText),
         headerRemainder,
         headerRemainderHtml: progressToHtml(headerRemainder),
         progressText: '',
         progressHtml: '',
         progressLines: [],
-        completed: bodyText.includes('✅'),
+        completed: effectiveMarkers.completed,
+        appendOnSubmit: effectiveMarkers.appendOnSubmit,
         taskIds,
         newTaskCreated: line.newTaskBadge,
         source,
@@ -950,6 +1014,7 @@ function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBl
       progressHtml: block.progressHtml,
       progressLines: block.progressLines,
       completed: block.completed,
+      appendOnSubmit: block.appendOnSubmit,
       taskIds: block.taskIds,
       newTaskCreated: block.newTaskCreated,
       source: block.source,
@@ -1035,7 +1100,7 @@ function upsertBlocks(scriptDate: string, blocks: DayScriptBlock[], now: number)
   }
 }
 
-function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existingSyncs: Map<string, ExistingSync>, activityMap: ActivityMap, completedAt: number): {
+function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existingSyncs: Map<string, ExistingSync>, activityMap: ActivityMap, completedAt: number, newlyCreatedTaskIds: Set<string> = new Set()): {
   createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
   executionRecords: DayScriptExecutionRecord[]
   conflicts: ProgressSyncConflict[]
@@ -1053,7 +1118,7 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
     const existing = existingSyncs.get(syncKey)
     const task = getTaskById(taskId)
     if (!task) continue
-    if (block.newTaskCreated && !existing) continue
+    if (block.newTaskCreated && !existing && newlyCreatedTaskIds.has(taskId)) continue
 
     if (!existing) {
       const entry = createTaskEntry(taskId, buildBlockLogHtml(block, progress, progressHtml), 'log')
@@ -1061,7 +1126,7 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
         'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
         [block.id, taskId, progress, progressHtml, entry.id, completedAt]
       )
-      const executionRecord = createExecutionRecord(scriptDate, block, taskId, entry.id, activityMap, completedAt)
+      const executionRecord = block.completed ? createExecutionRecord(scriptDate, block, taskId, entry.id, activityMap, completedAt) : null
       if (executionRecord) executionRecords.push(executionRecord)
       createdLogs.push({ taskId, entryId: entry.id, blockId: block.id })
       continue
@@ -1089,7 +1154,7 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
         'UPDATE day_script_progress_syncs SET synced_progress = ?, synced_progress_html = ?, last_entry_id = ?, updated_at = ? WHERE block_id = ? AND task_id = ?',
         [progress, progressHtml, entry.id, completedAt, block.id, taskId]
       )
-      const executionRecord = createExecutionRecord(scriptDate, block, taskId, entry.id, activityMap, completedAt)
+      const executionRecord = block.completed ? createExecutionRecord(scriptDate, block, taskId, entry.id, activityMap, completedAt) : null
       if (executionRecord) executionRecords.push(executionRecord)
       createdLogs.push({ taskId, entryId: entry.id, blockId: block.id })
       continue
@@ -1191,15 +1256,35 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
     throw new Error('REVISION_CONFLICT')
   }
 
-  const { validationErrors } = parseDocument(normalizedDocument)
+  const parsedDraft = parseDocument(normalizedDocument)
+  const { validationErrors } = parsedDraft
   if (validationErrors.length > 0) {
+    const now = Date.now()
+    const nextRevision = (existing?.revision ?? 0) + 1
+    const nextBlocks = assignBlockIds(parsedDraft.blocks, existing?.blocks ?? [])
+    const transaction = getDb().transaction(() => {
+      if (existing) {
+        run(
+          'UPDATE day_scripts SET document_json = ?, revision = ?, updated_at = ? WHERE script_date = ?',
+          [JSON.stringify(normalizedDocument), nextRevision, now, scriptDate]
+        )
+      } else {
+        run(
+          'INSERT INTO day_scripts(script_date, document_json, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+          [scriptDate, JSON.stringify(normalizedDocument), nextRevision, now, now]
+        )
+      }
+      upsertBlocks(scriptDate, nextBlocks, now)
+    })
+    transaction()
+    const savedScript = getExistingScript(scriptDate)
     return {
-      script: existing ?? {
+      script: savedScript ?? {
         scriptDate,
-        revision: expectedRevision,
+        revision: nextRevision,
         document: normalizedDocument,
-        blocks: [],
-        updatedAt: Date.now(),
+        blocks: existing?.blocks ?? [],
+        updatedAt: now,
       },
       createdTasks: [],
       createdLogs: [],
@@ -1210,19 +1295,12 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   }
 
   const now = Date.now()
-  let rewrittenDocument = normalizedDocument
+  let rewrittenDocument = normalizeTimeHeaders(normalizedDocument)
   let nextBlocks: RichDayScriptBlock[] = []
   const createdTasks: Task[] = []
 
   const transaction = getDb().transaction(() => {
-    const rewriteResult = rewriteNewTaskHeaders(normalizedDocument)
-    rewrittenDocument = rewriteResult.document
-    createdTasks.push(...rewriteResult.createdTasks)
-
     const parsed = parseDocument(rewrittenDocument)
-    if (parsed.validationErrors.length > 0) {
-      throw new Error('UNEXPECTED_DAY_SCRIPT_VALIDATION_AFTER_REWRITE')
-    }
     nextBlocks = assignBlockIds(parsed.blocks, existing?.blocks ?? [])
 
     if (existing) {
@@ -1238,19 +1316,6 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
     }
 
     upsertBlocks(scriptDate, nextBlocks, now)
-
-    for (const task of createdTasks) {
-      const block = nextBlocks.find((item) => item.taskIds.includes(task.id))
-      if (!block) continue
-      const bodyHtml = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
-      if (bodyHtml || block.progressText.trim()) {
-        createTaskEntry(task.id, bodyHtml || progressToHtml(block.progressText), 'body')
-        run(
-          'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [block.id, task.id, blockSyncText(block), blockSyncHtml(block), null, now]
-        )
-      }
-    }
   })
 
   transaction()
@@ -1267,29 +1332,62 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
 
 export function submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[]): SubmitDayScriptProgressResult {
   const existing = getExistingScript(scriptDate)
-  if (!existing) return { createdLogs: [], executionRecords: [], conflicts: [] }
+  if (!existing) return { script: getDayScript(scriptDate), createdTasks: [], createdLogs: [], executionRecords: [], validationErrors: [], conflicts: [] }
 
   const parsed = parseDocument(existing.document)
   if (parsed.validationErrors.length > 0) {
-    return { createdLogs: [], executionRecords: [], conflicts: [] }
+    return { script: existing, createdTasks: [], createdLogs: [], executionRecords: [], validationErrors: parsed.validationErrors, conflicts: [] }
   }
 
   const now = Date.now()
-  const richBlocks = assignBlockIds(parsed.blocks, existing.blocks)
+  let richBlocks = assignBlockIds(parsed.blocks, existing.blocks)
   const activityMap = normalizeFocusActivities(focusActivities)
+  const createdTasks: Task[] = []
   const createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> = []
   const executionRecords: DayScriptExecutionRecord[] = []
   const conflicts: ProgressSyncConflict[] = []
 
   const transaction = getDb().transaction(() => {
+    let document = existing.document
+    const rewriteResult = rewriteNewTaskHeaders(existing.document)
+    if (rewriteResult.createdTasks.length > 0) {
+      document = rewriteResult.document
+      createdTasks.push(...rewriteResult.createdTasks)
+
+      const rewrittenParsed = parseDocument(document)
+      if (rewrittenParsed.validationErrors.length > 0) {
+        throw new Error('UNEXPECTED_DAY_SCRIPT_VALIDATION_AFTER_REWRITE')
+      }
+      richBlocks = assignBlockIds(rewrittenParsed.blocks, existing.blocks)
+
+      run(
+        'UPDATE day_scripts SET document_json = ?, revision = ?, updated_at = ? WHERE script_date = ?',
+        [JSON.stringify(document), existing.revision + 1, now, scriptDate]
+      )
+      upsertBlocks(scriptDate, richBlocks, now)
+
+      for (const task of createdTasks) {
+        const block = richBlocks.find((item) => item.taskIds.includes(task.id))
+        if (!block) continue
+        const bodyHtml = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
+        if (bodyHtml || block.progressText.trim()) {
+          createTaskEntry(task.id, bodyHtml || progressToHtml(block.progressText), 'body')
+        }
+        run(
+          'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [block.id, task.id, blockSyncText(block), blockSyncHtml(block), null, now]
+        )
+      }
+    }
+
     const syncMap = new Map<string, ExistingSync>()
     for (const sync of getExistingSyncs(scriptDate)) {
       syncMap.set(`${sync.blockId}:${sync.taskId}`, sync)
     }
 
     for (const block of richBlocks) {
-      if (!block.completed) continue
-      const result = syncBlockProgress(scriptDate, block, syncMap, activityMap, now)
+      if (!block.completed && !block.appendOnSubmit) continue
+      const result = syncBlockProgress(scriptDate, block, syncMap, activityMap, now, new Set(createdTasks.map((task) => task.id)))
       createdLogs.push(...result.createdLogs)
       executionRecords.push(...result.executionRecords)
       conflicts.push(...result.conflicts)
@@ -1297,7 +1395,7 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
   })
 
   transaction()
-  return { createdLogs, executionRecords, conflicts }
+  return { script: getDayScript(scriptDate), createdTasks, createdLogs, executionRecords, validationErrors: [], conflicts }
 }
 
 export function getDayScriptExecutionRecords(scriptDate: string, filters?: { taskId?: string; start?: number; end?: number }): DayScriptExecutionRecord[] {
