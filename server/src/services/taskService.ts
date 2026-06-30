@@ -343,6 +343,7 @@ export function deleteTask(id: string): boolean {
     db.prepare('DELETE FROM task_entries WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM work_sessions WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM task_extra_info WHERE task_id = ?').run(id)
+    db.prepare('DELETE FROM note_links WHERE target_id = ?').run(id)
     removeTaskFromIndex(id)
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
   })

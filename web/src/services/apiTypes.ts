@@ -1,4 +1,4 @@
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
 
 export interface ApiInterface {
   fetchTodos(type?: string, status?: string): Promise<Task[]>
@@ -48,6 +48,24 @@ export interface ApiInterface {
     tokens: string[]
     total: number
   }>
+  searchAll(query: string, limit?: number): Promise<GlobalSearchResponse>
+  searchNotes(query: string, limit?: number): Promise<{
+    results: NoteSearchResult[]
+    tokens: string[]
+    total: number
+  }>
+  fetchNotes(options?: { includeArchived?: boolean; query?: string; limit?: number }): Promise<Note[]>
+  getNoteById(id: string): Promise<Note | null>
+  createNote(req: CreateNoteRequest): Promise<Note>
+  updateNote(id: string, req: UpdateNoteRequest): Promise<Note | null>
+  archiveNote(id: string): Promise<Note | null>
+  unarchiveNote(id: string): Promise<Note | null>
+  deleteNote(id: string): Promise<void>
+  appendToNote(id: string, contentHtml: string, source?: { taskId?: string; entryId?: string; label?: string }): Promise<Note>
+  createNoteFromTask(taskId: string): Promise<Note>
+  addTaskEntryToNote(taskId: string, entryId: string, noteId?: string): Promise<Note>
+  fetchTaskNotes(taskId: string): Promise<Note[]>
+  fetchNoteTasks(noteId: string): Promise<Task[]>
   // Task Extra Info
   getTaskExtraInfo(taskId: string): Promise<TaskExtraInfo[]>
   getTaskExtraInfoValue(taskId: string, key: string): Promise<string | null>

@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
 import { DEFAULT_DAILY_SUMMARY_PROMPT, DEFAULT_MEETING_EXTRACTION_PROMPT, DEFAULT_TASK_SUMMARY_PROMPT } from '../../../shared/llmPrompts'
 
 const DB_FILENAME = 'tasks.db'
@@ -48,6 +48,23 @@ function sessionRowToWorkSession(row: any): WorkSession {
     startedAt: row.started_at,
     endedAt: row.ended_at,
   }
+}
+
+function noteRowToNote(row: any): Note {
+  return {
+    id: row.id,
+    title: row.title,
+    contentHtml: row.content_html,
+    tags: row.tags ? JSON.parse(row.tags) : [],
+    pinned: Boolean(row.pinned),
+    archived: Boolean(row.archived),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function htmlToText(html: string): string {
+  return html.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
 export class EmbeddedApiProvider implements ApiInterface {
@@ -155,6 +172,41 @@ export class EmbeddedApiProvider implements ApiInterface {
           )
         `)
       }
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS notes (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          content_html TEXT NOT NULL,
+          tags TEXT,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          archived INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `)
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS note_links (
+          id TEXT PRIMARY KEY,
+          note_id TEXT NOT NULL,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          target_entry_id TEXT,
+          created_at INTEGER NOT NULL,
+          context TEXT,
+          UNIQUE(note_id, target_type, target_id, target_entry_id)
+        )
+      `)
+      this.db.run(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_note_links_unique_target
+        ON note_links(note_id, target_type, target_id)
+        WHERE target_entry_id IS NULL
+      `)
+      this.db.run(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_note_links_unique_entry
+        ON note_links(note_id, target_type, target_id, target_entry_id)
+        WHERE target_entry_id IS NOT NULL
+      `)
+      await this.persist()
     })()
 
     await this.initPromise
@@ -300,6 +352,7 @@ export class EmbeddedApiProvider implements ApiInterface {
   async deleteTask(id: string): Promise<void> {
     await this.ensureDb()
     await this.runAndPersist('DELETE FROM task_entries WHERE task_id = ?', [id])
+    await this.runAndPersist('DELETE FROM note_links WHERE target_id = ?', [id])
     await this.runAndPersist('DELETE FROM tasks WHERE id = ?', [id])
   }
 
@@ -714,6 +767,237 @@ export class EmbeddedApiProvider implements ApiInterface {
 
     const results = [...taskMap.values()]
     return { results, tokens: [trimmed], total: results.length }
+  }
+
+  async searchAll(query: string, limit = 50): Promise<GlobalSearchResponse> {
+    const taskResult = await this.searchTasks(query, limit)
+    const noteResult = await this.searchNotes(query, limit)
+    return {
+      results: {
+        tasks: taskResult.results.filter((r) => r.matchType === 'task').map((r) => ({ ...r, kind: 'task' as const })),
+        taskEntries: taskResult.results.filter((r) => r.matchType !== 'task').map((r) => ({ ...r, kind: 'task_entry' as const })),
+        notes: noteResult.results,
+      },
+      tokens: [...new Set([...taskResult.tokens, ...noteResult.tokens])],
+      total: taskResult.total + noteResult.total,
+    }
+  }
+
+  async searchNotes(query: string, limit = 50, includeArchived = false): Promise<{
+    results: NoteSearchResult[]
+    tokens: string[]
+    total: number
+  }> {
+    await this.ensureDb()
+    const trimmed = query.trim()
+    if (!trimmed) return { results: [], tokens: [], total: 0 }
+    const like = `%${trimmed}%`
+    const rows = this.queryAll(
+      `SELECT * FROM notes
+       WHERE ${includeArchived ? '' : 'archived = 0 AND '}(title LIKE ? OR content_html LIKE ? OR tags LIKE ?)
+       ORDER BY pinned DESC, updated_at DESC
+       LIMIT ?`,
+      [like, like, like, limit]
+    )
+    const results = rows.map((row: any): NoteSearchResult => {
+      const note = noteRowToNote(row)
+      return {
+        kind: 'note',
+        noteId: note.id,
+        title: note.title,
+        tags: note.tags,
+        snippet: htmlToText(note.contentHtml).slice(0, 240),
+        matchedSource: note.title.includes(trimmed) ? 'note_title' : 'note_content',
+        updatedAt: note.updatedAt,
+        pinned: note.pinned,
+        tokens: [trimmed],
+        exactMatch: true,
+        rank: 0,
+      }
+    })
+    return { results, tokens: [trimmed], total: results.length }
+  }
+
+  private getNextNoteId(): string {
+    const rows = this.queryAll('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as maxId FROM notes')
+    const maxId = rows[0]?.maxId || 0
+    return `N${String(maxId + 1).padStart(10, '0')}`
+  }
+
+  private async upsertNoteLink(noteId: string, targetType: 'task' | 'task_entry', targetId: string, targetEntryId: string | null, context: string): Promise<void> {
+    const existing = targetEntryId === null
+      ? this.queryOne(
+        'SELECT id FROM note_links WHERE note_id = ? AND target_type = ? AND target_id = ? AND target_entry_id IS NULL',
+        [noteId, targetType, targetId]
+      )
+      : this.queryOne(
+        'SELECT id FROM note_links WHERE note_id = ? AND target_type = ? AND target_id = ? AND target_entry_id = ?',
+        [noteId, targetType, targetId, targetEntryId]
+      )
+    if (existing?.id) {
+      await this.runAndPersist('UPDATE note_links SET context = ? WHERE id = ?', [context, existing.id])
+      return
+    }
+    await this.runAndPersist(
+      'INSERT INTO note_links (id, note_id, target_type, target_id, target_entry_id, created_at, context) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [crypto.randomUUID(), noteId, targetType, targetId, targetEntryId, Date.now(), context]
+    )
+  }
+
+  private async validateNoteLinkSource(source?: { taskId?: string; entryId?: string }): Promise<void> {
+    if (!source?.taskId) return
+    if (!await this.getTaskById(source.taskId)) throw new Error('Task not found')
+    if (!source.entryId) return
+    const entry = (await this.fetchTaskEntries(source.taskId)).find((item) => item.id === source.entryId)
+    if (!entry) throw new Error('Task entry not found')
+  }
+
+  private async syncTaskMentionLinks(note: Note): Promise<void> {
+    const taskIds = new Set<string>()
+    const regex = /data-task-id="([^"]+)"/g
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(note.contentHtml))) {
+      if (match[1]) taskIds.add(match[1])
+    }
+    this.run("DELETE FROM note_links WHERE note_id = ? AND target_type = 'task' AND context = 'mention'", [note.id])
+    await this.persist()
+    for (const taskId of taskIds) {
+      if (await this.getTaskById(taskId)) await this.upsertNoteLink(note.id, 'task', taskId, null, 'mention')
+    }
+  }
+
+  async fetchNotes(options?: { includeArchived?: boolean; query?: string; limit?: number }): Promise<Note[]> {
+    await this.ensureDb()
+    if (options?.query?.trim()) {
+      const result = await this.searchNotes(options.query, options.limit ?? 200, Boolean(options.includeArchived))
+      return result.results.map((item) => this.queryOne('SELECT * FROM notes WHERE id = ?', [item.noteId])).filter(Boolean).map(noteRowToNote)
+    }
+    const rows = this.queryAll(
+      `SELECT * FROM notes ${options?.includeArchived ? '' : 'WHERE archived = 0'} ORDER BY pinned DESC, updated_at DESC LIMIT ?`,
+      [options?.limit ?? 200]
+    )
+    return rows.map(noteRowToNote)
+  }
+
+  async getNoteById(id: string): Promise<Note | null> {
+    await this.ensureDb()
+    const row = this.queryOne('SELECT * FROM notes WHERE id = ?', [id])
+    return row ? noteRowToNote(row) : null
+  }
+
+  async createNote(req: CreateNoteRequest): Promise<Note> {
+    await this.ensureDb()
+    for (const taskId of req.linkedTaskIds ?? []) {
+      if (!await this.getTaskById(taskId)) throw new Error('Task not found')
+    }
+    const now = Date.now()
+    const id = this.getNextNoteId()
+    await this.runAndPersist(
+      'INSERT INTO notes (id, title, content_html, tags, pinned, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?)',
+      [id, req.title?.trim() || 'Untitled note', req.contentHtml || '<p></p>', JSON.stringify(req.tags ?? []), now, now]
+    )
+    for (const taskId of req.linkedTaskIds ?? []) {
+      await this.upsertNoteLink(id, 'task', taskId, null, 'created')
+    }
+    const note = (await this.getNoteById(id))!
+    await this.syncTaskMentionLinks(note)
+    return note
+  }
+
+  async updateNote(id: string, req: UpdateNoteRequest): Promise<Note | null> {
+    await this.ensureDb()
+    const existing = await this.getNoteById(id)
+    if (!existing) return null
+    const updates: string[] = []
+    const params: any[] = []
+    if (req.title !== undefined) { updates.push('title = ?'); params.push(req.title.trim() || 'Untitled note') }
+    if (req.contentHtml !== undefined) { updates.push('content_html = ?'); params.push(req.contentHtml) }
+    if (req.tags !== undefined) { updates.push('tags = ?'); params.push(JSON.stringify(req.tags)) }
+    if (req.pinned !== undefined) { updates.push('pinned = ?'); params.push(req.pinned ? 1 : 0) }
+    if (req.archived !== undefined) { updates.push('archived = ?'); params.push(req.archived ? 1 : 0) }
+    if (updates.length === 0) return existing
+    updates.push('updated_at = ?')
+    params.push(Date.now(), id)
+    await this.runAndPersist(`UPDATE notes SET ${updates.join(', ')} WHERE id = ?`, params)
+    const note = await this.getNoteById(id)
+    if (note) await this.syncTaskMentionLinks(note)
+    return note
+  }
+
+  async archiveNote(id: string): Promise<Note | null> {
+    return this.updateNote(id, { archived: true })
+  }
+
+  async unarchiveNote(id: string): Promise<Note | null> {
+    return this.updateNote(id, { archived: false })
+  }
+
+  async deleteNote(id: string): Promise<void> {
+    await this.ensureDb()
+    this.run('DELETE FROM note_links WHERE note_id = ?', [id])
+    await this.runAndPersist('DELETE FROM notes WHERE id = ?', [id])
+  }
+
+  async appendToNote(id: string, contentHtml: string, source?: { taskId?: string; entryId?: string; label?: string }): Promise<Note> {
+    const note = await this.getNoteById(id)
+    if (!note) throw new Error('Note not found')
+    await this.validateNoteLinkSource(source)
+    const label = source?.label ? `<p><small>${source.label}</small></p>` : ''
+    const updated = await this.updateNote(id, { contentHtml: `${note.contentHtml}<hr>${label}${contentHtml}` })
+    if (source?.taskId) {
+      if (source.entryId) await this.upsertNoteLink(id, 'task_entry', source.taskId, source.entryId, 'append')
+      await this.upsertNoteLink(id, 'task', source.taskId, null, 'append')
+    }
+    return updated!
+  }
+
+  async createNoteFromTask(taskId: string): Promise<Note> {
+    const task = await this.getTaskById(taskId)
+    if (!task) throw new Error('Task not found')
+    const entries = await this.fetchTaskEntries(taskId)
+    const content = [
+      `<h1>${task.title}</h1>`,
+      `<p><small>Created from task ${task.id}</small></p>`,
+      '<h2>Task logs</h2>',
+      ...entries.map((entry) => `<section><p><small>${entry.type} · ${new Date(entry.createdAt).toLocaleString()}</small></p>${entry.content}</section>`),
+    ].join('')
+    return this.createNote({ title: task.title, contentHtml: content, tags: task.tags, linkedTaskIds: [taskId] })
+  }
+
+  async addTaskEntryToNote(taskId: string, entryId: string, noteId?: string): Promise<Note> {
+    const task = await this.getTaskById(taskId)
+    if (!task) throw new Error('Task not found')
+    const entry = (await this.fetchTaskEntries(taskId)).find((item) => item.id === entryId)
+    if (!entry) throw new Error('Task entry not found')
+    const note = noteId ? await this.getNoteById(noteId) : await this.createNote({ title: task.title, tags: task.tags, linkedTaskIds: [taskId] })
+    if (!note) throw new Error('Note not found')
+    return this.appendToNote(note.id, `<section><p><small>${entry.type} · ${new Date(entry.createdAt).toLocaleString()}</small></p>${entry.content}</section>`, {
+      taskId,
+      entryId,
+      label: `From ${task.id} - ${task.title}`,
+    })
+  }
+
+  async fetchTaskNotes(taskId: string): Promise<Note[]> {
+    await this.ensureDb()
+    if (!await this.getTaskById(taskId)) throw new Error('Task not found')
+    const rows = this.queryAll(
+      `SELECT DISTINCT n.* FROM notes n INNER JOIN note_links l ON l.note_id = n.id
+       WHERE l.target_id = ? AND n.archived = 0 ORDER BY n.updated_at DESC`,
+      [taskId]
+    )
+    return rows.map(noteRowToNote)
+  }
+
+  async fetchNoteTasks(noteId: string): Promise<Task[]> {
+    await this.ensureDb()
+    if (!await this.getNoteById(noteId)) throw new Error('Note not found')
+    const rows = this.queryAll(
+      `SELECT DISTINCT t.* FROM tasks t INNER JOIN note_links l ON l.target_id = t.id
+       WHERE l.note_id = ? ORDER BY t.updated_at DESC`,
+      [noteId]
+    )
+    return rows.map(taskRowToTask)
   }
 
   // --- Task Extra Info (stub: in-memory store) ---

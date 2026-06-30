@@ -1,14 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTaskStore } from '@/stores/taskStore'
 import { useI18n } from '@/i18n/context'
-import type { AgentConversation, TaskEntry, WorkSession, Task, TaskProgressContext } from '@/types'
+import type { AgentConversation, Note, TaskEntry, WorkSession, Task, TaskProgressContext } from '@/types'
 import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { PinnedSection } from '@/components/PinnedSection'
-import { deleteTaskLogDraft, fetchTaskAgentConversations, fetchTaskLogDraft, saveTaskLogDraft } from '@/services/api'
+import { addTaskEntryToNote, appendToNote, createNoteFromTask, deleteTaskLogDraft, fetchTaskAgentConversations, fetchTaskLogDraft, fetchTaskNotes, saveTaskLogDraft } from '@/services/api'
 import { isTauriEnv } from '@/services/httpApi'
 import { registerShortcut } from '@/shortcuts/registry'
-import { Copy, AlertTriangle } from 'lucide-react'
+import { Copy, AlertTriangle, FilePlus2, FileText } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { NotePickerDialog } from '@/components/NotePickerDialog'
 
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
@@ -24,6 +26,7 @@ interface TaskDetailWorkspaceProps {
 
 export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true, keepCompletedTaskVisible = false }: TaskDetailWorkspaceProps) {
   const { t } = useI18n()
+  const navigate = useNavigate()
   const {
     selectedTask, entries, entryLoading, activeTaskId, tasks, pinnedEntry,
     currentSession, searchMode, searchTokens,
@@ -52,6 +55,9 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const [dropTargetId, setDropTargetId] = useState<string | null>(null)
   const [agentConversations, setAgentConversations] = useState<AgentConversation[]>([])
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
+  const [linkedNotes, setLinkedNotes] = useState<Note[]>([])
+  const [notePickerOpen, setNotePickerOpen] = useState(false)
+  const [pendingNoteAppend, setPendingNoteAppend] = useState<{ content: string; entryId?: string } | null>(null)
   const workspaceScrollRef = useRef<HTMLDivElement | null>(null)
 
   // Serialize draft saves per taskId so rapid Cmd+S presses cannot race.
@@ -66,6 +72,18 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     if (!activeTaskId || isDraftActive || !selectedTask) return
     loadTaskContexts(selectedTask.status).catch((error) => console.error('Failed to load task summary:', error))
   }, [activeTaskId, isDraftActive, selectedTask?.status, loadTaskContexts])
+
+  useEffect(() => {
+    if (!activeTaskId || isDraftActive) {
+      setLinkedNotes([])
+      return
+    }
+    let cancelled = false
+    fetchTaskNotes(activeTaskId)
+      .then((notes) => { if (!cancelled) setLinkedNotes(notes) })
+      .catch(() => { if (!cancelled) setLinkedNotes([]) })
+    return () => { cancelled = true }
+  }, [activeTaskId, isDraftActive])
 
   const scrollWorkspaceToBottom = useCallback(() => {
     const el = workspaceScrollRef.current
@@ -168,6 +186,34 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
       return
     }
     setAgentMenuOpen((open) => !open)
+  }
+
+  const handleCreateNoteFromTask = async () => {
+    if (!activeTaskId || isDraftActive) return
+    const note = await createNoteFromTask(activeTaskId)
+    setLinkedNotes((current) => [note, ...current.filter((item) => item.id !== note.id)])
+    navigate(`/notes?id=${encodeURIComponent(note.id)}`)
+  }
+
+  const handleAddContentToNote = (content: string, entryId?: string) => {
+    setPendingNoteAppend({ content, entryId })
+    setNotePickerOpen(true)
+  }
+
+  const handlePickNoteForAppend = async (note: Note) => {
+    if (!activeTaskId || !pendingNoteAppend) return
+    const selected = pendingNoteAppend
+    if (selected.entryId && selected.content === entries.find((entry) => entry.id === selected.entryId)?.content) {
+      const updated = await addTaskEntryToNote(activeTaskId, selected.entryId, note.id)
+      setLinkedNotes((current) => [updated, ...current.filter((item) => item.id !== updated.id)])
+      return
+    }
+    const updated = await appendToNote(note.id, selected.content, {
+      taskId: activeTaskId,
+      entryId: selected.entryId,
+      label: `From ${selectedTask?.id} - ${selectedTask?.title}`,
+    })
+    setLinkedNotes((current) => [updated, ...current.filter((item) => item.id !== updated.id)])
   }
 
   // Submit entry from the new-entry editor
@@ -471,6 +517,9 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
             <button className="opacity-50 hover:opacity-100 transition p-1 hover:bg-muted rounded" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(selectedTask.id) }} title="Copy ID">
               <Copy className="w-3 h-3" />
             </button>
+            <button className="opacity-60 hover:opacity-100 transition p-1 hover:bg-muted rounded" onClick={(e) => { e.stopPropagation(); void handleCreateNoteFromTask() }} title="Create note from task">
+              <FilePlus2 className="w-3.5 h-3.5" />
+            </button>
             <div className="relative">
               <button
                 className={`transition p-1 hover:bg-muted rounded text-xs font-medium ${agentConversations.length === 0 ? 'opacity-30 cursor-default' : 'opacity-70 hover:opacity-100'}`}
@@ -505,6 +554,23 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
         {activeTaskId && !isDraftActive && (
           <div className="px-[30px] pb-2">
             <TaskSummaryWidget context={activeSummaryContext} updating={activeSummaryUpdating} />
+          </div>
+        )}
+        {activeTaskId && !isDraftActive && linkedNotes.length > 0 && (
+          <div className="px-[30px] pb-2">
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/80 px-3 py-2 text-xs">
+              <span className="font-semibold uppercase tracking-normal text-muted-foreground">Linked notes</span>
+              {linkedNotes.map((note) => (
+                <button
+                  key={note.id}
+                  className="inline-flex max-w-60 items-center gap-1 rounded-md bg-muted px-2 py-1 text-foreground hover:bg-primary/10"
+                  onClick={() => navigate(`/notes?id=${encodeURIComponent(note.id)}`)}
+                >
+                  <FileText className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{note.title}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {activeTaskId && !isDraftActive && pinnedEntry?.taskId === activeTaskId && (
@@ -566,6 +632,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
                   onSave={(id, newContent) => updateEntry(selectedTask.id, id, newContent)}
                   onDelete={(id) => deleteEntry(selectedTask.id, id)}
                   onPin={(content) => appendToPinned(selectedTask.id, content)}
+                  onAddToNote={handleAddContentToNote}
                   editing={editingEntryId === entry.id}
                   highlightTokens={searchMode ? searchTokens : undefined}
                   highlightPlan={entry.id === highlightEntryId}
@@ -605,6 +672,15 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
           )}
         </div>
       </div>
+      <NotePickerDialog
+        open={notePickerOpen}
+        onOpenChange={(open) => {
+          setNotePickerOpen(open)
+          if (!open) setPendingNoteAppend(null)
+        }}
+        onPick={handlePickNoteForAppend}
+        defaultTitle={selectedTask.title}
+      />
     </>
   )
 }

@@ -79,6 +79,84 @@ export function initDb() {
   `)
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      content_html TEXT NOT NULL,
+      tags TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_notes_archived_updated
+    ON notes(archived, updated_at DESC)
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS note_links (
+      id TEXT PRIMARY KEY,
+      note_id TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      target_entry_id TEXT,
+      created_at INTEGER NOT NULL,
+      context TEXT,
+      UNIQUE(note_id, target_type, target_id, target_entry_id),
+      FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+    )
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_note_links_note_id
+    ON note_links(note_id)
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_note_links_target
+    ON note_links(target_type, target_id, target_entry_id)
+  `)
+  db.exec(`
+    DELETE FROM note_links
+    WHERE target_entry_id IS NULL
+      AND id NOT IN (
+        SELECT MIN(id)
+        FROM note_links
+        WHERE target_entry_id IS NULL
+        GROUP BY note_id, target_type, target_id
+      )
+  `)
+  db.exec(`
+    DELETE FROM note_links
+    WHERE target_entry_id IS NOT NULL
+      AND id NOT IN (
+        SELECT MIN(id)
+        FROM note_links
+        WHERE target_entry_id IS NOT NULL
+        GROUP BY note_id, target_type, target_id, target_entry_id
+      )
+  `)
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_note_links_unique_target
+    ON note_links(note_id, target_type, target_id)
+    WHERE target_entry_id IS NULL
+  `)
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_note_links_unique_entry
+    ON note_links(note_id, target_type, target_id, target_entry_id)
+    WHERE target_entry_id IS NOT NULL
+  `)
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+      note_id,
+      source,
+      content,
+      tokenize = 'unicode61'
+    )
+  `)
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS afk_events (
       id TEXT PRIMARY KEY,
       triggered_at INTEGER NOT NULL,
@@ -367,6 +445,12 @@ function cleanupOrphans(): void {
 
     DELETE FROM task_progress_summaries
     WHERE task_id NOT IN (SELECT id FROM tasks);
+
+    DELETE FROM note_links
+    WHERE note_id NOT IN (SELECT id FROM notes);
+
+    DELETE FROM note_links
+    WHERE target_id NOT IN (SELECT id FROM tasks);
   `)
 }
 

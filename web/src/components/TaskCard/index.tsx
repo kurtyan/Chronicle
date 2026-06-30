@@ -1,4 +1,4 @@
-import { X, Tag, Calendar } from 'lucide-react'
+import { X, Calendar } from 'lucide-react'
 import type { Task, Priority } from '@/types'
 import { priorityColors } from '@/types'
 import { format } from 'date-fns'
@@ -31,19 +31,6 @@ export function TaskCard({ task, onClick, onDelete }: TaskCardProps) {
         </span>
       </div>
       <h4 className="font-medium text-sm mb-2 line-clamp-2">{task.title}</h4>
-      {task.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
-          {task.tags.slice(0, 3).map((tag) => (
-            <span key={tag} className="text-xs px-1.5 py-0.5 bg-muted rounded flex items-center gap-0.5">
-              <Tag className="w-2.5 h-2.5" />
-              {tag}
-            </span>
-          ))}
-          {task.tags.length > 3 && (
-            <span className="text-xs text-muted-foreground">+{task.tags.length - 3}</span>
-          )}
-        </div>
-      )}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{t(`type.${task.type.toLowerCase()}`)}</span>
         <span className="flex items-center gap-1">

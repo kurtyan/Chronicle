@@ -91,6 +91,56 @@ export interface SearchResult {
   rank: number
 }
 
+export interface Note {
+  id: string
+  title: string
+  contentHtml: string
+  tags: string[]
+  pinned: boolean
+  archived: boolean
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CreateNoteRequest {
+  title: string
+  contentHtml?: string
+  tags?: string[]
+  linkedTaskIds?: string[]
+}
+
+export interface UpdateNoteRequest {
+  title?: string
+  contentHtml?: string
+  tags?: string[]
+  pinned?: boolean
+  archived?: boolean
+}
+
+export interface NoteSearchResult {
+  kind: 'note'
+  noteId: string
+  title: string
+  tags: string[]
+  snippet: string
+  matchedSource: 'note_title' | 'note_content' | 'note_tags'
+  updatedAt: number
+  pinned: boolean
+  tokens: string[]
+  exactMatch: boolean
+  rank: number
+}
+
+export interface GlobalSearchResponse {
+  results: {
+    tasks: Array<SearchResult & { kind: 'task' }>
+    taskEntries: Array<SearchResult & { kind: 'task_entry' }>
+    notes: NoteSearchResult[]
+  }
+  tokens: string[]
+  total: number
+}
+
 export const priorityColors: Record<Priority, string> = {
   HIGH: 'bg-red-500',
   MEDIUM: 'bg-yellow-500',

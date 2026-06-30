@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -122,6 +122,66 @@ export async function searchTasks(query: string, limit?: number): Promise<{
   total: number
 }> {
   return (await getApi()).searchTasks(query, limit)
+}
+
+export async function searchAll(query: string, limit?: number): Promise<GlobalSearchResponse> {
+  return (await getApi()).searchAll(query, limit)
+}
+
+export async function searchNotes(query: string, limit?: number): Promise<{
+  results: NoteSearchResult[]
+  tokens: string[]
+  total: number
+}> {
+  return (await getApi()).searchNotes(query, limit)
+}
+
+export async function fetchNotes(options?: { includeArchived?: boolean; query?: string; limit?: number }): Promise<Note[]> {
+  return (await getApi()).fetchNotes(options)
+}
+
+export async function getNoteById(id: string): Promise<Note | null> {
+  return (await getApi()).getNoteById(id)
+}
+
+export async function createNote(req: CreateNoteRequest): Promise<Note> {
+  return (await getApi()).createNote(req)
+}
+
+export async function updateNote(id: string, req: UpdateNoteRequest): Promise<Note | null> {
+  return (await getApi()).updateNote(id, req)
+}
+
+export async function archiveNote(id: string): Promise<Note | null> {
+  return (await getApi()).archiveNote(id)
+}
+
+export async function unarchiveNote(id: string): Promise<Note | null> {
+  return (await getApi()).unarchiveNote(id)
+}
+
+export async function deleteNote(id: string): Promise<void> {
+  return (await getApi()).deleteNote(id)
+}
+
+export async function appendToNote(id: string, contentHtml: string, source?: { taskId?: string; entryId?: string; label?: string }): Promise<Note> {
+  return (await getApi()).appendToNote(id, contentHtml, source)
+}
+
+export async function createNoteFromTask(taskId: string): Promise<Note> {
+  return (await getApi()).createNoteFromTask(taskId)
+}
+
+export async function addTaskEntryToNote(taskId: string, entryId: string, noteId?: string): Promise<Note> {
+  return (await getApi()).addTaskEntryToNote(taskId, entryId, noteId)
+}
+
+export async function fetchTaskNotes(taskId: string): Promise<Note[]> {
+  return (await getApi()).fetchTaskNotes(taskId)
+}
+
+export async function fetchNoteTasks(noteId: string): Promise<Task[]> {
+  return (await getApi()).fetchNoteTasks(noteId)
 }
 
 // Task Extra Info

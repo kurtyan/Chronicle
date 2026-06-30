@@ -568,6 +568,147 @@ app.get('/api/reports/tasks', async (c) => {
   return c.json(await service.fetchReportTasks(start, end, filter, page, pageSize))
 })
 
+// --- Notes API ---
+async function parseJsonBody(c: any): Promise<{ ok: true; body: any } | { ok: false; response: Response }> {
+  try {
+    return { ok: true, body: await c.req.json() }
+  } catch {
+    return { ok: false, response: c.json({ error: 'Malformed JSON body' }, 400) }
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function noteErrorStatus(message: string): 400 | 404 {
+  if (/note not found|task not found|task entry not found/i.test(message)) return 404
+  return 400
+}
+
+app.get('/api/notes', async (c) => {
+  const includeArchived = c.req.query('includeArchived') === 'true'
+  const query = c.req.query('q') || undefined
+  const limit = parseInt(c.req.query('limit') || '200')
+  return c.json(await service.getNotes({ includeArchived, query, limit }))
+})
+
+app.post('/api/notes', async (c) => {
+  const parsed = await parseJsonBody(c)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.body
+  if (typeof body.title !== 'string') return c.json({ error: 'title is required' }, 400)
+  if (body.contentHtml !== undefined && typeof body.contentHtml !== 'string') return c.json({ error: 'contentHtml must be a string' }, 400)
+  if (body.tags !== undefined && !isStringArray(body.tags)) return c.json({ error: 'tags must be an array of strings' }, 400)
+  if (body.linkedTaskIds !== undefined && !isStringArray(body.linkedTaskIds)) return c.json({ error: 'linkedTaskIds must be an array of strings' }, 400)
+  try {
+    return c.json(await service.createNote({
+      title: body.title,
+      contentHtml: body.contentHtml,
+      tags: body.tags ?? [],
+      linkedTaskIds: body.linkedTaskIds ?? [],
+    }), 201)
+  } catch (err: any) {
+    const message = err?.message || 'Failed to create note'
+    return c.json({ error: message }, noteErrorStatus(message))
+  }
+})
+
+app.get('/api/notes/:id', async (c) => {
+  const note = await service.getNoteById(c.req.param('id'))
+  if (!note) return c.json({ error: 'Note not found' }, 404)
+  return c.json(note)
+})
+
+app.put('/api/notes/:id', async (c) => {
+  const parsed = await parseJsonBody(c)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.body
+  if (body.title !== undefined && typeof body.title !== 'string') return c.json({ error: 'title must be a string' }, 400)
+  if (body.contentHtml !== undefined && typeof body.contentHtml !== 'string') return c.json({ error: 'contentHtml must be a string' }, 400)
+  if (body.tags !== undefined && !isStringArray(body.tags)) return c.json({ error: 'tags must be an array of strings' }, 400)
+  if (body.pinned !== undefined && typeof body.pinned !== 'boolean') return c.json({ error: 'pinned must be a boolean' }, 400)
+  if (body.archived !== undefined && typeof body.archived !== 'boolean') return c.json({ error: 'archived must be a boolean' }, 400)
+  const note = await service.updateNote(c.req.param('id'), {
+    title: body.title,
+    contentHtml: body.contentHtml,
+    tags: body.tags,
+    pinned: body.pinned,
+    archived: body.archived,
+  })
+  if (!note) return c.json({ error: 'Note not found' }, 404)
+  return c.json(note)
+})
+
+app.post('/api/notes/:id/archive', async (c) => {
+  const note = await service.archiveNote(c.req.param('id'), true)
+  if (!note) return c.json({ error: 'Note not found' }, 404)
+  return c.json(note)
+})
+
+app.post('/api/notes/:id/unarchive', async (c) => {
+  const note = await service.archiveNote(c.req.param('id'), false)
+  if (!note) return c.json({ error: 'Note not found' }, 404)
+  return c.json(note)
+})
+
+app.delete('/api/notes/:id', async (c) => {
+  try {
+    await service.deleteNote(c.req.param('id'))
+    return c.json({ ok: true })
+  } catch (err: any) {
+    return c.json({ error: err?.message || 'Note not found' }, 404)
+  }
+})
+
+app.post('/api/notes/:id/append', async (c) => {
+  const parsed = await parseJsonBody(c)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.body
+  if (typeof body.contentHtml !== 'string') return c.json({ error: 'contentHtml is required' }, 400)
+  if (body.source !== undefined && (typeof body.source !== 'object' || body.source === null)) return c.json({ error: 'source must be an object' }, 400)
+  try {
+    return c.json(await service.appendToNote(c.req.param('id'), body.contentHtml, body.source))
+  } catch (err: any) {
+    const message = err?.message || 'Failed to append to note'
+    return c.json({ error: message }, noteErrorStatus(message))
+  }
+})
+
+app.get('/api/notes/:id/tasks', async (c) => {
+  const note = await service.getNoteById(c.req.param('id'))
+  if (!note) return c.json({ error: 'Note not found' }, 404)
+  return c.json(await service.getLinkedTasksForNote(c.req.param('id')))
+})
+
+app.get('/api/tasks/:taskId/notes', async (c) => {
+  const task = await service.getTaskById(c.req.param('taskId'))
+  if (!task) return c.json({ error: 'Task not found' }, 404)
+  return c.json(await service.getNotesForTask(c.req.param('taskId')))
+})
+
+app.post('/api/tasks/:taskId/create-note', async (c) => {
+  try {
+    return c.json(await service.createNoteFromTask(c.req.param('taskId')), 201)
+  } catch (err: any) {
+    const message = err?.message || 'Failed to create note from task'
+    return c.json({ error: message }, noteErrorStatus(message))
+  }
+})
+
+app.post('/api/tasks/:taskId/entries/:entryId/add-to-note', async (c) => {
+  const parsed = await parseJsonBody(c)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.body
+  if (body.noteId !== undefined && typeof body.noteId !== 'string') return c.json({ error: 'noteId must be a string' }, 400)
+  try {
+    return c.json(await service.addTaskEntryToNote(c.req.param('taskId'), c.req.param('entryId'), body.noteId))
+  } catch (err: any) {
+    const message = err?.message || 'Failed to add task entry to note'
+    return c.json({ error: message }, noteErrorStatus(message))
+  }
+})
+
 // --- Search API ---
 import { searchTasks, rebuildFtsIndex } from './services/searchService'
 
@@ -575,12 +716,30 @@ app.get('/api/search', async (c) => {
   const q = c.req.query('q')
   if (!q) return c.json({ error: 'q parameter required' }, 400)
   const limit = parseInt(c.req.query('limit') || '50')
+  const scope = c.req.query('scope') || 'tasks'
+  const includeArchived = c.req.query('includeArchived') === 'true'
+  if (scope === 'notes') {
+    const { results, tokens } = await service.searchNotes(q, Math.min(limit, 200), includeArchived)
+    return c.json({ results, tokens, total: results.length })
+  }
+  if (scope === 'all') {
+    const taskResult = searchTasks(q, Math.min(limit, 200))
+    const noteResult = await service.searchNotes(q, Math.min(limit, 200), includeArchived)
+    const results = {
+      tasks: taskResult.results.filter((result) => result.matchType === 'task').map((result) => ({ kind: 'task', ...result })),
+      taskEntries: taskResult.results.filter((result) => result.matchType !== 'task').map((result) => ({ kind: 'task_entry', ...result })),
+      notes: noteResult.results,
+    }
+    const tokens = [...new Set([...taskResult.tokens, ...noteResult.tokens])]
+    return c.json({ results, tokens, total: results.tasks.length + results.taskEntries.length + results.notes.length })
+  }
   const { results, tokens } = searchTasks(q, Math.min(limit, 200))
   return c.json({ results, tokens, total: results.length })
 })
 
 app.post('/api/search/rebuild', async (c) => {
   rebuildFtsIndex()
+  await service.rebuildNotesFtsIndex()
   return c.json({ ok: true })
 })
 

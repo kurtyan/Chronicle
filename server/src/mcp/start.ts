@@ -282,6 +282,94 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
     }
   )
 
+  server.registerTool(
+    'search_notes',
+    {
+      description: 'Full-text search across Chronicle notes.',
+      inputSchema: {
+        query: z.string().describe('Search query text.'),
+        limit: z.number().optional().describe('Maximum results. Default: 50, max: 200.'),
+      },
+    },
+    async ({ query, limit }): Promise<CallToolResult> => {
+      const result = await service.searchNotes(query, Math.min(limit ?? 50, 200))
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+    }
+  )
+
+  server.registerTool(
+    'get_note',
+    {
+      description: 'Get a Chronicle note by ID.',
+      inputSchema: {
+        noteId: z.string().describe('The note ID, e.g. "N0000000001".'),
+      },
+    },
+    async ({ noteId }): Promise<CallToolResult> => {
+      const note = await service.getNoteById(noteId)
+      if (!note) return { content: [{ type: 'text', text: `Note "${noteId}" not found.` }], isError: true }
+      const linkedTasks = await service.getLinkedTasksForNote(noteId)
+      return { content: [{ type: 'text', text: JSON.stringify({ note, linkedTasks }, null, 2) }] }
+    }
+  )
+
+  server.registerTool(
+    'create_note',
+    {
+      description: 'Create a Chronicle note.',
+      inputSchema: {
+        title: z.string().describe('Note title.'),
+        contentHtml: z.string().optional().describe('Note body as HTML.'),
+        tags: z.array(z.string()).optional().describe('Optional tags.'),
+        linkedTaskIds: z.array(z.string()).optional().describe('Optional task IDs to link.'),
+      },
+    },
+    async ({ title, contentHtml, tags, linkedTaskIds }): Promise<CallToolResult> => {
+      const note = await service.createNote({ title, contentHtml, tags, linkedTaskIds })
+      return { content: [{ type: 'text', text: JSON.stringify(note, null, 2) }] }
+    }
+  )
+
+  server.registerTool(
+    'append_to_note',
+    {
+      description: 'Append HTML content to a Chronicle note.',
+      inputSchema: {
+        noteId: z.string().describe('The note ID.'),
+        contentHtml: z.string().describe('HTML content to append.'),
+        taskId: z.string().optional().describe('Optional source task ID.'),
+        entryId: z.string().optional().describe('Optional source task entry ID.'),
+        label: z.string().optional().describe('Optional source label.'),
+      },
+    },
+    async ({ noteId, contentHtml, taskId, entryId, label }): Promise<CallToolResult> => {
+      try {
+        const note = await service.appendToNote(noteId, contentHtml, { taskId, entryId, label })
+        return { content: [{ type: 'text', text: JSON.stringify(note, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: 'text', text: e.message }], isError: true }
+      }
+    }
+  )
+
+  server.registerTool(
+    'create_note_from_task',
+    {
+      description: 'Create a Chronicle note from a task body and logs.',
+      inputSchema: {
+        taskId: z.string().describe('The source task ID.'),
+      },
+    },
+    async ({ taskId }): Promise<CallToolResult> => {
+      try {
+        const note = await service.createNoteFromTask(taskId)
+        return { content: [{ type: 'text', text: JSON.stringify(note, null, 2) }] }
+      } catch (e: any) {
+        return { content: [{ type: 'text', text: e.message }], isError: true }
+      }
+    }
+  )
+
   return server
 }
 

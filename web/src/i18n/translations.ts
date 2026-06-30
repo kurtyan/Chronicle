@@ -9,6 +9,7 @@ export const translations: Record<string, TranslationEntry> = {
   // Sidebar
   'sidebar.board': { 'zh-CN': '看板', en: 'Board' },
   'sidebar.today': { 'zh-CN': '今日', en: 'Today' },
+  'sidebar.notes': { 'zh-CN': '笔记', en: 'Notes' },
   'sidebar.report': { 'zh-CN': '报告', en: 'Report' },
 
   // Board page
