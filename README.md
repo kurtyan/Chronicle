@@ -1,375 +1,315 @@
 # Chronicle
 
-A local-first task management app with a Tauri desktop shell and a local Hono + SQLite server.
+Chronicle is a local-first work journal for managing tasks, daily plans, notes, and work history. It runs as a local Hono + SQLite server with a React UI, a Tauri desktop shell, and MCP tools for agents.
+
+The current app has five main surfaces:
+
+- Board: task list, task detail, rich task logs, pinned excerpts, linked notes, work sessions, AFK/drop flows, and task summary generation.
+- Today: daily planning with time blocks, carry-over blocks, progress sync, work overview signals, and daily summary generation.
+- Notes: rich HTML notes with autosave, archive/unarchive, pinned notes, body search, linked tasks, and task-entry append flows.
+- Report: daily and range reporting over tasks, entries, sessions, and AFK events.
+- Settings: data import/export, launchd controls, LLM provider settings, prompt testing, call logs, workday start offset, diagnostics, and version info.
 
 ## Architecture
 
+```text
+React + Vite UI
+  web/                 Browser build served by the local server
+  tauri/               Tauri desktop shell using the same UI source
+
+Hono server
+  server/src/index.ts  HTTP API, SSE stream, static UI serving, MCP endpoint
+  server/src/db.ts     SQLite schema and migrations
+  server/src/services  Task, note, search, day-script, LLM, backup services
+
+Local data
+  SQLite               better-sqlite3, WAL mode
+  FTS5                 Task, task-entry, and note search indexes
+  nodejieba            Chinese tokenization for search input
 ```
-┌─────────────────────┐
-│  Tauri Desktop App  │  ← Native macOS .app
-│  React + Vite UI    │  ← Connects to localhost server
-└────────┬────────────┘
-         │ HTTP localhost
-┌────────▼────────────┐
-│  Hono Server        │  ← Bundled Node.js (tsup, ~22 KB)
-│  better-sqlite3     │  ← On-disk SQLite, WAL mode
-│  FTS5 + nodejieba   │  ← Full-text Chinese + English
-│  MCP Server         │  ← Model Context Protocol bridge
-└────────┬────────────┘
-         │
-┌────────▼────────────┐
-│  ~/.chronicle/      │  ← Config + hourly backups (last 24)
-│  data/tasks.db      │  ← SQLite database
-└─────────────────────┘
-```
+
+Installed data defaults to `~/.chronicle`. The development launcher uses `.dev-data` inside the repo so dev sessions do not touch the installed database.
 
 ## Prerequisites
 
-- **Node.js** >= 18
-- **npm** >= 9
-- **Rust** + `cargo` (for Tauri builds only)
-- **macOS**: Xcode Command Line Tools
+- Node.js 20 or newer for local development. Use `./scripts/with-node.sh` in this repo; it selects a suitable Node version when the shell default is too old.
+- npm.
+- Rust and Cargo for Tauri desktop builds.
+- macOS Xcode Command Line Tools for Tauri and launchd integration.
 
----
+Install dependencies when working from a fresh checkout:
+
+```bash
+./scripts/with-node.sh npm install
+(cd server && ../scripts/with-node.sh npm install)
+(cd web && ../scripts/with-node.sh npm install)
+(cd tauri && ../scripts/with-node.sh npm install)
+```
 
 ## Development
 
-### Server (hot reload)
+The preferred development entrypoint is:
 
 ```bash
-cd server && npm install && npm run dev
+./dev.sh
 ```
 
-### Web UI (hot reload, proxies `/api` to server)
+`dev.sh` starts the server and Tauri dev shell, allocates ports in the `18xxx` range, generates a per-session dev version, and isolates runtime data under `.dev-data`.
+
+Useful overrides:
 
 ```bash
-cd web && npm install && npm run dev
+CHRONICLE_SERVER_PORT=18080 PORT=18090 CHRONICLE_MCP_PORT=18081 ./dev.sh
 ```
 
-### Tauri desktop (native window, hot reload)
+Development paths:
+
+- Database: `.dev-data/tasks-dev.db`
+- Attachments: `.dev-data/attachments`
+- Config: `.dev-data/chronicle-home/config.json`
+- Logs: `.dev-data/chronicle-home/logs/server.log`
+
+Standalone server or web commands are still available:
 
 ```bash
-cd tauri && npm install && npm run tauri:dev
+(cd server && ../scripts/with-node.sh npm run dev -- --port 18080)
+(cd web && ../scripts/with-node.sh npm run dev)
+(cd tauri && ../scripts/with-node.sh npm run tauri:dev)
 ```
 
----
+The web dev server proxies `/api` to `CHRONICLE_SERVER_PORT` and defaults to port `5175`. The Tauri dev Vite server uses `PORT` and defaults to `5180`.
 
-## Build
+## Build And Release
 
-### All-in-one release build
+Build the web UI and server artifact:
 
 ```bash
-npm run release   # generate version → build → install locally → build Tauri app
+./scripts/with-node.sh npm run build
 ```
 
-### Individual builds
+Build individual packages:
 
 ```bash
-npm run build              # web + server artifact → ./dist/chronicle/
-cd tauri && npm run tauri:build   # macOS .app only (no DMG)
+(cd server && ../scripts/with-node.sh npm run build)
+(cd web && ../scripts/with-node.sh npm run build)
+(cd tauri && ../scripts/with-node.sh npm run tauri:build)
 ```
 
-### Local install
+Prepare and install the npm package locally:
 
 ```bash
-npm run publish:local        # clean → build → pack → install globally
-chronicle start              # start server
-chronicle status             # verify
-chronicle stop               # stop
+./scripts/with-node.sh npm run publish:local
+chronicle status
 ```
 
-### Publish to npm registry (optional)
+Release helper:
 
 ```bash
-npm run publish:npm          # builds and publishes to remote npm
+./scripts/with-node.sh npm run release
 ```
 
----
+The release script generates `VERSION_BUILD`, builds web and server, installs the npm package locally, builds the Tauri app, and restores Tauri version files after the build. The base product version is stored in `VERSION`; the generated runtime string has the form `v<version>-<yyyyMMddHHmmss>`.
 
-## Deployment
+## Installed Runtime
 
-### Server
-
-The server can be installed globally. On macOS it auto-registers as a launchd background service:
+The npm package exposes:
 
 ```bash
-npm install -g chronicle       # from npm registry
-npm install -g chronicle-1.0.0.tgz   # from local tarball
+chronicle start
+chronicle stop
+chronicle status
+chronicle setup
+chronicle-server
+chronicle-setup
+chronicle-mcp
 ```
 
-**CLI commands:**
+On macOS, `chronicle setup` installs `~/Library/LaunchAgents/com.chronicle.server.plist` so the server can start at login and keep running in the background.
 
-```bash
-chronicle start          # start server in foreground
-chronicle stop           # stop the running server
-chronicle status         # show server + launchd status
-chronicle setup          # install/reinstall launchd background service
-chronicle                # show help
-```
+Default installed paths:
 
-### Desktop App
+- Config: `~/.chronicle/config.json`
+- Database: `~/.chronicle/data/tasks.db`
+- Backups: `~/.chronicle/data/backups`
+- Logs: `~/.chronicle/logs`
+- Attachments: `~/.chronicle/attachment`
 
-Download `Chronicle.app` from [GitHub Releases](https://github.com/kurtyan/Chronicle/releases), or build from source:
+The server creates an initial backup on startup, then hourly backups, keeping the latest 24 backup files. Imports create an additional pre-import backup.
 
-```bash
-git clone git@github.com:kurtyan/Chronicle.git
-cd Chronicle
-npm run build:all
-open tauri/src-tauri/target/release/bundle/macos/Chronicle.app
-```
+## Configuration
 
-The app enforces single-instance — launching a second time focuses the existing window.
-
-### Config
-
-Create `~/.chronicle/config.json`:
+Example `~/.chronicle/config.json`:
 
 ```json
 {
-  "server": { "host": "127.0.0.1", "port": 8080, "database": "", "logPath": "" },
-  "lauri": { "serverHost": "localhost", "serverPort": 8080 }
+  "server": {
+    "host": "127.0.0.1",
+    "port": 9983,
+    "database": "",
+    "logPath": ""
+  },
+  "mcp": {
+    "enabled": true,
+    "port": 9981
+  },
+  "lauri": {
+    "serverHost": "localhost",
+    "serverPort": 9983
+  },
+  "ui": {
+    "language": "auto"
+  },
+  "llm": {
+    "baseUrl": "http://localhost:11434/v1",
+    "model": "qwen2.5:7b",
+    "apiKey": "",
+    "timeoutMs": 30000,
+    "meetingExtractionMaxTokens": 4000,
+    "taskSummaryMaxTokens": 1200,
+    "dailySummaryMaxTokens": 4000,
+    "meetingExtractionPrompt": "",
+    "taskSummaryPrompt": "",
+    "dailySummaryPrompt": ""
+  }
 }
 ```
 
-| Field | Description |
-|---|---|
-| `server.host` / `server.port` | Server bind address |
-| `server.database` | SQLite path (empty = auto `./data/tasks.db`) |
-| `server.logPath` | Log file path for launchd (empty = auto `~/.chronicle/logs/server.log`) |
-| `lauri.*` | Tauri app connection target |
+Environment variables override selected fields and are used heavily by `dev.sh`:
 
----
+| Variable | Purpose |
+| --- | --- |
+| `CHRONICLE_SERVER_PORT` | Server port override |
+| `CHRONICLE_MCP_PORT` | MCP HTTP port override |
+| `CHRONICLE_DB_PATH` | SQLite database path override |
+| `CHRONICLE_CONFIG_DIR` | Chronicle config/home directory override |
+| `CHRONICLE_CONFIG_PATH` | Config JSON path override |
+| `CHRONICLE_LOG_DIR` | Log directory override |
+| `CHRONICLE_LOG_PATH` | Server log path override |
+| `CHRONICLE_ATTACHMENT_DIR` | Attachment/image storage override |
+| `CHRONICLE_LAURI_SERVER_PORT` | Tauri server-port override |
+| `CHRONICLE_VERSION` | UI/runtime version override |
+| `CHRONICLE_LLM_BASE_URL` | LLM API base URL override |
+| `CHRONICLE_LLM_MODEL` | LLM model override |
+| `CHRONICLE_LLM_API_KEY` | LLM API key override |
+| `CHRONICLE_LLM_TIMEOUT_MS` | LLM request timeout override |
 
-## macOS Background Service (launchd)
+## HTTP API
 
-The server can run as a background service managed by `launchd` — starts at login, auto-restarts.
+The server serves the built UI and exposes JSON APIs under `/api`.
 
-### Via CLI
+Core task APIs:
+
+- `GET /api/tasks`, `GET /api/tasks/today`, `GET /api/tasks/next-id`, `GET /api/tasks/:id`
+- `POST /api/tasks`, `PUT /api/tasks/:id`, `DELETE /api/tasks/:id`
+- `PUT /api/tasks/:id/done`, `POST /api/tasks/:id/drop`, `POST /api/tasks/:id/takeover`, `POST /api/tasks/:id/resume-from-afk`
+- `GET /api/tasks/:id/logs`, `POST /api/tasks/:id/logs`, `PUT /api/tasks/:id/logs/:entryId`, `DELETE /api/tasks/:id/logs/:entryId`
+- `GET /api/tasks/:id/log-draft`, `PUT /api/tasks/:id/log-draft`, `DELETE /api/tasks/:id/log-draft`
+- `GET /api/tasks/:id/pinned`, `POST /api/tasks/:id/pinned/append`, `POST /api/tasks/:id/pinned/unpin`
+- `GET /api/tasks/:id/extra-info`, `GET /api/tasks/:id/extra-info/:key`, `PUT /api/tasks/:id/extra-info/:key`, `DELETE /api/tasks/:id/extra-info/:key`
+
+Notes APIs:
+
+- `GET /api/notes`
+- `POST /api/notes`
+- `GET /api/notes/:id`
+- `PUT /api/notes/:id`
+- `POST /api/notes/:id/archive`
+- `POST /api/notes/:id/unarchive`
+- `DELETE /api/notes/:id`
+- `POST /api/notes/:id/append`
+- `GET /api/notes/:id/tasks`
+- `GET /api/tasks/:taskId/notes`
+- `POST /api/tasks/:taskId/create-note`
+- `POST /api/tasks/:taskId/entries/:entryId/add-to-note`
+
+Search and indexing:
+
+- `GET /api/search?q=<query>&scope=all|tasks|notes&limit=<n>`
+- `POST /api/search/rebuild`
+
+Sessions, AFK, reports, and Today:
+
+- `POST /api/afk`, `GET /api/sessions/current`, `GET /api/sessions`
+- `POST /api/afk-events`, `PUT /api/afk-events/:id`, `GET /api/afk-events`
+- `GET /api/reports/today`, `GET /api/reports/summary`, `GET /api/reports/range-stats`, `GET /api/reports/tasks`
+- `GET /api/day-scripts/:date`, `PUT /api/day-scripts/:date`
+- `GET /api/day-scripts/:date/carry-over-blocks`
+- `GET /api/day-scripts/:date/execution-records`
+- `POST /api/day-scripts/:date/confirm-progress-sync`
+- `POST /api/day-scripts/:date/submit-progress`
+- `POST /api/day-scripts/:date/daily-summary`
+- `GET /api/day-scripts/:date/daily-summary-cache`
+- `POST /api/day-scripts/:date/daily-summary/background`
+- `POST /api/day-scripts/:date/plan-today-draft`
+
+Automation, settings, and diagnostics:
+
+- `POST /api/meetings/extract`, `POST /api/meetings/extract/background`, `POST /api/meetings`
+- `GET /api/task-context`, `POST /api/task-context/summarize`, `POST /api/task-context/test-summary`
+- `GET /api/background-tasks`, `GET /api/background-tasks/:id`, `POST /api/background-tasks/:id/read`, `POST /api/background-tasks/:id/dismiss`, `POST /api/background-tasks/:id/consume`, `POST /api/background-tasks/cleanup`
+- `GET /api/settings/export`, `POST /api/settings/import`, `GET /api/settings/info`
+- `GET /api/settings/llm`, `PUT /api/settings/llm`, `POST /api/settings/llm/test-connection`
+- `GET /api/llm-call-logs`, `GET /api/llm-call-logs/:id`
+- `GET /api/settings/start-of-day-offset`, `PUT /api/settings/start-of-day-offset`
+- `GET /api/settings/launchd/status`, `POST /api/settings/launchd/install`, `POST /api/settings/launchd/uninstall`, `GET /api/settings/launchd/plist`
+- `GET /api/version`
+- `GET /api/events` for server-sent events
+
+## MCP Tools
+
+The server exposes Chronicle tools through the MCP HTTP endpoint and the packaged `chronicle-mcp` bridge.
+
+Available tools:
+
+- `query_tasks`
+- `get_task`
+- `query_sessions`
+- `takeover_task`
+- `create_task`
+- `update_task_status`
+- `add_log`
+- `search_tasks`
+- `search_notes`
+- `get_note`
+- `create_note`
+- `append_to_note`
+- `create_note_from_task`
+
+Task IDs use padded IDs like `T0000000001`. Note IDs use padded IDs like `N0000000001`.
+
+## UI Shortcuts
+
+- `Cmd+Shift+F`: global search from any main route.
+- `Esc`: close dialogs/search. On the Notes page, `Esc` also exits the editor and returns focus to the note list.
+- `Cmd+S`: flush pending note edits immediately.
+
+## Testing
+
+Common verification commands:
 
 ```bash
-chronicle setup          # install and load launchd service
-chronicle status         # check server + launchd status
-chronicle stop           # stop server + unload launchd
+(cd server && ../scripts/with-node.sh npm run build)
+(cd web && ../scripts/with-node.sh npm run build)
+./scripts/with-node.sh npx playwright test tests/notes.test.ts
+./scripts/with-node.sh npx playwright test tests/pinned-content.test.ts
+./scripts/with-node.sh npx playwright test tests/search-done-detail.test.ts
+git diff --check
 ```
 
-### Via Settings UI
+Most Playwright tests start their own isolated server/database fixtures. For manual local testing with a running dev server, keep the proxy note in mind: commands that target `localhost` or `127.0.0.1` should bypass any configured HTTP proxy.
 
-Open the Settings page in the Tauri app — there are controls to install, check status, and uninstall.
+## Repository Layout
 
-### Via API
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/settings/launchd/status` | Check if service is installed |
-| `POST` | `/api/settings/launchd/install` | Install and load launchd service |
-| `POST` | `/api/settings/launchd/uninstall` | Uninstall launchd service |
-| `GET`  | `/api/settings/launchd/plist` | Preview generated plist content |
-
-### What gets installed
-
-A plist file at `~/Library/LaunchAgents/com.chronicle.server.plist` that:
-
-- Runs the bundled server with the system Node.js
-- Starts at login (`RunAtLoad`) and keeps alive (`KeepAlive`)
-- Logs stdout/stderr to `~/.chronicle/logs/`
-
----
-
-## Data Management
-
-### Database
-
-- Default: `./data/tasks.db` relative to the server directory
-- WAL mode enabled for concurrent-read safety
-
-### Backups
-
-- **Automatic**: hourly to `~/.chronicle/backups/tasks-{timestamp}.db`
-- **Retention**: last 24 backups
-- **On startup**: creates an initial backup
-
-### Export / Import (Settings page)
-
-- **Export**: native save-file dialog (Tauri) with browser-download fallback
-- **Import**: file picker → confirmation dialog. Pre-import backup created automatically
-
----
-
-## API Endpoints
-
-### Tasks
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`    | `/api/tasks` | List tasks (`?type=`, `?status=`) |
-| `GET`    | `/api/tasks/today` | Today view |
-| `GET`    | `/api/tasks/:id` | Get task by ID |
-| `POST`   | `/api/tasks` | Create task |
-| `PUT`    | `/api/tasks/:id` | Update task |
-| `DELETE` | `/api/tasks/:id` | Delete task |
-| `PUT`    | `/api/tasks/:id/done` | Mark done |
-| `POST`   | `/api/tasks/:id/drop` | Drop with reason |
-| `POST`   | `/api/tasks/:id/pin` | Pin/unpin task |
-| `GET`    | `/api/tasks/pinned` | Get pinned task IDs |
-
-### Task Extra Info
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`    | `/api/tasks/:id/extra-info` | Get all extra info |
-| `PUT`    | `/api/tasks/:id/extra-info/:key` | Set a key-value pair |
-| `DELETE` | `/api/tasks/:id/extra-info/:key` | Remove a key-value pair |
-
-### Logs / Entries
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/tasks/:id/logs` | Get task entries |
-| `POST` | `/api/tasks/:id/logs` | Submit entry (`content`, `type`: `log` / `body`) |
-| `PUT`  | `/api/tasks/:id/logs/:entryId` | Update entry |
-
-### Work Sessions
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/tasks/:id/takeover` | Start session (PENDING → DOING) |
-| `POST` | `/api/afk` | Go AFK |
-| `GET`  | `/api/sessions/current` | Current session |
-| `GET`  | `/api/sessions` | List sessions (`?start=`, `?end=` timestamps) |
-
-### AFK Events
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/afk-events` | Create AFK event |
-| `PUT`  | `/api/afk-events/:id` | Update AFK event |
-| `GET`  | `/api/afk-events` | Query AFK events |
-
-### Reports
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/reports/today` | Today's report |
-| `GET` | `/api/reports/summary` | Summary by type/priority |
-| `GET` | `/api/reports/range-stats` | Stats for date range |
-
-### Search
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/search` | FTS5 + nodejieba search (`?q=`, `?limit=`) |
-| `POST` | `/api/search/rebuild` | Rebuild FTS index |
-
-### Settings
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/settings/info` | DB info |
-| `GET`  | `/api/settings/export` | Download database |
-| `POST` | `/api/settings/import` | Import database |
-| `GET`  | `/api/settings/launchd/status` | launchd status |
-| `POST` | `/api/settings/launchd/install` | Install launchd |
-| `POST` | `/api/settings/launchd/uninstall` | Uninstall launchd |
-| `GET`  | `/api/settings/launchd/plist` | Get plist content |
-
-### Version
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/version` | Server version string |
-
-### Real-time Events
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/events` | SSE stream (`?clientId=` for source filtering) |
-
-Events: `task_created`, `task_updated`, `task_deleted`, `entry_created`, `entry_updated`, `session_started`, `session_ended`, `db_imported`.
-
-### MCP (Model Context Protocol)
-
-| Transport | Description |
-|-----------|-------------|
-| Stdio | `chronicle-mcp` CLI bridge (`stdio-bridge.mjs`) |
-
-MCP tools: `query_tasks`, `get_task`, `query_sessions`, `takeover_task`, `create_task`, `update_task_status`, `add_log`, `search_tasks`.
-
----
-
-## Features
-
-### Task Board
-
-- **Multi-type filter** (OR logic): Task, To Read, Daily Improve. None = all non-done/dropped
-- **Pinned tasks**: pin important tasks for quick access at the top
-- **Today view**: high-priority incomplete + earliest daily improve + earliest to-read
-- **Status filters**: New / Done / Dropped in animated expand/collapse panel
-- **Rich text editor** (TipTap): bold, italic, strikethrough, headings, lists, blockquotes, code, links, images (paste/drag-drop with resize)
-- **Created time**: relative within 7 days, absolute otherwise
-- **Full-text search**: FTS5 + nodejieba, inline results with title/content highlighting, keyboard shortcut `Cmd+Shift+F`
-
-### Work Sessions & Time Tracking
-
-- **Session tracking**: start/resume work, automatic time logging
-- **AFK detection**: manual AFK events with reason and duration
-- **Auto-AFK** (desktop only): detect screen lock and input idle to automatically end sessions
-- **Idle timeout**: configurable 1–60 minutes
-
-### Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Cmd/Ctrl + R` | Refresh current page |
-| `Cmd/Ctrl + T` | Toggle Today view |
-| `Cmd/Ctrl + W` | Blur editor / clear Done or Dropped filter |
-| `Cmd/Ctrl + S` | Save / submit draft or log entry |
-| `Cmd/Ctrl + Enter` | Save / submit draft or log entry |
-| `Cmd/Ctrl + Q` | Go AFK |
-| `Cmd/Ctrl + Shift + F` | Inline search mode |
-| `n` | Create new task |
-| `↑ / ↓` | Navigate between tasks |
-| `→` | Focus log editor for selected task |
-| `Esc` | Close dialogs / cancel draft / exit search |
-
-### MCP Integration
-
-- **8 MCP tools** for AI clients (Claude Code, etc.) to interact with tasks
-- **Stdio bridge**: connect via `chronicle-mcp` CLI
-- **Query, create, update, search** tasks programmatically
-- **Session management** and work log tracking via MCP
-
-### Desktop Shell
-
-- Tauri v2, single-instance (re-focuses existing window on second launch)
-- Default window: 1200×800, resizable, min 800×600
-- Devtools in release builds: `Cmd+Option+I`
-- Prevents accidental close via Cmd+W / Cmd+Q
-- **About menu**: version info in native macOS menu
-- **Zoom controls**: Cmd+/-, Cmd+0 for UI zoom
-- **Auto-AFK**: screen lock + input idle detection (macOS native)
-- **Client log viewer**: access debug logs from Settings
-
-### Real-time Sync
-
-- **SSE (Server-Sent Events)**: live updates for task/entry/session changes
-- **Connection status indicator**: dot in sidebar (green/yellow/red)
-
-### Localization
-
-- English (en) and Simplified Chinese (zh-CN) via `@/i18n/context`
-- Configurable language in Settings (auto / Chinese / English)
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 18, Zustand, Tailwind CSS, TipTap, dnd-kit, Radix UI, axios, date-fns |
-| Build | Vite (web), Tauri CLI (native), tsup (server) |
-| Backend | Hono (Node.js), better-sqlite3 |
-| Search | SQLite FTS5 + nodejieba |
-| MCP | @modelcontextprotocol/sdk |
-| Desktop | Tauri v2 (single-instance plugin) |
-| Database | SQLite (WAL mode) |
-| macOS Service | launchd (LaunchAgents) |
+```text
+.
+├── dev.sh                    Development launcher
+├── scripts/with-node.sh       Node wrapper used by local commands
+├── server/                    Hono server, SQLite schema, services, MCP bridge
+├── web/                       React/Vite UI source
+├── tauri/                     Tauri desktop shell
+├── tests/                     Playwright tests
+├── build.js                   Web + server artifact builder
+├── publish.js                 NPM package builder/publisher
+├── VERSION                    Base product version
+└── VERSION_BUILD              Generated runtime version
+```

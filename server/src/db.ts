@@ -4,6 +4,17 @@ import { getLogger } from './logging'
 
 let db: Database.Database | null = null
 
+function hasColumn(tableName: string, columnName: string): boolean {
+  const columns = getDb().prepare(`PRAGMA table_info('${tableName}')`).all() as Array<{ name: string }>
+  return columns.some((column) => column.name === columnName)
+}
+
+function addColumnIfMissing(tableName: string, columnName: string, definition: string): void {
+  if (!hasColumn(tableName, columnName)) {
+    getDb().exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`)
+  }
+}
+
 export function initDb() {
   ensureDataDir()
   const dbPath = getDbPath()
@@ -90,6 +101,12 @@ export function initDb() {
       updated_at INTEGER NOT NULL
     )
   `)
+  addColumnIfMissing('notes', 'content_html', "TEXT NOT NULL DEFAULT ''")
+  addColumnIfMissing('notes', 'tags', 'TEXT')
+  addColumnIfMissing('notes', 'pinned', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing('notes', 'archived', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing('notes', 'created_at', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing('notes', 'updated_at', 'INTEGER NOT NULL DEFAULT 0')
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_notes_archived_updated
     ON notes(archived, updated_at DESC)
