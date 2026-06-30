@@ -5,7 +5,7 @@ import { RichEditor } from '@/components/RichEditor'
 import { useI18n } from '@/i18n/context'
 import { format } from 'date-fns'
 import { highlightHtml } from '@/lib/highlight'
-import { ZoomIn, ZoomOut, X, Trash2, Pin } from 'lucide-react'
+import { FileText, ZoomIn, ZoomOut, X, Trash2, Pin } from 'lucide-react'
 
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
@@ -54,6 +54,7 @@ interface TaskEntryBlockProps {
   onChange?: (content: string) => void
   onFirstMeaningfulEdit?: () => void
   onPin?: (content: string) => void
+  onAddToNote?: (content: string, entryId?: string) => void
   initialContent?: string
   highlightTokens?: string[]
   highlightPlan?: boolean
@@ -147,7 +148,7 @@ function ImageViewer({ src, onClose }: ImageViewerProps) {
   )
 }
 
-export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, onFirstMeaningfulEdit, onPin, initialContent, highlightTokens, highlightPlan, taskId }: TaskEntryBlockProps) {
+export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditing, onEditingChange, isNewEntry, onSubmit, onSilentSave, onChange, onFirstMeaningfulEdit, onPin, onAddToNote, initialContent, highlightTokens, highlightPlan, taskId }: TaskEntryBlockProps) {
   const { t, dateLocale } = useI18n()
   const [internalEditing, setInternalEditing] = useState(false)
   const [selectionToolbar, setSelectionToolbar] = useState<{ x: number; y: number; text: string } | null>(null)
@@ -501,8 +502,14 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     onPin(entry.content)
   }
 
+  const handleAddEntryToNote = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!entry || !onAddToNote) return
+    onAddToNote(entry.content, entry.id)
+  }
+
   const handleSelectionMouseUp = (_e: React.MouseEvent) => {
-    if (!onPin || !contentRef.current) return
+    if ((!onPin && !onAddToNote) || !contentRef.current) return
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
       setSelectionToolbar(null)
@@ -519,7 +526,10 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
       return
     }
     const rect = range.getBoundingClientRect()
-    setSelectionToolbar({ x: rect.left + rect.width / 2, y: rect.top - 40, text })
+    const toolbarHalfWidth = onPin && onAddToNote ? 120 : 72
+    const x = Math.min(window.innerWidth - toolbarHalfWidth - 8, Math.max(toolbarHalfWidth + 8, rect.left + rect.width / 2))
+    const y = Math.max(8, rect.top - 40)
+    setSelectionToolbar({ x, y, text })
   }
 
   const handleAddSelectionToPin = () => {
@@ -532,6 +542,20 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
       html = container.innerHTML
     }
     onPin?.(html || `<p>${selectionToolbar.text}</p>`)
+    setSelectionToolbar(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
+  const handleAddSelectionToNote = () => {
+    if (!selectionToolbar) return
+    const selection = window.getSelection()
+    let html = ''
+    if (selection && selection.rangeCount > 0) {
+      const container = document.createElement('div')
+      container.appendChild(selection.getRangeAt(0).cloneContents())
+      html = container.innerHTML
+    }
+    onAddToNote?.(html || `<p>${selectionToolbar.text}</p>`, entry?.id)
     setSelectionToolbar(null)
     window.getSelection()?.removeAllRanges()
   }
@@ -562,6 +586,15 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
                 <Pin className="w-3.5 h-3.5" />
               </button>
             )}
+            {onAddToNote && (
+              <button
+                className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition"
+                onClick={handleAddEntryToNote}
+                title="Add to note"
+              >
+                <FileText className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               className={`p-1 rounded transition ${confirmDelete ? 'bg-red-500 text-white' : 'text-muted-foreground hover:text-red-500 hover:bg-red-500/10'}`}
               onClick={handleDeleteClick}
@@ -582,14 +615,26 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
         <div
           className="fixed z-[100] bg-popover border rounded-md shadow-md py-1 px-1.5 flex items-center gap-1"
           style={{ left: selectionToolbar.x, top: selectionToolbar.y, transform: 'translateX(-50%)' }}
+          onMouseDown={(e) => e.stopPropagation()}
         >
-          <button
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-muted transition"
-            onClick={handleAddSelectionToPin}
-          >
-            <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
-            {t('pinned.addToPin')}
-          </button>
+          {onPin && (
+            <button
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-muted transition"
+              onClick={handleAddSelectionToPin}
+            >
+              <Pin className="w-3 h-3 text-amber-500 fill-amber-500" />
+              {t('pinned.addToPin')}
+            </button>
+          )}
+          {onAddToNote && (
+            <button
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-muted transition"
+              onClick={handleAddSelectionToNote}
+            >
+              <FileText className="w-3 h-3 text-primary" />
+              Add to note
+            </button>
+          )}
         </div>
       )}
       {imageViewerSrc && (

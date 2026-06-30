@@ -1,7 +1,19 @@
 import { test, expect } from '@playwright/test'
 
 test.describe('Search DONE task detail', () => {
-  test('Search DONE task, view detail, exit search restores previous task', async ({ page }) => {
+  test('Global search on Board closes with Escape', async ({ page }) => {
+    await page.goto('/?lang=en')
+    await page.waitForLoadState('load')
+
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+F' : 'Control+Shift+F')
+    const searchInput = page.getByRole('dialog').getByPlaceholder('Search...')
+    await expect(searchInput).toBeVisible()
+
+    await page.keyboard.press('Escape')
+    await expect(searchInput).not.toBeVisible()
+  })
+
+  test('Global search opens DONE task detail without adding it to the active list', async ({ page }) => {
     // Clean up any existing session
     await page.request.post('/api/afk').catch(() => {})
 
@@ -34,19 +46,17 @@ test.describe('Search DONE task detail', () => {
     const infoBar = page.getByTestId('workspace-info-bar')
     await expect(infoBar.getByText('待开始')).toBeVisible()
 
-    // Open search with Cmd+Shift+F
+    // Open global search with Cmd+Shift+F
     await page.keyboard.press('Meta+Shift+F')
     await page.waitForTimeout(300)
 
     // Search for the DONE task
-    const searchInput = page.getByPlaceholder('搜索任务...')
+    const searchInput = page.getByRole('dialog').getByPlaceholder('Search...')
     await expect(searchInput).toBeVisible()
     await searchInput.fill(doneName)
-    await searchInput.press('Enter')
-    await page.waitForTimeout(500)
 
     // Click on the DONE search result
-    const result = page.locator('[role="button"]').filter({ hasText: doneName }).first()
+    const result = page.getByRole('dialog').getByRole('button').filter({ hasText: doneName }).first()
     await expect(result).toBeVisible()
     await result.click()
     await page.waitForTimeout(500)
@@ -56,20 +66,11 @@ test.describe('Search DONE task detail', () => {
     await expect(infoBar.getByRole('button', { name: '重做' })).toBeVisible()
     await expect(page.locator('h1').filter({ hasText: doneName })).toBeVisible()
 
-    // Exit search mode: clear input, then Escape
-    await searchInput.clear()
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(500)
-
     // Verify the DONE task is NOT in the task list
     await expect(page.locator('h4').filter({ hasText: doneName })).not.toBeVisible()
-
-    // Verify the pre-search PENDING task is restored on the right panel
-    await expect(infoBar.getByText('待开始')).toBeVisible()
-    await expect(page.locator('h1').filter({ hasText: pendingName })).toBeVisible()
   })
 
-  test('Search DONE task when no task pre-selected, exit clears right panel', async ({ page }) => {
+  test('Global search opens DONE task when no task was pre-selected', async ({ page }) => {
     // Clean up any existing session
     await page.request.post('/api/afk').catch(() => {})
 
@@ -91,17 +92,15 @@ test.describe('Search DONE task detail', () => {
     const infoBar = page.getByTestId('workspace-info-bar')
     await expect(infoBar).not.toBeVisible()
 
-    // Open search, find the DONE task
+    // Open global search, find the DONE task
     await page.keyboard.press('Meta+Shift+F')
     await page.waitForTimeout(300)
-    const searchInput = page.getByPlaceholder('搜索任务...')
+    const searchInput = page.getByRole('dialog').getByPlaceholder('Search...')
     await expect(searchInput).toBeVisible()
     await searchInput.fill(doneName)
-    await searchInput.press('Enter')
-    await page.waitForTimeout(500)
 
     // Click the DONE search result
-    const result = page.locator('[role="button"]').filter({ hasText: doneName }).first()
+    const result = page.getByRole('dialog').getByRole('button').filter({ hasText: doneName }).first()
     await expect(result).toBeVisible()
     await result.click()
     await page.waitForTimeout(500)
@@ -110,13 +109,7 @@ test.describe('Search DONE task detail', () => {
     await expect(infoBar.getByText('已完成')).toBeVisible()
     await expect(page.locator('h1').filter({ hasText: doneName })).toBeVisible()
 
-    // Exit search mode
-    await searchInput.clear()
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(500)
-
-    // Verify the right panel is cleared (empty workspace)
-    await expect(infoBar).not.toBeVisible()
-    await expect(page.locator('h1').filter({ hasText: doneName })).not.toBeVisible()
+    // Verify the DONE task is still not inserted into the active task list
+    await expect(page.locator('h4').filter({ hasText: doneName })).not.toBeVisible()
   })
 })

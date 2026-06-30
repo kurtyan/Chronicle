@@ -1,7 +1,7 @@
 import axios from 'axios'
 import type { AxiosInstance } from 'axios'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
 import { recordAppError } from '@/stores/appErrorStore'
 
 // Server base URL:
@@ -249,6 +249,87 @@ export const httpApi: ApiInterface = {
     const { data } = await (await withClientId()).get('/api/search', {
       params: { q: query, limit }
     })
+    return data
+  },
+
+  async searchAll(query: string, limit = 50): Promise<GlobalSearchResponse> {
+    const { data } = await (await withClientId()).get('/api/search', {
+      params: { q: query, limit, scope: 'all' }
+    })
+    return data
+  },
+
+  async searchNotes(query: string, limit = 50): Promise<{
+    results: NoteSearchResult[]
+    tokens: string[]
+    total: number
+  }> {
+    const { data } = await (await withClientId()).get('/api/search', {
+      params: { q: query, limit, scope: 'notes' }
+    })
+    return data
+  },
+
+  async fetchNotes(options?: { includeArchived?: boolean; query?: string; limit?: number }): Promise<Note[]> {
+    const params: Record<string, string | number | boolean> = {}
+    if (options?.includeArchived !== undefined) params.includeArchived = options.includeArchived
+    if (options?.query) params.q = options.query
+    if (options?.limit !== undefined) params.limit = options.limit
+    const { data } = await (await withClientId()).get('/api/notes', { params })
+    return data
+  },
+
+  async getNoteById(id: string): Promise<Note | null> {
+    const { data } = await (await withClientId()).get<Note>(`/api/notes/${id}`)
+    return data
+  },
+
+  async createNote(req: CreateNoteRequest): Promise<Note> {
+    const { data } = await (await withClientId()).post<Note>('/api/notes', req)
+    return data
+  },
+
+  async updateNote(id: string, req: UpdateNoteRequest): Promise<Note | null> {
+    const { data } = await (await withClientId()).put<Note>(`/api/notes/${id}`, req)
+    return data
+  },
+
+  async archiveNote(id: string): Promise<Note | null> {
+    const { data } = await (await withClientId()).post<Note>(`/api/notes/${id}/archive`)
+    return data
+  },
+
+  async unarchiveNote(id: string): Promise<Note | null> {
+    const { data } = await (await withClientId()).post<Note>(`/api/notes/${id}/unarchive`)
+    return data
+  },
+
+  async deleteNote(id: string): Promise<void> {
+    await (await withClientId()).delete(`/api/notes/${id}`)
+  },
+
+  async appendToNote(id: string, contentHtml: string, source?: { taskId?: string; entryId?: string; label?: string }): Promise<Note> {
+    const { data } = await (await withClientId()).post<Note>(`/api/notes/${id}/append`, { contentHtml, source })
+    return data
+  },
+
+  async createNoteFromTask(taskId: string): Promise<Note> {
+    const { data } = await (await withClientId()).post<Note>(`/api/tasks/${taskId}/create-note`)
+    return data
+  },
+
+  async addTaskEntryToNote(taskId: string, entryId: string, noteId?: string): Promise<Note> {
+    const { data } = await (await withClientId()).post<Note>(`/api/tasks/${taskId}/entries/${entryId}/add-to-note`, { noteId })
+    return data
+  },
+
+  async fetchTaskNotes(taskId: string): Promise<Note[]> {
+    const { data } = await (await withClientId()).get<Note[]>(`/api/tasks/${taskId}/notes`)
+    return data
+  },
+
+  async fetchNoteTasks(noteId: string): Promise<Task[]> {
+    const { data } = await (await withClientId()).get<Task[]>(`/api/notes/${noteId}/tasks`)
     return data
   },
 

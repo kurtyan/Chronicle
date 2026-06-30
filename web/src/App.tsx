@@ -3,7 +3,8 @@ import { BoardPage } from './pages/BoardPage'
 import { ReportPage } from './pages/ReportPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TodayPage } from './pages/TodayPage'
-import { AlertCircle, BarChart3, Calendar, CheckCircle2, ClipboardList, ListTodo, Loader2, Settings, X } from 'lucide-react'
+import { NotesPage } from './pages/NotesPage'
+import { AlertCircle, BarChart3, Calendar, CheckCircle2, ClipboardList, FileText, ListTodo, Loader2, Search, Settings, X } from 'lucide-react'
 import { useI18n } from './i18n/context'
 import { useEffect, useState, useRef, useCallback } from 'react'
 import type React from 'react'
@@ -20,6 +21,8 @@ import { MarkdownView } from '@/components/MarkdownView'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 import type { MeetingExtractionResult } from '@/types'
 import { fetchBackgroundTask } from '@/services/api'
+import * as api from '@/services/api'
+import type { GlobalSearchResponse, NoteSearchResult, SearchResult } from '@/types'
 
 // Open links in system browser when running in Tauri
 function useSystemBrowserLinks() {
@@ -176,6 +179,7 @@ function Sidebar() {
   const navItems = [
     { path: '/', icon: <ListTodo className="w-5 h-5" />, label: t('sidebar.board') },
     { path: '/today', icon: <Calendar className="w-5 h-5" />, label: t('sidebar.today') },
+    { path: '/notes', icon: <FileText className="w-5 h-5" />, label: t('sidebar.notes') },
     { path: '/report', icon: <BarChart3 className="w-5 h-5" />, label: t('sidebar.report') },
     { path: '/settings', icon: <Settings className="w-5 h-5" />, label: t('sidebar.settings') },
   ]
@@ -742,6 +746,167 @@ function DevVersionBadge() {
 import { useTaskStore } from '@/stores/taskStore'
 import { AutoAfkDialog } from '@/components/AutoAfkDialog'
 
+function plainText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const navigate = useNavigate()
+  const [query, setQuery] = useState('')
+  const [result, setResult] = useState<GlobalSearchResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setQuery('')
+    setResult(null)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const trimmed = query.trim()
+    if (!trimmed) {
+      setResult(null)
+      setLoading(false)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    const timer = window.setTimeout(() => {
+      api.searchAll(trimmed, 50)
+        .then((next) => {
+          if (!cancelled) setResult(next)
+        })
+        .catch(() => {
+          if (!cancelled) setResult(null)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 180)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [open, query])
+
+  async function openTask(taskId: string) {
+    onOpenChange(false)
+    navigate('/')
+    await useTaskStore.getState().setActiveTask(taskId)
+  }
+
+  function openNote(noteId: string) {
+    onOpenChange(false)
+    navigate(`/notes?id=${encodeURIComponent(noteId)}`)
+  }
+
+  function renderTaskResult(item: SearchResult & { kind: 'task' | 'task_entry' }) {
+    const subtitle = item.kind === 'task'
+      ? `${item.taskId} · ${item.taskStatus}`
+      : `${item.taskId} · ${item.matchType.replace('entry_', '')}`
+    const content = plainText(item.matchedOriginal || item.matchedContent || item.taskTitle).slice(0, 180)
+    return (
+      <button
+        key={`${item.kind}-${item.taskId}-${item.matchType}-${item.matchedOriginal}`}
+        className="w-full rounded-md border border-border bg-background px-3 py-2 text-left hover:bg-muted"
+        onClick={() => void openTask(item.taskId)}
+      >
+        <div className="truncate text-sm font-medium">{item.taskTitle || item.originalTitle || item.taskId}</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>
+        {content && <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{content}</div>}
+      </button>
+    )
+  }
+
+  function renderNoteResult(item: NoteSearchResult) {
+    return (
+      <button
+        key={item.noteId}
+        className="w-full rounded-md border border-border bg-background px-3 py-2 text-left hover:bg-muted"
+        onClick={() => openNote(item.noteId)}
+      >
+        <div className="truncate text-sm font-medium">{item.title}</div>
+        <div className="mt-0.5 text-xs text-muted-foreground">{item.noteId} · {item.matchedSource.replace('note_', '')}</div>
+        {item.snippet && <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.snippet}</div>}
+      </button>
+    )
+  }
+
+  const sections = result?.results
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="max-h-[82vh] sm:max-w-2xl"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            onOpenChange(false)
+          }
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle className="text-base">Search</DialogTitle>
+          <DialogDescription>Tasks, task entries, and notes</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="p-4">
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-border px-3">
+            <Search className="h-4 w-4 text-muted-foreground" />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none"
+              placeholder="Search..."
+            />
+          </div>
+          {loading ? (
+            <div className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Searching
+            </div>
+          ) : !sections || result.total === 0 ? (
+            <div className="px-1 text-sm text-muted-foreground">{query.trim() ? 'No results.' : 'Type to search.'}</div>
+          ) : (
+            <div className="space-y-4">
+              {sections.tasks.length > 0 && (
+                <section>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Tasks</div>
+                  <div className="space-y-2">{sections.tasks.map(renderTaskResult)}</div>
+                </section>
+              )}
+              {sections.taskEntries.length > 0 && (
+                <section>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Task Entries</div>
+                  <div className="space-y-2">{sections.taskEntries.map(renderTaskResult)}</div>
+                </section>
+              )}
+              {sections.notes.length > 0 && (
+                <section>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Notes</div>
+                  <div className="space-y-2">{sections.notes.map(renderNoteResult)}</div>
+                </section>
+              )}
+            </div>
+          )}
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // Listen for auto-AFK events from Tauri backend
 // Returns dialog state for rendering in Layout
 function useAutoAfk() {
@@ -839,10 +1004,13 @@ function Layout() {
   useTauriZoom()
   const afkDialog = useAutoAfk()
   const navigate = useNavigate()
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
 
   const { setSearchMode } = useTaskStore()
   const navigateRef = useRef(navigate)
   const setSearchModeRef = useRef(setSearchMode)
+  const setGlobalSearchOpenRef = useRef(setGlobalSearchOpen)
+  const globalSearchOpenRef = useRef(globalSearchOpen)
 
   // Keep refs updated
   useEffect(() => {
@@ -851,6 +1019,12 @@ function Layout() {
   useEffect(() => {
     setSearchModeRef.current = setSearchMode
   })
+  useEffect(() => {
+    setGlobalSearchOpenRef.current = setGlobalSearchOpen
+  })
+  useEffect(() => {
+    globalSearchOpenRef.current = globalSearchOpen
+  }, [globalSearchOpen])
 
   // Central keyboard shortcut dispatcher
   // Registered once on mount — uses refs for navigate and setSearchMode
@@ -895,16 +1069,16 @@ function Layout() {
       },
     }))
 
-    // Cmd+Shift+F: Toggle search mode (works even in inputs, matching original)
+    // Cmd+Shift+F: Global search across tasks, entries, and notes.
     unregisters.push(registerShortcut({
       id: 'toggle-search',
       combo: 'mod+shift+f',
       label: 'Toggle search',
       scope: 'app',
-      handler: () => setSearchModeRef.current(true),
+      handler: () => setGlobalSearchOpenRef.current(true),
     }))
 
-    // Cmd+1/2/3/4: Sidebar navigation
+    // Cmd+1/2/3/4/5: Sidebar navigation
     unregisters.push(registerShortcut({
       id: 'nav-board',
       combo: 'mod+1',
@@ -920,22 +1094,46 @@ function Layout() {
       handler: () => navigateRef.current('/today'),
     }))
     unregisters.push(registerShortcut({
-      id: 'nav-report',
+      id: 'nav-notes',
       combo: 'mod+3',
+      label: 'Go to Notes',
+      scope: 'app',
+      handler: () => navigateRef.current('/notes'),
+    }))
+    unregisters.push(registerShortcut({
+      id: 'nav-report',
+      combo: 'mod+4',
       label: 'Go to Report',
       scope: 'app',
       handler: () => navigateRef.current('/report'),
     }))
     unregisters.push(registerShortcut({
       id: 'nav-settings',
-      combo: 'mod+4',
+      combo: 'mod+5',
       label: 'Go to Settings',
       scope: 'app',
       handler: () => navigateRef.current('/settings'),
     }))
+    unregisters.push(registerShortcut({
+      id: 'new-note-global',
+      combo: 'mod+shift+n',
+      label: 'New note',
+      scope: 'app',
+      handler: async () => {
+        const { useNoteStore } = await import('@/stores/noteStore')
+        const note = await useNoteStore.getState().createNote({ title: 'Untitled note' })
+        navigateRef.current(`/notes?id=${encodeURIComponent(note.id)}`)
+      },
+    }))
 
     // Escape: Exit search mode (immediate, no registry — needs latest searchMode)
     const escapeHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && globalSearchOpenRef.current) {
+        e.preventDefault()
+        e.stopPropagation()
+        setGlobalSearchOpenRef.current(false)
+        return
+      }
       if (e.key === 'Escape' && useTaskStore.getState().searchMode) {
         e.preventDefault()
         e.stopPropagation()
@@ -948,6 +1146,13 @@ function Layout() {
     // NOTE: no global isInput check — original code only blocked Arrow/N in inputs,
     // while modifier shortcuts (Cmd+Q, Cmd+T, etc.) worked everywhere
     const dispatcher = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && globalSearchOpenRef.current) {
+        e.preventDefault()
+        e.stopPropagation()
+        setGlobalSearchOpenRef.current(false)
+        return
+      }
+
       // Skip zoom shortcuts (handled by useTauriZoom)
       const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
       const mod = isMac ? e.metaKey : e.ctrlKey
@@ -996,12 +1201,14 @@ function Layout() {
         <Routes>
           <Route path="/" element={<BoardPage />} />
           <Route path="/today" element={<TodayPage />} />
+          <Route path="/notes" element={<NotesPage />} />
           <Route path="/report" element={<ReportPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>
       <BackgroundTasksPanel />
       <AppErrorsOverlay />
+      <GlobalSearchDialog open={globalSearchOpen} onOpenChange={setGlobalSearchOpen} />
       {afkDialog.resumeToast.open && (
         <div className="fixed bottom-6 right-6 z-[60] w-80 rounded-lg border border-border bg-background p-3 text-sm shadow-lg">
           <div className="flex items-start gap-2">

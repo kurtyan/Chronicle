@@ -17,9 +17,70 @@ import {
   getTaskContexts, refreshTaskContexts,
   type TaskProgressContext,
 } from './taskContextService'
+import {
+  getNotes, getNoteById, createNote, updateNote, archiveNote, deleteNote,
+  appendToNote, createNoteFromTask, addTaskEntryToNote, getNotesForTask, getLinkedTasksForNote, searchNotes,
+  rebuildNotesFtsIndex,
+  type Note,
+} from './noteService'
 import { getDb } from '../db'
 
 export class AppService {
+  // --- Notes ---
+
+  async getNotes(options?: { includeArchived?: boolean; query?: string; limit?: number }): Promise<Note[]> {
+    return getNotes(options)
+  }
+
+  async getNoteById(id: string): Promise<Note | null> {
+    return getNoteById(id)
+  }
+
+  async createNote(data: { title: string; contentHtml?: string; tags?: string[]; linkedTaskIds?: string[] }): Promise<Note> {
+    return createNote(data)
+  }
+
+  async updateNote(id: string, data: { title?: string; contentHtml?: string; tags?: string[]; pinned?: boolean; archived?: boolean }): Promise<Note | null> {
+    return updateNote(id, data)
+  }
+
+  async archiveNote(id: string, archived = true): Promise<Note | null> {
+    return archiveNote(id, archived)
+  }
+
+  async deleteNote(id: string): Promise<void> {
+    const ok = deleteNote(id)
+    if (!ok) throw new Error('Note not found')
+  }
+
+  async appendToNote(id: string, contentHtml: string, source?: { taskId?: string; entryId?: string; label?: string }): Promise<Note> {
+    return appendToNote(id, contentHtml, source)
+  }
+
+  async createNoteFromTask(taskId: string): Promise<Note> {
+    return createNoteFromTask(taskId)
+  }
+
+  async addTaskEntryToNote(taskId: string, entryId: string, noteId?: string): Promise<Note> {
+    return addTaskEntryToNote(taskId, entryId, noteId)
+  }
+
+  async getNotesForTask(taskId: string): Promise<Note[]> {
+    return getNotesForTask(taskId)
+  }
+
+  async getLinkedTasksForNote(noteId: string): Promise<Task[]> {
+    return getLinkedTasksForNote(noteId)
+  }
+
+  async searchNotes(query: string, limit?: number, includeArchived?: boolean) {
+    return searchNotes(query, limit, includeArchived)
+  }
+
+  async rebuildNotesFtsIndex(): Promise<void> {
+    rebuildNotesFtsIndex()
+  }
+
   // --- Tasks ---
 
   async fetchTodos(type?: string, status?: string): Promise<Task[]> {
