@@ -4,7 +4,7 @@ import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Maximize2, Plus,
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
-import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, fetchWorkOverviewHiddenSignals, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, hideWorkOverviewSignal, saveDayScript, submitDayScriptProgress } from '@/services/api'
+import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, fetchTodos, fetchWorkOverviewHiddenSignals, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, hideWorkOverviewSignal, saveDayScript, submitDayScriptProgress } from '@/services/api'
 import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext, WorkOverviewHidableSignalSourceType, WorkOverviewHiddenSignal } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
@@ -50,6 +50,12 @@ type WorkOverviewItem = {
   lastActivityAt: number | null
   inFocus: boolean
   canPlan: boolean
+}
+
+type WorkOverviewOrderState = {
+  date: string
+  next: number
+  items: Map<string, number>
 }
 
 type SaveDraftResult = {
@@ -270,11 +276,6 @@ function OverallNextStepsBoard({
 
   if (items.length === 0) return null
 
-  const sectionDefs: Array<{ key: 'now' | 'planned' | 'suggested'; label: string }> = [
-    { key: 'now', label: 'Now' },
-    { key: 'planned', label: 'Planned / carried' },
-    { key: 'suggested', label: 'Suggested' },
-  ]
   const sourceLabel: Record<NextStepSourceType, string> = {
     now: 'Now',
     focus: 'Focus',
@@ -282,10 +283,10 @@ function OverallNextStepsBoard({
     recommended: 'Recommended',
     carry_over: 'Carry-over',
   }
-  const sectionForItem = (item: WorkOverviewItem): 'now' | 'planned' | 'suggested' => {
-    if (item.primaryAction.sourceType === 'now') return 'now'
-    if (item.primaryAction.sourceType === 'focus' || item.primaryAction.sourceType === 'carry_over') return 'planned'
-    return 'suggested'
+  const overviewLabelForItem = (item: WorkOverviewItem): string => {
+    if (item.primaryAction.sourceType === 'now') return 'Now'
+    if (item.primaryAction.sourceType === 'focus' || item.primaryAction.sourceType === 'carry_over') return 'Planned / carried'
+    return 'Suggested'
   }
   const stateLabel: Record<NextStepAction['state'], string> = {
     updating: 'Updating',
@@ -351,108 +352,97 @@ function OverallNextStepsBoard({
         </div>
       </div>
       {(maximized || !collapsed) && (
-        <div className={maximized ? 'mt-4 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1' : 'mt-2 max-h-64 space-y-3 overflow-y-auto pr-1'}>
-          {sectionDefs.map((section) => {
-            const sectionItems = items.filter((item) => sectionForItem(item) === section.key)
-            if (sectionItems.length === 0) return null
-            return (
-              <section key={section.key} className="space-y-1.5">
-                <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-normal text-muted-foreground">
-                  <span>{section.label}</span>
-                  <span>{sectionItems.length}</span>
-                </div>
-                {sectionItems.map((item) => (
-                  <div
-                    key={item.id}
-                    data-next-step-action-id={item.primaryAction.id}
-                    data-next-step-source={item.primaryAction.sourceType}
-                    className={`rounded-md border border-border/70 bg-background/80 px-2.5 py-2 ${item.taskId ? 'cursor-pointer hover:bg-muted/50' : ''}`}
-                    onClick={() => {
-                      if (item.taskId) onOpen(item.primaryAction)
-                    }}
-                    role={item.taskId ? 'button' : undefined}
-                    aria-label={item.taskId ? `Open task ${item.taskId}` : undefined}
-                    tabIndex={item.taskId ? 0 : undefined}
-                    onKeyDown={(event) => {
-                      if (!item.taskId) return
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        onOpen(item.primaryAction)
+        <div className={maximized ? 'mt-4 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1' : 'mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1'}>
+          {items.map((item) => (
+            <div
+              key={item.id}
+              data-next-step-action-id={item.primaryAction.id}
+              data-next-step-source={item.primaryAction.sourceType}
+              className={`rounded-md border border-border/70 bg-background/80 px-2.5 py-2 ${item.taskId ? 'cursor-pointer hover:bg-muted/50' : ''}`}
+              onClick={() => {
+                if (item.taskId) onOpen(item.primaryAction)
+              }}
+              role={item.taskId ? 'button' : undefined}
+              aria-label={item.taskId ? `Open task ${item.taskId}` : undefined}
+              tabIndex={item.taskId ? 0 : undefined}
+              onKeyDown={(event) => {
+                if (!item.taskId) return
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  onOpen(item.primaryAction)
+                }
+              }}
+            >
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">{overviewLabelForItem(item)}</span>
+                    <span className="truncate text-xs font-medium text-muted-foreground" title={item.taskTitle}>{item.taskTitle}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.taskStatus}</span>
+                    {item.primaryAction.timeLabel && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.primaryAction.timeLabel}</span>}
+                    {item.inFocus && <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">In Focus</span>}
+                    <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateClass[item.state]}`}>{stateLabel[item.state]}</span>
+                    {sourceActionsForItem(item).map((action) => {
+                      const menuKey = `${item.id}:${action.sourceType}:${action.signalKey}`
+                      if (!action.canHideSignal) {
+                        return <span key={menuKey} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{sourceLabel[action.sourceType]}</span>
                       }
-                    }}
-                  >
-                    <div className="flex min-w-0 items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <span className="truncate text-xs font-medium text-muted-foreground" title={item.taskTitle}>{item.taskTitle}</span>
-                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.taskStatus}</span>
-                          {item.primaryAction.timeLabel && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.primaryAction.timeLabel}</span>}
-                          {item.inFocus && <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">In Focus</span>}
-                          <span className={`rounded px-1.5 py-0.5 text-[10px] ${stateClass[item.state]}`}>{stateLabel[item.state]}</span>
-                          {sourceActionsForItem(item).map((action) => {
-                            const menuKey = `${item.id}:${action.sourceType}:${action.signalKey}`
-                            if (!action.canHideSignal) {
-                              return <span key={menuKey} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{sourceLabel[action.sourceType]}</span>
-                            }
-                            return (
-                              <span key={menuKey} className="relative inline-flex">
-                                <button
-                                  type="button"
-                                  className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    setOpenSignalMenu((current) => current === menuKey ? null : menuKey)
-                                  }}
-                                  title={`Signal actions: ${sourceLabel[action.sourceType]}`}
-                                >
-                                  {sourceLabel[action.sourceType]}
-                                </button>
-                                {openSignalMenu === menuKey && (
-                                  <div
-                                    className="absolute left-0 top-full z-50 mt-1 min-w-28 rounded-md border border-border bg-popover p-1 text-xs shadow-lg"
-                                    onClick={(event) => event.stopPropagation()}
-                                  >
-                                    <button
-                                      type="button"
-                                      className="block w-full rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
-                                      onClick={() => {
-                                        setOpenSignalMenu(null)
-                                        onHideSignal(action)
-                                      }}
-                                    >
-                                      Hide signal
-                                    </button>
-                                  </div>
-                                )}
-                              </span>
-                            )
-                          })}
-                          {item.actions.length > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.actions.length} signals</span>}
-                        </div>
-                        <div className={maximized ? 'mt-1 text-sm leading-6 text-foreground' : 'mt-1 line-clamp-2 text-sm text-foreground'}>{item.primaryAction.text}</div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        {item.canPlan && (
+                      return (
+                        <span key={menuKey} className="relative inline-flex">
                           <button
-                            className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:cursor-default disabled:opacity-50"
-                            disabled={item.inFocus}
+                            type="button"
+                            className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/80 hover:text-foreground"
                             onClick={(event) => {
                               event.stopPropagation()
-                              onPlan(item.primaryAction)
+                              setOpenSignalMenu((current) => current === menuKey ? null : menuKey)
                             }}
-                            title={item.inFocus ? 'Already in Focus' : 'Plan in Focus'}
+                            title={`Signal actions: ${sourceLabel[action.sourceType]}`}
                           >
-                            <Plus className="h-3 w-3" />
-                            {item.inFocus ? 'In Focus' : 'Plan'}
+                            {sourceLabel[action.sourceType]}
                           </button>
-                        )}
-                      </div>
-                    </div>
+                          {openSignalMenu === menuKey && (
+                            <div
+                              className="absolute left-0 top-full z-50 mt-1 min-w-28 rounded-md border border-border bg-popover p-1 text-xs shadow-lg"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="block w-full rounded px-2 py-1.5 text-left text-muted-foreground hover:bg-muted hover:text-foreground"
+                                onClick={() => {
+                                  setOpenSignalMenu(null)
+                                  onHideSignal(action)
+                                }}
+                              >
+                                Hide signal
+                              </button>
+                            </div>
+                          )}
+                        </span>
+                      )
+                    })}
+                    {item.actions.length > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.actions.length} signals</span>}
                   </div>
-                ))}
-              </section>
-            )
-          })}
+                  <div className={maximized ? 'mt-1 text-sm leading-6 text-foreground' : 'mt-1 line-clamp-2 text-sm text-foreground'}>{item.primaryAction.text}</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {item.canPlan && (
+                    <button
+                      className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs hover:bg-muted disabled:cursor-default disabled:opacity-50"
+                      disabled={item.inFocus}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onPlan(item.primaryAction)
+                      }}
+                      title={item.inFocus ? 'Already in Focus' : 'Plan in Focus'}
+                    >
+                      <Plus className="h-3 w-3" />
+                      {item.inFocus ? 'In Focus' : 'Plan'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -486,6 +476,7 @@ export function TodayPage() {
   const [planDraftLoading, setPlanDraftLoading] = useState(false)
   const [carryOverBlocks, setCarryOverBlocks] = useState<DayScriptBlock[]>([])
   const [hiddenOverviewSignals, setHiddenOverviewSignals] = useState<WorkOverviewHiddenSignal[]>([])
+  const [workOverviewTasks, setWorkOverviewTasks] = useState<Task[]>([])
   const [nextStepsMaximized, setNextStepsMaximized] = useState(false)
   const backgroundTasks = useBackgroundTaskStore((s) => s.tasks)
   const loadBackgroundTasks = useBackgroundTaskStore((s) => s.loadTasks)
@@ -532,6 +523,7 @@ export function TodayPage() {
   const saveDraftInFlightRef = useRef<Promise<SaveDraftResult> | null>(null)
   const scriptDirtyRef = useRef(false)
   const editVersionRef = useRef(0)
+  const workOverviewOrderRef = useRef<WorkOverviewOrderState>({ date: displayDate, next: 0, items: new Map() })
 
   useEffect(() => {
     scriptRef.current = script
@@ -551,6 +543,11 @@ export function TodayPage() {
     autosaveTimerRef.current = null
   }, [])
 
+  const loadWorkOverviewTasks = useCallback(async () => {
+    const openTasks = await fetchTodos(undefined, 'PENDING,DOING')
+    setWorkOverviewTasks(openTasks)
+  }, [])
+
   function recordDayScriptValidationError(endpoint: string, validationErrors: Array<{ lineIndex: number; message: string }>): string {
     const first = validationErrors[0]
     const message = first ? `Line ${first.lineIndex + 1}: ${first.message}` : 'Invalid Focus content.'
@@ -565,8 +562,28 @@ export function TodayPage() {
   useEffect(() => {
     loadTodos()
     loadCurrentSession()
+    loadWorkOverviewTasks().catch((error) => console.error('Failed to load Work overview tasks:', error))
     loadTaskContexts().catch((error) => console.error('Failed to load task contexts:', error))
-  }, [loadTodos, loadCurrentSession, loadTaskContexts])
+  }, [loadTodos, loadCurrentSession, loadTaskContexts, loadWorkOverviewTasks])
+
+  useEffect(() => {
+    if (tasks.length === 0) return
+    setWorkOverviewTasks((current) => {
+      const next = new Map(current.map((task) => [task.id, task]))
+      let changed = false
+      for (const task of tasks) {
+        if (task.status === 'PENDING' || task.status === 'DOING') {
+          if (next.get(task.id) !== task) {
+            next.set(task.id, task)
+            changed = true
+          }
+        } else if (next.delete(task.id)) {
+          changed = true
+        }
+      }
+      return changed ? [...next.values()] : current
+    })
+  }, [tasks])
 
   useEffect(() => {
     let cancelled = false
@@ -685,12 +702,12 @@ export function TodayPage() {
   }, [nextStepsMaximized])
 
   const pendingTasks = useMemo(
-    () => tasks.filter((task) => task.status === 'PENDING' || task.status === 'DOING').sort((a, b) => b.updatedAt - a.updatedAt),
-    [tasks]
+    () => workOverviewTasks.filter((task) => task.status === 'PENDING' || task.status === 'DOING').sort((a, b) => b.updatedAt - a.updatedAt),
+    [workOverviewTasks]
   )
   const workOverviewItems = useMemo(() => {
     const pendingIds = new Set(pendingTasks.map((task) => task.id))
-    const tasksById = new Map(tasks.map((task) => [task.id, task]))
+    const tasksById = new Map([...tasks, ...workOverviewTasks].map((task) => [task.id, task]))
     const currentBlocks = script?.blocks ?? []
     const currentFocusTaskIds = new Set(currentBlocks.flatMap((block) => block.taskIds))
     const actions: NextStepAction[] = []
@@ -870,11 +887,24 @@ export function TodayPage() {
       existing.canPlan = existing.actions.some((item) => item.canPlan)
     }
 
-    return [...items.values()].sort((a, b) =>
+    const sortedItems = [...items.values()].sort((a, b) =>
       sourceRank[a.primaryAction.sourceType] - sourceRank[b.primaryAction.sourceType]
       || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
     )
-  }, [carryOverBlocks, displayDate, hiddenOverviewSignals, insertedNextStepIds, pendingTasks, script, taskContexts, taskSummaryUpdating, tasks, todayScriptDate])
+    if (workOverviewOrderRef.current.date !== displayDate) {
+      workOverviewOrderRef.current = { date: displayDate, next: 0, items: new Map() }
+    }
+    for (const item of sortedItems) {
+      if (!workOverviewOrderRef.current.items.has(item.id)) {
+        workOverviewOrderRef.current.items.set(item.id, workOverviewOrderRef.current.next)
+        workOverviewOrderRef.current.next += 1
+      }
+    }
+    return sortedItems.sort((a, b) =>
+      (workOverviewOrderRef.current.items.get(a.id) ?? Number.MAX_SAFE_INTEGER)
+      - (workOverviewOrderRef.current.items.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+    )
+  }, [carryOverBlocks, displayDate, hiddenOverviewSignals, insertedNextStepIds, pendingTasks, script, taskContexts, taskSummaryUpdating, tasks, todayScriptDate, workOverviewTasks])
 
   async function hideOverviewSignal(action: NextStepAction) {
     if (!action.taskId || !action.canHideSignal || !isHidableSignalSource(action.sourceType)) return
@@ -1000,7 +1030,7 @@ export function TodayPage() {
         }
 
         setConflicts([])
-        await loadTodos()
+        await Promise.all([loadTodos(), loadWorkOverviewTasks()])
         const createdTaskId = result.createdTasks[0]?.id
         if (createdTaskId) {
           await setActiveTask(createdTaskId)
@@ -1082,7 +1112,7 @@ export function TodayPage() {
         }
         saveStoredFocusActivity(displayDateRef.current, focusActivityRef.current)
       }
-      await loadTodos()
+      await Promise.all([loadTodos(), loadWorkOverviewTasks()])
       const createdTaskId = result.createdTasks[0]?.id
       if (createdTaskId) await setActiveTask(createdTaskId)
       else if (activeTaskId) await setActiveTask(activeTaskId)

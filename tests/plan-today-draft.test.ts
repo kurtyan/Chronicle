@@ -353,6 +353,96 @@ test.describe('Plan Today draft', () => {
     }
   })
 
+  test('Work Overview keeps item order stable when hiding a signal', async ({ page }) => {
+    const today = uniqueScriptDate(uniqueDayOffset() + 38)
+    const yesterday = dateOffset(today, -1)
+    const carriedTask = await createTask(page, `OverviewStableCarry-${Date.now()}`)
+    const suggestedTask = await createTask(page, `OverviewStableSuggested-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    await page.request.put('/api/settings/llm', {
+      data: { ...originalSettings, baseUrl: '', model: '' },
+    })
+
+    try {
+      await saveDayScript(page, yesterday, {
+        type: 'doc',
+        content: [
+          focusParagraph('09:00-09:30 ', carriedTask, ' stable carry action'),
+        ],
+      })
+      await page.request.post(`/api/tasks/${carriedTask.id}/logs`, {
+        data: { content: '<p>下一步：stable explicit action</p>', type: 'log' },
+      })
+      await page.waitForTimeout(10)
+      await page.request.post(`/api/tasks/${suggestedTask.id}/logs`, {
+        data: { content: '<p>下一步：newer suggested action</p>', type: 'log' },
+      })
+      const summarize = await page.request.post('/api/task-context/summarize', { data: { taskIds: [carriedTask.id, suggestedTask.id] } })
+      expect(summarize.ok()).toBeTruthy()
+
+      await page.goto(`/today?date=${today}&lang=en`)
+      await page.waitForLoadState('load')
+      const board = page.getByTestId('overall-next-steps-board')
+      await expect(board).toBeVisible()
+      const cards = board.locator('[data-next-step-action-id]')
+      const titleOrder = async () => cards.evaluateAll((nodes) =>
+        nodes.map((node) => node.querySelector('span[title]')?.getAttribute('title') ?? '')
+      )
+      await expect.poll(async () => {
+        const titles = await titleOrder()
+        return titles.includes(carriedTask.title) && titles.includes(suggestedTask.title)
+      }).toBeTruthy()
+      let titles = await titleOrder()
+      expect(titles.indexOf(carriedTask.title)).toBeLessThan(titles.indexOf(suggestedTask.title))
+      await expect(cards.filter({ hasText: carriedTask.title })).toContainText('Planned / carried')
+      await expect(cards.filter({ hasText: suggestedTask.title })).toContainText('Suggested')
+
+      const carryCard = cards.filter({ hasText: carriedTask.title })
+      await carryCard.getByRole('button', { name: 'Carry-over' }).click()
+      await carryCard.getByRole('button', { name: 'Hide signal' }).click()
+
+      await expect(carryCard).toContainText('Suggested')
+      await expect(carryCard).toContainText('Explicit')
+      await expect(carryCard).not.toContainText('Carry-over')
+      titles = await titleOrder()
+      expect(titles.indexOf(carriedTask.title)).toBeLessThan(titles.indexOf(suggestedTask.title))
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+    }
+  })
+
+  test('Work Overview ignores the Board task status filter', async ({ page }) => {
+    const task = await createTask(page, `OverviewFilterIsolation-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    await page.request.put('/api/settings/llm', {
+      data: { ...originalSettings, baseUrl: '', model: '' },
+    })
+
+    try {
+      await page.request.post(`/api/tasks/${task.id}/logs`, {
+        data: { content: '<p>下一步：keep overview visible after done filter</p>', type: 'log' },
+      })
+      const summarize = await page.request.post('/api/task-context/summarize', { data: { taskIds: [task.id] } })
+      expect(summarize.ok()).toBeTruthy()
+
+      await page.goto('/?lang=en')
+      await page.waitForLoadState('load')
+      await page.getByRole('button', { name: '<' }).click()
+      await page.getByRole('button', { name: 'Done' }).click()
+      await expect(page.getByRole('button', { name: 'Done' })).toHaveClass(/bg-primary/)
+
+      await page.getByTitle('Today').click()
+      await expect(page).toHaveURL(/\/today/)
+      const board = page.getByTestId('overall-next-steps-board')
+      await expect(board).toBeVisible()
+      await expect(board.locator(`[title="${task.title}"]`)).toBeVisible()
+      await expect(board).toContainText('keep overview visible after done filter')
+      await expect(board).toContainText('Explicit')
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+    }
+  })
+
   test('hidden Work Overview signals are filtered from Plan Today across carry-over days', async ({ page }) => {
     const today = uniqueScriptDate(uniqueDayOffset() + 44)
     const yesterday = dateOffset(today, -1)
