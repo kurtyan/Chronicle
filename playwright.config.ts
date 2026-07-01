@@ -11,7 +11,7 @@ export default defineConfig({
   timeout: 30000,
   workers: 1,
   webServer: {
-    command: 'mkdir -p /private/tmp/chronicle-playwright-data && rm -f /private/tmp/chronicle-playwright-data/tasks.db /private/tmp/chronicle-playwright-data/tasks.db-shm /private/tmp/chronicle-playwright-data/tasks.db-wal && cd server && PATH=$HOME/.nvm/versions/node/v25.5.0/bin:$PATH npm run build && PATH=$HOME/.nvm/versions/node/v25.5.0/bin:$PATH CHRONICLE_SERVER_PORT=18182 CHRONICLE_MCP_PORT=18183 CHRONICLE_DB_PATH=/private/tmp/chronicle-playwright-data/tasks.db CHRONICLE_ATTACHMENT_DIR=/private/tmp/chronicle-playwright-data/attachments node dist/index.js --port 18182',
+    command: 'mkdir -p /private/tmp/chronicle-playwright-data/config /private/tmp/chronicle-playwright-data/logs && rm -f /private/tmp/chronicle-playwright-data/tasks.db /private/tmp/chronicle-playwright-data/tasks.db-shm /private/tmp/chronicle-playwright-data/tasks.db-wal /private/tmp/chronicle-playwright-data/config/config.json && cd server && PATH=$HOME/.nvm/versions/node/v25.5.0/bin:$PATH npm run build && PATH=$HOME/.nvm/versions/node/v25.5.0/bin:$PATH CHRONICLE_SERVER_PORT=18182 CHRONICLE_MCP_PORT=18183 CHRONICLE_CONFIG_DIR=/private/tmp/chronicle-playwright-data/config CHRONICLE_CONFIG_PATH=/private/tmp/chronicle-playwright-data/config/config.json CHRONICLE_LOG_DIR=/private/tmp/chronicle-playwright-data/logs CHRONICLE_LOG_PATH=/private/tmp/chronicle-playwright-data/logs/server.log CHRONICLE_DB_PATH=/private/tmp/chronicle-playwright-data/tasks.db CHRONICLE_ATTACHMENT_DIR=/private/tmp/chronicle-playwright-data/attachments node dist/index.js --port 18182',
     url: 'http://127.0.0.1:18182',
     reuseExistingServer: false,
     timeout: 30000,

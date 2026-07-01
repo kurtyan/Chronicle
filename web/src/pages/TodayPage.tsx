@@ -31,6 +31,7 @@ type NextStepAction = {
   originSource: DayScriptBlockSource | null
   signalKey: string
   canHideSignal: boolean
+  hiddenSignal: boolean
   text: string
   state: 'updating' | 'stale' | 'failed' | 'current' | 'pending'
   lastActivityAt: number | null
@@ -50,6 +51,10 @@ type WorkOverviewItem = {
   lastActivityAt: number | null
   inFocus: boolean
   canPlan: boolean
+}
+
+function visibleActionsForItem(item: WorkOverviewItem): NextStepAction[] {
+  return item.actions.filter((action) => !action.hiddenSignal)
 }
 
 type WorkOverviewOrderState = {
@@ -284,8 +289,9 @@ function OverallNextStepsBoard({
     carry_over: 'Carry-over',
   }
   const overviewLabelForItem = (item: WorkOverviewItem): string => {
-    if (item.primaryAction.sourceType === 'now') return 'Now'
-    if (item.primaryAction.sourceType === 'focus' || item.primaryAction.sourceType === 'carry_over') return 'Planned / carried'
+    const primaryAction = visibleActionsForItem(item)[0] ?? item.primaryAction
+    if (primaryAction.sourceType === 'now') return 'Now'
+    if (primaryAction.sourceType === 'focus' || primaryAction.sourceType === 'carry_over') return 'Planned / carried'
     return 'Suggested'
   }
   const stateLabel: Record<NextStepAction['state'], string> = {
@@ -305,7 +311,7 @@ function OverallNextStepsBoard({
   const sourceActionsForItem = (item: WorkOverviewItem): NextStepAction[] => {
     const seen = new Set<NextStepSourceType>()
     const sourceActions: NextStepAction[] = []
-    for (const action of item.actions) {
+    for (const action of visibleActionsForItem(item)) {
       if (seen.has(action.sourceType)) continue
       seen.add(action.sourceType)
       sourceActions.push(action)
@@ -420,7 +426,7 @@ function OverallNextStepsBoard({
                         </span>
                       )
                     })}
-                    {item.actions.length > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{item.actions.length} signals</span>}
+                    {visibleActionsForItem(item).length > 1 && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{visibleActionsForItem(item).length} signals</span>}
                   </div>
                   <div className={maximized ? 'mt-1 text-sm leading-6 text-foreground' : 'mt-1 line-clamp-2 text-sm text-foreground'}>{item.primaryAction.text}</div>
                 </div>
@@ -722,15 +728,13 @@ export function TodayPage() {
 
     const pushAction = (action: NextStepAction) => {
       if (!action.text.trim()) return
-      if (
+      const hiddenSignal = Boolean(
         action.taskId
         && action.canHideSignal
         && isHidableSignalSource(action.sourceType)
         && hiddenSignals.has(hiddenSignalKey({ taskId: action.taskId, sourceType: action.sourceType, signalKey: action.signalKey }))
-      ) {
-        return
-      }
-      actions.push(action)
+      )
+      actions.push({ ...action, hiddenSignal })
     }
 
     const activeIndex = script && displayDate === todayScriptDate ? findActiveBlock(script.blocks, new Date()) : -1
@@ -750,6 +754,7 @@ export function TodayPage() {
         originSource: activeBlock.originSource,
         signalKey: '',
         canHideSignal: false,
+        hiddenSignal: false,
         text: getBlockActionText(activeBlock),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -775,6 +780,7 @@ export function TodayPage() {
         originSource: block.originSource,
         signalKey: '',
         canHideSignal: false,
+        hiddenSignal: false,
         text: getBlockActionText(block),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -802,6 +808,7 @@ export function TodayPage() {
         originSource: null,
         signalKey: '',
         canHideSignal: false,
+        hiddenSignal: false,
       } satisfies Omit<NextStepAction, 'id' | 'sourceType' | 'blockSource' | 'text'>
       if (nextStep) {
         pushAction({
@@ -842,6 +849,7 @@ export function TodayPage() {
         originSource: block.originSource,
         signalKey: signalKeyForCarryOverBlock(block),
         canHideSignal: Boolean(taskId),
+        hiddenSignal: false,
         text: getBlockActionText(block),
         state: 'current',
         lastActivityAt: task?.updatedAt ?? null,
@@ -869,7 +877,7 @@ export function TodayPage() {
           state: action.state,
           lastActivityAt: action.lastActivityAt,
           inFocus: action.inFocus,
-          canPlan: action.canPlan,
+          canPlan: !action.hiddenSignal && action.canPlan,
         })
         continue
       }
@@ -880,11 +888,11 @@ export function TodayPage() {
       )
       if (!duplicateSignal) existing.actions.push(action)
       existing.actions.sort((a, b) => sourceRank[a.sourceType] - sourceRank[b.sourceType] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
-      existing.primaryAction = existing.actions[0]
+      existing.primaryAction = visibleActionsForItem(existing)[0] ?? existing.actions[0]
       existing.state = existing.primaryAction.state
       existing.lastActivityAt = Math.max(...existing.actions.map((item) => item.lastActivityAt ?? 0)) || null
-      existing.inFocus = existing.actions.some((item) => item.inFocus)
-      existing.canPlan = existing.actions.some((item) => item.canPlan)
+      existing.inFocus = existing.actions.some((item) => !item.hiddenSignal && item.inFocus)
+      existing.canPlan = existing.actions.some((item) => !item.hiddenSignal && item.canPlan)
     }
 
     const sortedItems = [...items.values()].sort((a, b) =>

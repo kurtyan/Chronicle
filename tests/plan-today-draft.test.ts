@@ -411,6 +411,46 @@ test.describe('Plan Today draft', () => {
     }
   })
 
+  test('Work Overview keeps a recommended-only item visible after hiding its signal in the current view', async ({ page }) => {
+    const today = uniqueScriptDate(uniqueDayOffset() + 39)
+    const task = await createTask(page, `OverviewRecommendedOnly-${Date.now()}`)
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const mock = await startMockLlm([JSON.stringify({
+      latestProgress: 'Recommendation context exists.',
+      nextStep: '',
+      recommendedNextStep: 'inspect fallback layout',
+    })])
+
+    try {
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: mock.baseUrl, model: 'mock-model' },
+      })
+      await page.request.post(`/api/tasks/${task.id}/logs`, {
+        data: { content: '<p>Needs recommendation only.</p>', type: 'log' },
+      })
+      const summarize = await page.request.post('/api/task-context/summarize', { data: { taskIds: [task.id] } })
+      expect(summarize.ok()).toBeTruthy()
+
+      await page.goto(`/today?date=${today}&lang=en`)
+      await page.waitForLoadState('load')
+      const board = page.getByTestId('overall-next-steps-board')
+      const card = board.locator('[data-next-step-action-id="recommended:' + task.id + '"]')
+      await expect(card).toBeVisible()
+      await expect(card).toContainText('inspect fallback layout')
+      await expect(card).toContainText('Recommended')
+
+      await card.getByRole('button', { name: 'Recommended' }).click()
+      await card.getByRole('button', { name: 'Hide signal' }).click()
+
+      await expect(card).toBeVisible()
+      await expect(card).toContainText('inspect fallback layout')
+      await expect(card.getByRole('button', { name: 'Recommended' })).toHaveCount(0)
+    } finally {
+      await page.request.put('/api/settings/llm', { data: originalSettings })
+      await mock.close()
+    }
+  })
+
   test('Work Overview ignores the Board task status filter', async ({ page }) => {
     const task = await createTask(page, `OverviewFilterIsolation-${Date.now()}`)
     const originalSettings = await (await page.request.get('/api/settings/llm')).json()

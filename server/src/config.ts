@@ -149,6 +149,24 @@ export function updateConfig(patch: Partial<ChronicleConfig>): ChronicleConfig {
     ui: { ...(fileConfig.ui ?? {}), ...current.ui, ...patch.ui },
     llm: { ...(fileConfig.llm ?? {}), ...current.llm, ...patch.llm },
   }
+  if (patch.server?.port === undefined && fileConfig.server?.port !== undefined) {
+    next.server.port = fileConfig.server.port
+  }
+  if (patch.mcp?.port === undefined && fileConfig.mcp?.port !== undefined) {
+    next.mcp.port = fileConfig.mcp.port
+  }
+  if (patch.llm?.baseUrl === undefined && fileConfig.llm?.baseUrl !== undefined) {
+    next.llm.baseUrl = fileConfig.llm.baseUrl
+  }
+  if (patch.llm?.model === undefined && fileConfig.llm?.model !== undefined) {
+    next.llm.model = fileConfig.llm.model
+  }
+  if (patch.llm?.apiKey === undefined && fileConfig.llm?.apiKey !== undefined) {
+    next.llm.apiKey = fileConfig.llm.apiKey
+  }
+  if (patch.llm?.timeoutMs === undefined && fileConfig.llm?.timeoutMs !== undefined) {
+    next.llm.timeoutMs = fileConfig.llm.timeoutMs
+  }
   if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true })
   fs.writeFileSync(configPath, JSON.stringify(next, null, 2))
   return getConfig()
