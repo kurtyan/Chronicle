@@ -35,6 +35,20 @@ function formatTime(date: Date): string {
   ].join(':')
 }
 
+function ceilToFiveMinutes(date: Date): Date {
+  const interval = 5 * 60_000
+  return new Date(Math.ceil(date.getTime() / interval) * interval)
+}
+
+function extractParagraphTexts(document: any): string[] {
+  return (document.content ?? []).map((node: any) =>
+    (node.content ?? [])
+      .filter((child: any) => child.type === 'text')
+      .map((child: any) => child.text ?? '')
+      .join('')
+  )
+}
+
 async function createTask(page: Page, title: string) {
   const res = await page.request.post('/api/tasks', {
     data: { title, type: 'TODO', priority: 'MEDIUM' },
@@ -86,9 +100,150 @@ async function submitProgress(page: Page, date: string, focusActivity?: Array<{ 
   return res.json()
 }
 
+async function getDayScriptRevision(page: Page, date: string): Promise<number> {
+  const current = await page.request.get(`/api/day-scripts/${date}`)
+  expect(current.ok()).toBeTruthy()
+  return ((await current.json()).revision ?? 0) as number
+}
+
 test.describe('Day Script progress sync', () => {
   test.beforeEach(async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
+  })
+
+  test('submit progress delays unworked planned focus lines after the current progress block', async ({ page }) => {
+    const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
+    expect(offsetRes.ok()).toBeTruthy()
+    const originalOffset = (await offsetRes.json()).offset
+    const currentTask = await createTask(page, `DayScript-DelayCurrent-${Date.now()}`)
+    const nextTask = await createTask(page, `DayScript-DelayNext-${Date.now()}`)
+    const laterTask = await createTask(page, `DayScript-DelayLater-${Date.now()}`)
+    const date = todayDate()
+    const target = ceilToFiveMinutes(new Date())
+    const firstStart = addMinutes(target, -25)
+    const firstEnd = addMinutes(firstStart, 10)
+    const secondStart = addMinutes(target, -15)
+    const secondEnd = addMinutes(secondStart, 20)
+    const thirdStart = addMinutes(target, -10)
+    const thirdEnd = addMinutes(thirdStart, 10)
+
+    try {
+      const saveOffset = await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 0 } })
+      expect(saveOffset.ok()).toBeTruthy()
+
+      const save = await page.request.put(`/api/day-scripts/${date}`, {
+        data: {
+          expectedRevision: await getDayScriptRevision(page, date),
+          document: doc([
+            { text: `${formatTime(firstStart)}-${formatTime(firstEnd)} @${currentTask.title}`, taskId: currentTask.id },
+            { text: 'Actual progress happened here' },
+            { text: `${formatTime(secondStart)}-${formatTime(secondEnd)} @${nextTask.title}`, taskId: nextTask.id },
+            { text: `${formatTime(thirdStart)}-${formatTime(thirdEnd)} @${laterTask.title}`, taskId: laterTask.id },
+          ]),
+        },
+      })
+      expect(save.ok()).toBeTruthy()
+      const saved = await save.json()
+
+      const submitted = await submitProgress(page, date)
+      expect(submitted.script.revision).toBe(saved.script.revision + 1)
+      const lines = extractParagraphTexts(submitted.script.document)
+      expect(lines[0]).toContain(`${formatTime(firstStart)}-${formatTime(firstEnd)}`)
+      expect(lines[2]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 20))}`)
+      expect(lines[3]).toContain(`${formatTime(addMinutes(target, 5))}-${formatTime(addMinutes(target, 15))}`)
+    } finally {
+      await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
+    }
+  })
+
+  test('submit progress delays from the first timed focus line when no block has actual progress', async ({ page }) => {
+    const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
+    expect(offsetRes.ok()).toBeTruthy()
+    const originalOffset = (await offsetRes.json()).offset
+    const firstTask = await createTask(page, `DayScript-DelayFirst-${Date.now()}`)
+    const secondTask = await createTask(page, `DayScript-DelaySecond-${Date.now()}`)
+    const date = todayDate()
+    const target = ceilToFiveMinutes(new Date())
+    const firstStart = addMinutes(target, -20)
+    const firstEnd = addMinutes(firstStart, 10)
+    const secondStart = addMinutes(target, -5)
+    const secondEnd = addMinutes(secondStart, 15)
+
+    try {
+      const saveOffset = await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 0 } })
+      expect(saveOffset.ok()).toBeTruthy()
+
+      const save = await page.request.put(`/api/day-scripts/${date}`, {
+        data: {
+          expectedRevision: await getDayScriptRevision(page, date),
+          document: doc([
+            { text: `${formatTime(firstStart)}-${formatTime(firstEnd)} @${firstTask.title}`, taskId: firstTask.id },
+            { text: '' },
+            { text: '' },
+            { text: `${formatTime(secondStart)}-${formatTime(secondEnd)} @${secondTask.title} ✅`, taskId: secondTask.id },
+          ]),
+        },
+      })
+      expect(save.ok()).toBeTruthy()
+
+      const submitted = await submitProgress(page, date)
+      const lines = extractParagraphTexts(submitted.script.document)
+      expect(lines[0]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 10))}`)
+      expect(lines[3]).toContain(`${formatTime(addMinutes(target, 15))}-${formatTime(addMinutes(target, 30))}`)
+      expect(submitted.createdLogs).toHaveLength(0)
+    } finally {
+      await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
+    }
+  })
+
+  test('submit progress does not delay future planned focus lines or create a new revision', async ({ page }) => {
+    const task = await createTask(page, `DayScript-NoAdvance-${Date.now()}`)
+    const date = uniqueScriptDate(46)
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title}`, taskId: task.id },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.script.revision).toBe(saved.script.revision)
+    expect(extractParagraphTexts(submitted.script.document)[0]).toContain('10:00-10:30')
+  })
+
+  test('cross-midnight planned time saves and records planned minutes', async ({ page }) => {
+    const task = await createTask(page, `DayScript-CrossMidnight-${Date.now()}`)
+    const date = uniqueScriptDate(47)
+    const nextDate = uniqueScriptDate(48)
+    const firstEditedAt = Date.now() - 60_000
+
+    const save = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `23:55-00:15 @${task.title} ✅`, taskId: task.id },
+          { text: 'Cross-midnight progress' },
+        ]),
+      },
+    })
+    expect(save.ok()).toBeTruthy()
+    const saved = await save.json()
+    expect(saved.validationErrors).toHaveLength(0)
+
+    const submitted = await submitProgress(page, date, [{
+      blockKey: `0|23:55|00:15|@${task.title}|${task.id}`,
+      taskId: task.id,
+      firstEditedAt,
+    }])
+    expect(submitted.executionRecords).toHaveLength(1)
+    expect(submitted.executionRecords[0].plannedStartAt).toBe(localTimestamp(date, '23:55'))
+    expect(submitted.executionRecords[0].plannedEndAt).toBe(localTimestamp(nextDate, '00:15'))
+    expect(submitted.executionRecords[0].plannedMinutes).toBe(20)
   })
 
   test('inserting a block before a completed block preserves existing sync identity', async ({ page }) => {
@@ -1539,7 +1694,7 @@ test.describe('Day Script progress sync', () => {
 
     const save = await page.request.put(`/api/day-scripts/${date}`, {
       data: {
-        expectedRevision: 0,
+        expectedRevision: await getDayScriptRevision(page, date),
         document: doc([
           { text: `${start}-${end} @${task.title}`, taskId: task.id },
           { text: 'Existing progress' },

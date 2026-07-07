@@ -160,6 +160,8 @@ export function findActiveBlock(blocks: Array<Pick<DayScriptBlock, 'startTime' |
     const [endH, endM] = block.endTime.split(':').map(Number)
     const start = startH * 60 + startM
     const end = endH * 60 + endM
-    return currentMinutes >= start && currentMinutes < end
+    if (end > start) return currentMinutes >= start && currentMinutes < end
+    if (end < start) return currentMinutes >= start || currentMinutes < end
+    return false
   })
 }

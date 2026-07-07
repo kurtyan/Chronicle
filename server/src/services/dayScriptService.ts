@@ -334,6 +334,102 @@ function normalizeTimeHeaders(document: JsonNode): JsonNode {
   return cloned
 }
 
+function formatMinutesAsTime(totalMinutes: number): string {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440
+  const hours = Math.floor(normalized / 60)
+  const minutes = normalized % 60
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
+function plannedDurationMinutes(startTime: string, endTime: string): number | null {
+  const start = timeToMinutes(startTime)
+  const end = timeToMinutes(endTime)
+  if (start === null || end === null || start === end) return null
+  return end > start ? end - start : end + 1440 - start
+}
+
+function hasActualProgressContent(block: Pick<RichDayScriptBlock, 'progressText' | 'progressHtml' | 'progressLines'>): boolean {
+  if (normalizeProgress(block.progressText).length > 0) return true
+  const progressHtml = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
+  return progressHtml.trim().length > 0
+}
+
+function ceilTimestampToFiveMinutes(timestamp: number): number {
+  const interval = 5 * 60_000
+  return Math.ceil(timestamp / interval) * interval
+}
+
+function rewritePlannedTimeHeaders(document: JsonNode, replacements: Map<number, { startTime: string; endTime: string }>): JsonNode {
+  if (replacements.size === 0) return document
+  const cloned = cloneNode(document)
+  let blockIndex = 0
+
+  const visit = (node: JsonNode) => {
+    const type = node.type ?? ''
+    if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem') {
+      const line = collectInlineText(node.content ?? [])
+      const visible = line.text.trimEnd()
+      const header = parseTimeHeader(visible)
+      const newTaskHeader = visible.match(NEW_TASK_HEADER_RE)
+      const isFocusLine = Boolean(header || line.taskIds.length > 0 || newTaskHeader)
+      if (!isFocusLine) return
+
+      const replacement = replacements.get(blockIndex)
+      blockIndex += 1
+      if (!replacement || !header) return
+
+      node.content = replaceLeadingText(
+        node.content,
+        header.rangeText.length,
+        `${replacement.startTime}-${replacement.endTime}`
+      )
+      return
+    }
+
+    for (const child of node.content ?? []) visit(child)
+  }
+
+  for (const child of cloned.content ?? []) visit(child)
+  return cloned
+}
+
+function rescheduleUnworkedPlannedFocus(document: JsonNode, blocks: RichDayScriptBlock[], scriptDate: string, now: number): { document: JsonNode; changed: boolean } {
+  let lastWorkedIndex = -1
+  blocks.forEach((block, index) => {
+    if (hasActualProgressContent(block)) lastWorkedIndex = index
+  })
+
+  const candidates = blocks
+    .map((block, index) => ({ block, index }))
+    .filter(({ block, index }) =>
+      index > lastWorkedIndex
+      && Boolean(block.startTime && block.endTime)
+      && plannedDurationMinutes(block.startTime, block.endTime) !== null
+      && !hasActualProgressContent(block)
+    )
+
+  const first = candidates[0]
+  if (!first) return { document, changed: false }
+
+  const firstStartAt = plannedRangeTimestamps(scriptDate, first.block.startTime, first.block.endTime).startAt
+  const offsetMinutes = Math.max(0, minutesBetween(firstStartAt, ceilTimestampToFiveMinutes(now)))
+  if (offsetMinutes <= 0) return { document, changed: false }
+
+  const replacements = new Map<number, { startTime: string; endTime: string }>()
+  for (const { block, index } of candidates) {
+    const duration = plannedDurationMinutes(block.startTime, block.endTime)
+    const startMinutes = timeToMinutes(block.startTime)
+    if (duration === null || startMinutes === null) continue
+    const nextStart = startMinutes + offsetMinutes
+    replacements.set(index, {
+      startTime: formatMinutesAsTime(nextStart),
+      endTime: formatMinutesAsTime(nextStart + duration),
+    })
+  }
+
+  return { document: rewritePlannedTimeHeaders(document, replacements), changed: replacements.size > 0 }
+}
+
 function rewriteNewTaskHeaders(document: JsonNode): { document: JsonNode; createdTasks: Task[] } {
   const cloned = cloneNode(document)
   const createdTasks: Task[] = []
@@ -686,6 +782,23 @@ function plannedTimestamp(scriptDate: string, time: string): number {
   return new Date(year, month - 1, day + naturalDayOffset, hour, minute, 0, 0).getTime()
 }
 
+function plannedRangeTimestamps(scriptDate: string, startTime: string, endTime: string): { startAt: number; endAt: number } {
+  const startAt = plannedTimestamp(scriptDate, startTime)
+  const [endHour, endMinute] = endTime.split(':').map(Number)
+  const startDate = new Date(startAt)
+  let endAt = new Date(
+    startDate.getFullYear(),
+    startDate.getMonth(),
+    startDate.getDate(),
+    endHour,
+    endMinute,
+    0,
+    0
+  ).getTime()
+  if (endAt <= startAt) endAt += 24 * 60 * 60_000
+  return { startAt, endAt }
+}
+
 function addDays(date: string, offset: number): string {
   const [year, month, day] = date.split('-').map(Number)
   const next = new Date(year, month - 1, day + offset)
@@ -740,8 +853,7 @@ function createExecutionRecord(scriptDate: string, block: DayScriptBlock, taskId
   const activity = activityMap.get(activityMapKey(blockKey, taskId))
   if (!activity || !Number.isFinite(activity.firstEditedAt) || activity.firstEditedAt <= 0) return null
 
-  const plannedStartAt = plannedTimestamp(scriptDate, block.startTime)
-  const plannedEndAt = plannedTimestamp(scriptDate, block.endTime)
+  const { startAt: plannedStartAt, endAt: plannedEndAt } = plannedRangeTimestamps(scriptDate, block.startTime, block.endTime)
   const actualStartedAt = Math.min(activity.firstEditedAt, completedAt)
   const actualCompletedAt = completedAt
   const id = crypto.randomUUID()
@@ -827,7 +939,7 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
       const endTime = header?.endTime ?? (newTaskHeader?.[3] ? parseTimeValue(newTaskHeader[3]) ?? '' : '')
       const startMinutes = timeToMinutes(startTime)
       const endMinutes = timeToMinutes(endTime)
-      if ((header || (newTaskHeader?.[2] && newTaskHeader?.[3])) && (startMinutes === null || endMinutes === null || endMinutes <= startMinutes)) {
+      if ((header || (newTaskHeader?.[2] && newTaskHeader?.[3])) && (startMinutes === null || endMinutes === null || endMinutes === startMinutes)) {
         validationErrors.push({ lineIndex, message: 'Invalid time range.' })
         current = null
         return
@@ -1349,9 +1461,11 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
 
   const transaction = getDb().transaction(() => {
     let document = existing.document
+    let documentChanged = false
     const rewriteResult = rewriteNewTaskHeaders(existing.document)
     if (rewriteResult.createdTasks.length > 0) {
       document = rewriteResult.document
+      documentChanged = true
       createdTasks.push(...rewriteResult.createdTasks)
 
       const rewrittenParsed = parseDocument(document)
@@ -1359,25 +1473,38 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
         throw new Error('UNEXPECTED_DAY_SCRIPT_VALIDATION_AFTER_REWRITE')
       }
       richBlocks = assignBlockIds(rewrittenParsed.blocks, existing.blocks)
+    }
 
+    const rescheduleResult = rescheduleUnworkedPlannedFocus(document, richBlocks, scriptDate, now)
+    if (rescheduleResult.changed) {
+      document = rescheduleResult.document
+      documentChanged = true
+      const rescheduledParsed = parseDocument(document)
+      if (rescheduledParsed.validationErrors.length > 0) {
+        throw new Error('UNEXPECTED_DAY_SCRIPT_VALIDATION_AFTER_RESCHEDULE')
+      }
+      richBlocks = assignBlockIds(rescheduledParsed.blocks, existing.blocks)
+    }
+
+    if (documentChanged) {
       run(
         'UPDATE day_scripts SET document_json = ?, revision = ?, updated_at = ? WHERE script_date = ?',
         [JSON.stringify(document), existing.revision + 1, now, scriptDate]
       )
       upsertBlocks(scriptDate, richBlocks, now)
+    }
 
-      for (const task of createdTasks) {
-        const block = richBlocks.find((item) => item.taskIds.includes(task.id))
-        if (!block) continue
-        const bodyHtml = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
-        if (bodyHtml || block.progressText.trim()) {
-          createTaskEntry(task.id, bodyHtml || progressToHtml(block.progressText), 'body')
-        }
-        run(
-          'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-          [block.id, task.id, blockSyncText(block), blockSyncHtml(block), null, now]
-        )
+    for (const task of createdTasks) {
+      const block = richBlocks.find((item) => item.taskIds.includes(task.id))
+      if (!block) continue
+      const bodyHtml = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
+      if (bodyHtml || block.progressText.trim()) {
+        createTaskEntry(task.id, bodyHtml || progressToHtml(block.progressText), 'body')
       }
+      run(
+        'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [block.id, task.id, blockSyncText(block), blockSyncHtml(block), null, now]
+      )
     }
 
     const syncMap = new Map<string, ExistingSync>()

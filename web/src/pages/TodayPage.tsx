@@ -222,7 +222,10 @@ function getActionState(context: TaskProgressContext, updatingIds: Set<string>):
 
 function getMinutesUntil(endTime: string, now: Date): number {
   const [endHour, endMinute] = endTime.split(':').map(Number)
-  return endHour * 60 + endMinute - (now.getHours() * 60 + now.getMinutes())
+  const currentMinutes = now.getHours() * 60 + now.getMinutes()
+  let endMinutes = endHour * 60 + endMinute
+  if (endMinutes <= currentMinutes) endMinutes += 24 * 60
+  return endMinutes - currentMinutes
 }
 
 function FocusStatusBar({ blocks, tasks, scriptDate, todayScriptDate }: { blocks: DayScriptBlock[]; tasks: Task[]; scriptDate: string; todayScriptDate: string }) {
@@ -1111,6 +1114,15 @@ export function TodayPage() {
       setScriptDirty(false)
       setSaveStatus('saved')
       setConflicts(result.conflicts)
+      const currentActivityKeys = new Set<string>()
+      for (const block of result.script.blocks) {
+        for (const taskId of block.taskIds) {
+          currentActivityKeys.add(activityMapKey(buildDayScriptActivityKey(block, taskId), taskId))
+        }
+      }
+      for (const key of [...focusActivityRef.current.keys()]) {
+        if (!currentActivityKeys.has(key)) focusActivityRef.current.delete(key)
+      }
       if (result.executionRecords.length > 0) {
         for (const record of result.executionRecords) {
           const block = result.script.blocks.find((item) => item.id === record.blockId)
@@ -1118,8 +1130,8 @@ export function TodayPage() {
           const blockKey = buildDayScriptActivityKey(block, record.taskId)
           focusActivityRef.current.delete(activityMapKey(blockKey, record.taskId))
         }
-        saveStoredFocusActivity(displayDateRef.current, focusActivityRef.current)
       }
+      saveStoredFocusActivity(displayDateRef.current, focusActivityRef.current)
       await Promise.all([loadTodos(), loadWorkOverviewTasks()])
       const createdTaskId = result.createdTasks[0]?.id
       if (createdTaskId) await setActiveTask(createdTaskId)
