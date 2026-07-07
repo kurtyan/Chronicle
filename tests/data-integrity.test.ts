@@ -77,6 +77,25 @@ test.describe('Task entry data integrity', () => {
     expect(afkEventRes.status()).toBe(409)
   })
 
+  test('AFK event without submittedAt is bounded by the resumed session start', async ({ page }) => {
+    await page.request.post('/api/afk').catch(() => {})
+    const task = await createTask(page, `Integrity-AfkAutoBound-${Date.now()}`)
+    const triggeredAt = Date.now()
+    const startedAt = triggeredAt + 10
+    const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
+      data: { startedAt },
+    })
+    expect(resumeRes.ok()).toBeTruthy()
+    await page.waitForTimeout(20)
+
+    const afkEventRes = await page.request.post('/api/afk-events', {
+      data: { reason: 'idle', triggeredAt, userNote: 'submitted after auto resume' },
+    })
+    expect(afkEventRes.status()).toBe(201)
+    const afkEvent = await afkEventRes.json()
+    expect(afkEvent.submittedAt).toBe(startedAt)
+  })
+
   test('resume from AFK moves pending task to doing', async ({ page }) => {
     const task = await createTask(page, `Integrity-ResumePending-${Date.now()}`)
     const startedAt = Date.now() - 10_000

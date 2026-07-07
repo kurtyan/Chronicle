@@ -773,12 +773,22 @@ function rowToAfkEvent(row: any): AfkEvent {
   }
 }
 
-export function createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt = Date.now()): AfkEvent {
+export function createAfkEvent(reason: string, triggeredAt: number, userNote?: string, submittedAt?: number): AfkEvent {
+  let effectiveSubmittedAt = submittedAt ?? Date.now()
+
+  const firstResumedSession = queryOne(
+    'SELECT started_at FROM work_sessions WHERE started_at > ? AND started_at < ? ORDER BY started_at ASC LIMIT 1',
+    [triggeredAt, effectiveSubmittedAt]
+  )
+
+  if (firstResumedSession && submittedAt === undefined) {
+    effectiveSubmittedAt = firstResumedSession.started_at
+  }
 
   // Reject if the AFK time range overlaps with any work session
   const overlap = queryOne(
     'SELECT COUNT(*) as count FROM work_sessions WHERE started_at < ? AND (ended_at IS NULL OR ended_at > ?)',
-    [submittedAt, triggeredAt]
+    [effectiveSubmittedAt, triggeredAt]
   )
   if (overlap && overlap.count > 0) {
     throw new Error('AFK event overlaps with an existing work session')
@@ -787,7 +797,7 @@ export function createAfkEvent(reason: string, triggeredAt: number, userNote?: s
   const id = crypto.randomUUID()
   run(
     'INSERT INTO afk_events(id, triggered_at, reason, user_note, submitted_at) VALUES (?, ?, ?, ?, ?)',
-    [id, triggeredAt, reason, userNote ?? null, submittedAt]
+    [id, triggeredAt, reason, userNote ?? null, effectiveSubmittedAt]
   )
   return rowToAfkEvent(queryOne('SELECT * FROM afk_events WHERE id = ?', [id])!)
 }
