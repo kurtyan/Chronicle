@@ -8,6 +8,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import * as api from '@/services/api'
 import { cn } from '@/lib/utils'
 import { formatTaskTime } from '@/lib/time'
+import { consumeSearchJumpIntent } from '@/lib/searchJump'
 import type { Note } from '@/types'
 
 const NOTES_LIST_PERCENT_KEY = 'chronicle_notes_list_pct'
@@ -38,6 +39,10 @@ export function NotesPage() {
   const [draftTitle, setDraftTitle] = useState('')
   const [draftContent, setDraftContent] = useState('')
   const [draftTags, setDraftTags] = useState('')
+  const [jumpHighlightTokens, setJumpHighlightTokens] = useState<string[]>([])
+  const [jumpHighlightTitle, setJumpHighlightTitle] = useState(false)
+  const [jumpScrollKey, setJumpScrollKey] = useState(0)
+  const [jumpSignal, setJumpSignal] = useState(0)
   const [localSaveStatus, setLocalSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [notesListWidth, setNotesListWidth] = useState(() => {
     const saved = localStorage.getItem(NOTES_LIST_PERCENT_KEY)
@@ -82,6 +87,12 @@ export function NotesPage() {
     const id = new URLSearchParams(location.search).get('id')
     if (id) void setActiveNote(id)
   }, [location.search, setActiveNote])
+
+  useEffect(() => {
+    const handler = () => setJumpSignal((value) => value + 1)
+    window.addEventListener('chronicle:search-jump', handler)
+    return () => window.removeEventListener('chronicle:search-jump', handler)
+  }, [])
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get('id')
@@ -129,6 +140,30 @@ export function NotesPage() {
 
   useEffect(() => {
     applyNoteDraft(activeNote)
+  }, [activeNote?.id, jumpSignal])
+
+  useEffect(() => {
+    if (!activeNote) return
+    const intent = consumeSearchJumpIntent('note', activeNote.id)
+    if (!intent) return
+
+    const titleMatch = intent.matchedSource === 'note_title' || intent.matchedSource === 'note_tags'
+    setJumpHighlightTokens(titleMatch ? [] : intent.tokens)
+    setJumpHighlightTitle(titleMatch)
+    setJumpScrollKey((key) => key + 1)
+
+    const frame = window.requestAnimationFrame(() => {
+      if (titleMatch) titleInputRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+    const clearTimer = window.setTimeout(() => {
+      setJumpHighlightTokens([])
+      setJumpHighlightTitle(false)
+    }, 3000)
+
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(clearTimer)
+    }
   }, [activeNote?.id])
 
   useEffect(() => {
@@ -478,15 +513,15 @@ export function NotesPage() {
               </div>
             </div>
             <div className="flex shrink-0 items-start gap-3 border-b border-border bg-background px-[30px] py-2">
-              <input
-                ref={titleInputRef}
+	              <input
+	                ref={titleInputRef}
                 value={draftTitle}
                 onChange={(event) => {
                   setDraftTitle(event.target.value)
                   scheduleSave({ title: event.target.value })
                 }}
                 onKeyDown={handleTitleKeyDown}
-                className="w-full border-b border-primary bg-transparent text-xl font-bold outline-none"
+	                className={`w-full border-b border-primary bg-transparent text-xl font-bold outline-none ${jumpHighlightTitle ? 'rounded bg-primary/10 ring-1 ring-primary animate-highlight-flash' : ''}`}
                 placeholder="Untitled note"
               />
             </div>
@@ -521,10 +556,12 @@ export function NotesPage() {
                     scheduleSave({ contentHtml: normalized, tags: parsedTags })
                   }}
                   placeholder="Write a long-term note..."
-                  minHeight="calc(100vh - 210px)"
-                  taskId={activeNote.id}
-                  taskMentionTasks={tasks}
-                />
+	                  minHeight="calc(100vh - 210px)"
+	                  taskId={activeNote.id}
+	                  taskMentionTasks={tasks}
+	                  searchTokens={jumpHighlightTokens}
+	                  searchScrollKey={jumpScrollKey}
+	                />
               </div>
             </section>
           </>

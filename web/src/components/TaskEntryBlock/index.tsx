@@ -567,6 +567,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
     <>
       <div
         data-testid="task-entry-block"
+        data-task-entry-id={entry.id}
         className={`py-2 cursor-pointer hover:bg-muted/40 rounded group ${highlightPlan ? 'bg-primary/10 ring-1 ring-primary animate-highlight-flash' : ''}`}
         onMouseDown={handleMouseDown}
         onMouseUp={handleSelectionMouseUp}

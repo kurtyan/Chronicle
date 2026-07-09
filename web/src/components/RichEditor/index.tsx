@@ -1,6 +1,7 @@
 import { useEditor, EditorContent, type Editor } from '@tiptap/react'
-import type { NodeViewRenderer, NodeViewRendererProps } from '@tiptap/core'
-import { Selection, TextSelection } from '@tiptap/pm/state'
+import { Extension, type NodeViewRenderer, type NodeViewRendererProps } from '@tiptap/core'
+import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state'
+import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import StarterKit from '@tiptap/starter-kit'
 import ImageResize from 'tiptap-extension-resize-image'
 import Link from '@tiptap/extension-link'
@@ -112,6 +113,8 @@ interface RichEditorProps {
   taskId?: string
   taskMentionTasks?: Task[]
   onTaskMentionIdsChange?: (taskIds: string[]) => void
+  searchTokens?: string[]
+  searchScrollKey?: string | number
 }
 
 const ChronicleLink = Link.extend({
@@ -125,6 +128,60 @@ const ChronicleLink = Link.extend({
         renderHTML: (attributes) => attributes.taskId ? { 'data-task-id': attributes.taskId } : {},
       },
     }
+  },
+})
+
+const searchHighlightPluginKey = new PluginKey<string[]>('searchHighlight')
+
+function buildSearchDecorations(doc: any, tokens: string[]): DecorationSet {
+  const sorted = [...new Set(tokens.map((token) => token.trim().toLowerCase()).filter(Boolean))]
+    .sort((a, b) => b.length - a.length)
+  if (sorted.length === 0) return DecorationSet.empty
+
+  const decorations: Decoration[] = []
+  doc.descendants((node: any, pos: number) => {
+    if (!node.isText || !node.text) return
+    const lower = node.text.toLowerCase()
+    const ranges: Array<{ from: number; to: number }> = []
+    for (const token of sorted) {
+      let index = lower.indexOf(token)
+      while (index >= 0) {
+        const from = pos + index
+        const to = from + token.length
+        if (!ranges.some((range) => from < range.to && to > range.from)) {
+          ranges.push({ from, to })
+        }
+        index = lower.indexOf(token, index + token.length)
+      }
+    }
+    ranges.sort((a, b) => a.from - b.from)
+    for (const range of ranges) {
+      decorations.push(Decoration.inline(range.from, range.to, { class: 'search-highlight' }))
+    }
+  })
+  return DecorationSet.create(doc, decorations)
+}
+
+const SearchHighlight = Extension.create({
+  name: 'searchHighlight',
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<string[]>({
+        key: searchHighlightPluginKey,
+        state: {
+          init: () => [],
+          apply(transaction, value) {
+            const next = transaction.getMeta(searchHighlightPluginKey)
+            return Array.isArray(next) ? next : value
+          },
+        },
+        props: {
+          decorations(state) {
+            return buildSearchDecorations(state.doc, searchHighlightPluginKey.getState(state) ?? [])
+          },
+        },
+      }),
+    ]
   },
 })
 
@@ -254,6 +311,8 @@ function RichEditorInner({
   taskId,
   taskMentionTasks = [],
   onTaskMentionIdsChange,
+  searchTokens = [],
+  searchScrollKey,
 }: RichEditorProps) {
   const { t } = useI18n()
   const contentRef = useRef(content)
@@ -285,10 +344,11 @@ function RichEditorInner({
       openOnClick: false,
       protocols: ['file'],
     }),
-    Placeholder.configure({
-      placeholder: placeholder ?? t('editor.placeholder'),
-    }),
-  ], []) // stable across re-renders
+	    Placeholder.configure({
+	      placeholder: placeholder ?? t('editor.placeholder'),
+	    }),
+    SearchHighlight,
+	  ], []) // stable across re-renders
 
   const editor = useEditor({
     extensions,
@@ -570,11 +630,25 @@ function RichEditorInner({
     }
   }, [content, editor])
 
+	  useEffect(() => {
+	    if (editor && autoFocus) {
+	      editor.commands.focus()
+	    }
+	  }, [editor, autoFocus])
+
   useEffect(() => {
-    if (editor && autoFocus) {
-      editor.commands.focus()
-    }
-  }, [editor, autoFocus])
+    if (!editor) return
+    editor.view.dispatch(editor.state.tr.setMeta(searchHighlightPluginKey, searchTokens))
+  }, [editor, searchTokens])
+
+  useEffect(() => {
+    if (!editor || !searchScrollKey || searchTokens.length === 0) return
+    const frame = window.requestAnimationFrame(() => {
+      const match = containerRef.current?.querySelector('.search-highlight') as HTMLElement | null
+      match?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [editor, searchScrollKey, searchTokens])
 
   // Keyboard shortcuts at DOM level
   useEffect(() => {

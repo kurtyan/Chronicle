@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 import { getDb } from '../db'
 import { tokenize } from './tokenizer'
+import { htmlToPlainText } from './searchText'
 import { getTaskById, getTaskEntries, getPinnedEntry, type Task, type TaskEntry } from './taskService'
 
 export interface Note {
@@ -36,23 +37,6 @@ export interface NoteSearchResult {
   tokens: string[]
   exactMatch: boolean
   rank: number
-}
-
-function htmlToPlainText(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|h[1-6]|blockquote|pre)>/gi, '\n')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 function escapeHtml(text: string): string {
@@ -381,12 +365,27 @@ export function searchNotes(query: string, limit = 50, includeArchived = false):
     `).all(ftsQuery, safeLimit) as Array<{ note_id: string; source: 'note_title' | 'note_content' | 'note_tags'; content: string; rank: number }>
     : []
 
-  const exactRows = db.prepare(`
-    SELECT id as note_id, 'note_content' as source, content_html as content, -1.0 as rank
+  const normalizedQuery = trimmed.toLowerCase()
+  const noteRows = db.prepare(`
+    SELECT id, title, content_html, tags
     FROM notes
-    WHERE ${includeArchived ? '' : 'archived = 0 AND '}(title LIKE ? OR content_html LIKE ? OR tags LIKE ?)
-    LIMIT ?
-  `).all(`%${trimmed}%`, `%${trimmed}%`, `%${trimmed}%`, safeLimit) as Array<{ note_id: string; source: 'note_content'; content: string; rank: number }>
+    ${includeArchived ? '' : 'WHERE archived = 0'}
+  `).all() as Array<{ id: string; title: string; content_html: string; tags: string }>
+  const exactRows = noteRows
+    .map((note) => {
+      if (note.title.toLowerCase().includes(normalizedQuery)) return { note, source: 'note_title' as const }
+      if ((note.tags || '').toLowerCase().includes(normalizedQuery)) return { note, source: 'note_tags' as const }
+      if (htmlToPlainText(note.content_html).toLowerCase().includes(normalizedQuery)) return { note, source: 'note_content' as const }
+      return null
+    })
+    .filter((match): match is { note: { id: string; content_html: string }; source: 'note_title' | 'note_content' | 'note_tags' } => Boolean(match))
+    .slice(0, safeLimit)
+    .map(({ note, source }) => ({
+      note_id: note.id,
+      source,
+      content: note.content_html,
+      rank: -1.0,
+    }))
 
   const combined = [...exactRows, ...ftsRows]
   const best = new Map<string, { source: 'note_title' | 'note_content' | 'note_tags'; rank: number }>()

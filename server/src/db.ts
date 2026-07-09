@@ -164,6 +164,15 @@ export function initDb() {
     WHERE target_entry_id IS NOT NULL
   `)
 
+  const notesFtsExists = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'").get() as { sql: string } | undefined
+  if (notesFtsExists) {
+    const columns = db.prepare("PRAGMA table_info('notes_fts')").all() as Array<{ name: string }>
+    if (!columns.some((col) => col.name === 'source') || /content\s*=\s*''/i.test(notesFtsExists.sql || '')) {
+      db.exec('DROP TABLE notes_fts')
+      ftsSchemaChanged = true
+    }
+  }
+
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
       note_id,

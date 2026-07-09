@@ -39,6 +39,44 @@ test.describe('Task entry data integrity', () => {
     expect(search.results.some((result: { taskId: string }) => result.taskId === task.id)).toBeTruthy()
   })
 
+  test('search indexes technical tokens and ignores HTML tag noise', async ({ page }) => {
+    const unique = Date.now()
+    const technicalTask = await createTask(page, `Integrity-TechSearch-${unique}`)
+    const htmlOnlyTask = await createTask(page, `Integrity-HtmlNoise-${unique}`)
+    await page.request.post(`/api/tasks/${technicalTask.id}/logs`, {
+      data: { content: '<p>OAuth2 react-native node_modules https://example.com/api</p>', type: 'log' },
+    })
+    await page.request.post(`/api/tasks/${htmlOnlyTask.id}/logs`, {
+      data: { content: '<pre><code>No searchable marker in text</code></pre>', type: 'log' },
+    })
+
+    for (const query of [technicalTask.id, 'OAuth2', 'react-native', 'node_modules', 'https://example.com/api']) {
+      const searchRes = await page.request.get(`/api/search?q=${encodeURIComponent(query)}`)
+      expect(searchRes.ok()).toBeTruthy()
+      const search = await searchRes.json()
+      expect(search.results.some((result: { taskId: string }) => result.taskId === technicalTask.id)).toBeTruthy()
+    }
+
+    const htmlTagSearch = await (await page.request.get(`/api/search?q=${encodeURIComponent('code')}`)).json()
+    expect(htmlTagSearch.results.some((result: { taskId: string }) => result.taskId === htmlOnlyTask.id)).toBeFalsy()
+  })
+
+  test('short English search does not fall back to substring matches inside longer words', async ({ page }) => {
+    const unique = Date.now()
+    const aiTask = await createTask(page, `Integrity-AI-${unique}`)
+    const pairTask = await createTask(page, `Integrity-Pair-${unique}`)
+    await page.request.post(`/api/tasks/${aiTask.id}/logs`, {
+      data: { content: '<p>AI planning note</p>', type: 'log' },
+    })
+    await page.request.post(`/api/tasks/${pairTask.id}/logs`, {
+      data: { content: '<p>Repair pair plain stairs</p>', type: 'log' },
+    })
+
+    const search = await (await page.request.get('/api/search?q=AI')).json()
+    expect(search.results.some((result: { taskId: string }) => result.taskId === aiTask.id)).toBeTruthy()
+    expect(search.results.some((result: { taskId: string }) => result.taskId === pairTask.id)).toBeFalsy()
+  })
+
   test('resume from AFK starts a session at the detected return time and allows bounded AFK note', async ({ page }) => {
     const task = await createTask(page, `Integrity-ResumeAfk-${Date.now()}`)
     const takeoverRes = await page.request.post(`/api/tasks/${task.id}/takeover`)

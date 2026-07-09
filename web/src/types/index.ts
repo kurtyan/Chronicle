@@ -78,6 +78,7 @@ export interface WorkSession {
 
 export interface SearchResult {
   taskId: string
+  entryId?: string | null
   taskTitle: string
   taskType: TaskType
   taskStatus: TaskStatus

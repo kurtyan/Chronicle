@@ -740,10 +740,11 @@ export class EmbeddedApiProvider implements ApiInterface {
     }))
 
     const entries = this.queryAll(
-      'SELECT task_id, content, type FROM task_entries WHERE content LIKE ?',
+      'SELECT id, task_id, content, type FROM task_entries WHERE content LIKE ?',
       [like]
     ).map((row: any) => ({
       taskId: row.task_id,
+      entryId: row.id,
       taskTitle: '',
       taskType: 'TODO' as TaskType,
       taskStatus: 'PENDING' as TaskStatus,

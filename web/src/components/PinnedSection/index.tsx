@@ -12,6 +12,7 @@ interface PinnedSectionProps {
   onUpdate: (entryId: string, content: string) => Promise<void>
   onUnpin: (entryId: string) => Promise<void>
   highlightTokens?: string[]
+  highlightActive?: boolean
 }
 
 function isHtmlEmpty(html: string): boolean {
@@ -20,7 +21,7 @@ function isHtmlEmpty(html: string): boolean {
   return text.length === 0
 }
 
-export function PinnedSection({ entry, taskId, onUpdate, onUnpin, highlightTokens }: PinnedSectionProps) {
+export function PinnedSection({ entry, taskId, onUpdate, onUnpin, highlightTokens, highlightActive = false }: PinnedSectionProps) {
   const { t } = useI18n()
   const [editing, setEditing] = useState(false)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('chronicle_pinned_collapsed') === '1')
@@ -42,7 +43,10 @@ export function PinnedSection({ entry, taskId, onUpdate, onUnpin, highlightToken
   }
 
   return (
-    <div className="ml-auto w-full max-w-[560px] rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50/60 dark:bg-amber-950/30 px-3 py-2 shadow-sm">
+    <div
+      data-task-entry-id={entry.id}
+      className={`ml-auto w-full max-w-[560px] rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50/60 dark:bg-amber-950/30 px-3 py-2 shadow-sm ${highlightActive ? 'ring-1 ring-primary animate-highlight-flash' : ''}`}
+    >
       <div className="flex w-full items-center justify-between gap-3">
         <button
           className="flex items-center gap-1.5 text-left"

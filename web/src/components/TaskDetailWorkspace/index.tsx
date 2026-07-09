@@ -11,6 +11,7 @@ import { registerShortcut } from '@/shortcuts/registry'
 import { Copy, AlertTriangle, FilePlus2, FileText } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { NotePickerDialog } from '@/components/NotePickerDialog'
+import { consumeSearchJumpIntent, hasSearchJumpIntent } from '@/lib/searchJump'
 
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
@@ -58,7 +59,13 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const [linkedNotes, setLinkedNotes] = useState<Note[]>([])
   const [notePickerOpen, setNotePickerOpen] = useState(false)
   const [pendingNoteAppend, setPendingNoteAppend] = useState<{ content: string; entryId?: string } | null>(null)
+  const [jumpHighlightTokens, setJumpHighlightTokens] = useState<string[]>([])
+  const [jumpHighlightEntryId, setJumpHighlightEntryId] = useState<string | null>(null)
+  const [jumpHighlightTitle, setJumpHighlightTitle] = useState(false)
+  const [jumpSignal, setJumpSignal] = useState(0)
   const workspaceScrollRef = useRef<HTMLDivElement | null>(null)
+  const taskTitleRef = useRef<HTMLDivElement | null>(null)
+  const suppressBottomScrollTaskRef = useRef<string | null>(null)
 
   // Serialize draft saves per taskId so rapid Cmd+S presses cannot race.
   const silentSaveLockRef = useRef<Record<string, Promise<void> | null>>({})
@@ -67,6 +74,12 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   const isDraftActive = activeTaskId === DRAFT_ID
   const activeSummaryContext = activeTaskId ? taskContexts[activeTaskId] : undefined
   const activeSummaryUpdating = activeTaskId ? taskSummaryUpdating.has(activeTaskId) : false
+
+  useEffect(() => {
+    const handler = () => setJumpSignal((value) => value + 1)
+    window.addEventListener('chronicle:search-jump', handler)
+    return () => window.removeEventListener('chronicle:search-jump', handler)
+  }, [])
 
   useEffect(() => {
     if (!activeTaskId || isDraftActive || !selectedTask) return
@@ -283,6 +296,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
 
   useEffect(() => {
     if (!activeTaskId || activeTaskId === DRAFT_ID || entryLoading) return
+    if (suppressBottomScrollTaskRef.current === activeTaskId || hasSearchJumpIntent('task', activeTaskId)) return
 
     const animationFrame = window.requestAnimationFrame(scrollWorkspaceToBottom)
     const delayedScroll = window.setTimeout(scrollWorkspaceToBottom, 80)
@@ -291,6 +305,37 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
       window.clearTimeout(delayedScroll)
     }
   }, [activeTaskId, entryLoading, entries, scrollWorkspaceToBottom])
+
+  useEffect(() => {
+    if (!activeTaskId || activeTaskId === DRAFT_ID || entryLoading) return
+    const intent = consumeSearchJumpIntent('task', activeTaskId)
+    if (!intent) return
+
+    suppressBottomScrollTaskRef.current = activeTaskId
+    setJumpHighlightTokens(intent.tokens)
+    setJumpHighlightEntryId(intent.entryId ?? null)
+    setJumpHighlightTitle(!intent.entryId || intent.matchedSource === 'task')
+
+    const clearTimer = window.setTimeout(() => {
+      if (suppressBottomScrollTaskRef.current === activeTaskId) suppressBottomScrollTaskRef.current = null
+      setJumpHighlightEntryId(null)
+      setJumpHighlightTitle(false)
+    }, 3000)
+
+    const frame = window.requestAnimationFrame(() => {
+      const target = intent.entryId
+        ? document.querySelector(`[data-task-entry-id="${CSS.escape(intent.entryId)}"]`) as HTMLElement | null
+        : taskTitleRef.current
+      target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      const firstMatch = target?.querySelector('.search-highlight') as HTMLElement | null
+      firstMatch?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+
+    return () => {
+      window.clearTimeout(clearTimer)
+      window.cancelAnimationFrame(frame)
+    }
+  }, [activeTaskId, entryLoading, entries, jumpSignal])
 
   useEffect(() => {
     if (!activeTaskId || activeTaskId === DRAFT_ID) {
@@ -497,7 +542,10 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
         </div>
 
         {/* Title with task ID */}
-        <div className="px-[30px] py-2 flex items-start gap-3">
+        <div
+          ref={taskTitleRef}
+          className={`px-[30px] py-2 flex items-start gap-3 rounded ${jumpHighlightTitle ? 'bg-primary/10 ring-1 ring-primary animate-highlight-flash' : ''}`}
+        >
           {editingTitle ? (
             <input
               className="text-xl font-bold flex-1 bg-transparent border-b border-primary focus:outline-none"
@@ -574,15 +622,16 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
           </div>
         )}
         {activeTaskId && !isDraftActive && pinnedEntry?.taskId === activeTaskId && (
-          <div className="px-[30px] pb-2">
-            <PinnedSection
-              entry={pinnedEntry}
+              <div className="px-[30px] pb-2">
+                <PinnedSection
+                  entry={pinnedEntry}
               taskId={activeTaskId}
               onUpdate={async (entryId, content) => { await updateEntry(activeTaskId, entryId, content) }}
               onUnpin={async (entryId) => { await unpinEntry(activeTaskId, entryId) }}
-              highlightTokens={searchMode ? searchTokens : undefined}
-            />
-          </div>
+                  highlightTokens={(searchMode ? searchTokens : jumpHighlightEntryId === pinnedEntry.id ? jumpHighlightTokens : undefined)}
+                  highlightActive={jumpHighlightEntryId === pinnedEntry.id}
+                />
+              </div>
         )}
       </div>
 
@@ -634,8 +683,8 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
                   onPin={(content) => appendToPinned(selectedTask.id, content)}
                   onAddToNote={handleAddContentToNote}
                   editing={editingEntryId === entry.id}
-                  highlightTokens={searchMode ? searchTokens : undefined}
-                  highlightPlan={entry.id === highlightEntryId}
+                  highlightTokens={searchMode ? searchTokens : jumpHighlightEntryId === entry.id ? jumpHighlightTokens : undefined}
+                  highlightPlan={entry.id === highlightEntryId || jumpHighlightEntryId === entry.id}
                   taskId={selectedTask.id}
                   onFirstMeaningfulEdit={handleFirstMeaningfulEdit}
                   onEditingChange={(editing) => {

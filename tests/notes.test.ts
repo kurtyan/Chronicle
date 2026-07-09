@@ -313,12 +313,13 @@ test.describe('Notes', () => {
     await page.getByRole('dialog').getByPlaceholder('Search...').fill(`GlobalBodyNeedle-${unique}`)
     await page.getByRole('dialog').getByText(note.title).click()
     await expect(page).toHaveURL(new RegExp(`/notes\\?id=${note.id}`))
+    await expect(page.locator('.search-highlight').filter({ hasText: `GlobalBodyNeedle-${unique}` }).first()).toBeVisible()
   })
 
   test('global search finds task entries and opens the task', async ({ page }) => {
     const unique = Date.now()
     const task = await createTask(page, `GlobalEntryTask-${unique}`)
-    await addLog(page, task.id, `<p>GlobalEntryNeedle-${unique}</p>`)
+    const log = await addLog(page, task.id, `<p>GlobalEntryNeedle-${unique}</p>`)
 
     await page.goto('/notes?lang=en')
     await page.keyboard.press(searchShortcut)
@@ -326,6 +327,7 @@ test.describe('Notes', () => {
     await page.getByRole('dialog').getByText(task.title).click()
     await expect(page).toHaveURL(/\/(\?lang=en)?$/)
     await expect(page.locator('h4').filter({ hasText: task.title }).first()).toBeVisible()
+    await expect(page.locator(`[data-task-entry-id="${log.id}"] .search-highlight`).filter({ hasText: `GlobalEntryNeedle-${unique}` }).first()).toBeVisible()
   })
 
   test('/api/search/rebuild rebuilds the notes search index', async ({ page }) => {

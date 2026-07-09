@@ -711,6 +711,7 @@ app.post('/api/tasks/:taskId/entries/:entryId/add-to-note', async (c) => {
 
 // --- Search API ---
 import { searchTasks, rebuildFtsIndex } from './services/searchService'
+import { rebuildNotesFtsIndex } from './services/noteService'
 
 app.get('/api/search', async (c) => {
   const q = c.req.query('q')
@@ -1124,12 +1125,13 @@ backfillAgentConversationsFromTaskLogs()
 
 // Auto-rebuild FTS index when tokenizer version changes
 const FTS_INDEX_VERSION_KEY = 'fts_tokenizer_version'
-const CURRENT_TOKENIZER_VERSION = '3' // v3: per-entry FTS rows with entry_id
+const CURRENT_TOKENIZER_VERSION = '4' // v4: normalized technical tokens and plain-text entry indexing
 const storedVersion = getMetaValue(FTS_INDEX_VERSION_KEY)
 if (storedVersion !== CURRENT_TOKENIZER_VERSION) {
   const log = getLogger()
   log.info(`FTS index version mismatch (stored: ${storedVersion}, current: ${CURRENT_TOKENIZER_VERSION}). Rebuilding...`)
   rebuildFtsIndex()
+  rebuildNotesFtsIndex()
   setMetaValue(FTS_INDEX_VERSION_KEY, CURRENT_TOKENIZER_VERSION)
   log.info('FTS index rebuilt successfully')
 }

@@ -23,6 +23,7 @@ import type { MeetingExtractionResult } from '@/types'
 import { fetchBackgroundTask } from '@/services/api'
 import * as api from '@/services/api'
 import type { GlobalSearchResponse, NoteSearchResult, SearchResult } from '@/types'
+import { setSearchJumpIntent } from '@/lib/searchJump'
 
 // Open links in system browser when running in Tauri
 function useSystemBrowserLinks() {
@@ -801,15 +802,30 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
     }
   }, [open, query])
 
-  async function openTask(taskId: string) {
+  async function openSearchTask(item: SearchResult & { kind: 'task' | 'task_entry' }) {
     onOpenChange(false)
+    setSearchJumpIntent({
+      target: 'task',
+      taskId: item.taskId,
+      entryId: item.entryId ?? null,
+      tokens: item.tokens.length ? item.tokens : result?.tokens ?? [],
+      query,
+      matchedSource: item.matchType,
+    })
     navigate('/')
-    await useTaskStore.getState().setActiveTask(taskId)
+    await useTaskStore.getState().setActiveTask(item.taskId)
   }
 
-  function openNote(noteId: string) {
+  function openSearchNote(item: NoteSearchResult) {
     onOpenChange(false)
-    navigate(`/notes?id=${encodeURIComponent(noteId)}`)
+    setSearchJumpIntent({
+      target: 'note',
+      noteId: item.noteId,
+      tokens: item.tokens.length ? item.tokens : result?.tokens ?? [],
+      query,
+      matchedSource: item.matchedSource,
+    })
+    navigate(`/notes?id=${encodeURIComponent(item.noteId)}`)
   }
 
   function renderTaskResult(item: SearchResult & { kind: 'task' | 'task_entry' }) {
@@ -821,7 +837,7 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
       <button
         key={`${item.kind}-${item.taskId}-${item.matchType}-${item.matchedOriginal}`}
         className="w-full rounded-md border border-border bg-background px-3 py-2 text-left hover:bg-muted"
-        onClick={() => void openTask(item.taskId)}
+        onClick={() => void openSearchTask(item)}
       >
         <div className="truncate text-sm font-medium">{item.taskTitle || item.originalTitle || item.taskId}</div>
         <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>
@@ -835,7 +851,7 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
       <button
         key={item.noteId}
         className="w-full rounded-md border border-border bg-background px-3 py-2 text-left hover:bg-muted"
-        onClick={() => openNote(item.noteId)}
+        onClick={() => openSearchNote(item)}
       >
         <div className="truncate text-sm font-medium">{item.title}</div>
         <div className="mt-0.5 text-xs text-muted-foreground">{item.noteId} · {item.matchedSource.replace('note_', '')}</div>
