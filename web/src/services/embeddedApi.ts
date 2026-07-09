@@ -1,7 +1,7 @@
 import initSqlJs, { type Database } from 'sql.js'
 import { readFile, writeFile, BaseDirectory } from '@tauri-apps/plugin-fs'
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskType, TaskStatus, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptSubmitAnchor, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
 import { DEFAULT_DAILY_SUMMARY_PROMPT, DEFAULT_MEETING_EXTRACTION_PROMPT, DEFAULT_TASK_SUMMARY_PROMPT } from '../../../shared/llmPrompts'
 
 const DB_FILENAME = 'tasks.db'
@@ -1114,7 +1114,7 @@ export class EmbeddedApiProvider implements ApiInterface {
   async confirmDayScriptProgressSync(): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
     return { createdLogs: [] }
   }
-  async submitDayScriptProgress(date: string): Promise<SubmitDayScriptProgressResult> {
+  async submitDayScriptProgress(date: string, _body?: { focusActivity?: DayScriptFocusActivity[]; submitAnchor?: DayScriptSubmitAnchor }): Promise<SubmitDayScriptProgressResult> {
     return {
       script: {
         scriptDate: date,

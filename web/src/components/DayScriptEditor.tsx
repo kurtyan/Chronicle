@@ -9,7 +9,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { DayScriptDocument, Task } from '@/types'
+import type { DayScriptDocument, DayScriptSubmitAnchor, Task } from '@/types'
 import { buildDayScriptActivityKey, findActiveBlock, isNewTaskHeaderText, parseDayScriptDocument } from '@/lib/dayScript'
 import { ChronicleImage, isTauri, resolveImageSrcsInEditor, uploadAndInsertImage } from '@/components/RichEditor'
 import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
@@ -22,7 +22,7 @@ interface DayScriptEditorProps {
   todayScriptDate: string
   onChange: (document: Record<string, any>) => void
   onSave: () => void
-  onSubmitProgress?: (getCurrentDocument?: () => Record<string, any>) => void
+  onSubmitProgress?: (getCurrentDocument?: () => Record<string, any>, submitAnchor?: DayScriptSubmitAnchor) => void
   onNavigateTask: (taskId: string) => void
   onEditingTask?: (activity: { taskId: string; blockKey: string }) => void
   onContentError?: (message: string, error?: unknown) => void
@@ -400,7 +400,11 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
         }
         if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === 'Enter') {
           event.preventDefault()
-          onSubmitProgress?.(() => editorRef.current?.getJSON() ?? { type: 'doc', content: [{ type: 'paragraph' }] })
+          const activeEditor = editorRef.current
+          onSubmitProgress?.(
+            () => activeEditor?.getJSON() ?? { type: 'doc', content: [{ type: 'paragraph' }] },
+            activeEditor ? getSubmitAnchor(activeEditor) : undefined
+          )
           return true
         }
         if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && (event.key === 'Home' || event.key === 'End')) {
@@ -678,6 +682,19 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
     const blocks = parseDayScriptDocument(nextEditor.getJSON())
     const activeLineBlock = blocks.find((block) => lineIndex >= block.lineStart && lineIndex <= block.lineEnd)
     return activeLineBlock?.taskIds[0] ?? 'day-script'
+  }
+
+  function getSubmitAnchor(nextEditor: NonNullable<typeof editor>): DayScriptSubmitAnchor | undefined {
+    const lineIndex = getSelectionLineIndex(nextEditor)
+    const blocks = parseDayScriptDocument(nextEditor.getJSON())
+    const activeLineBlock = blocks.find((block) => lineIndex >= block.lineStart && lineIndex <= block.lineEnd)
+    if (!activeLineBlock) return undefined
+    return {
+      sortOrder: activeLineBlock.sortOrder,
+      startTime: activeLineBlock.startTime,
+      endTime: activeLineBlock.endTime,
+      headerText: activeLineBlock.headerText,
+    }
   }
 
   function notifyEditingTask(nextEditor: NonNullable<typeof editor>) {

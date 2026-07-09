@@ -74,6 +74,13 @@ export interface DayScriptFocusActivity {
   firstEditedAt: number
 }
 
+export interface DayScriptSubmitAnchor {
+  sortOrder: number
+  startTime: string
+  endTime: string
+  headerText: string
+}
+
 export interface DayScriptExecutionRecord {
   id: string
   scriptDate: string
@@ -348,12 +355,6 @@ function plannedDurationMinutes(startTime: string, endTime: string): number | nu
   return end > start ? end - start : end + 1440 - start
 }
 
-function hasActualProgressContent(block: Pick<RichDayScriptBlock, 'progressText' | 'progressHtml' | 'progressLines'>): boolean {
-  if (normalizeProgress(block.progressText).length > 0) return true
-  const progressHtml = block.progressHtml || progressLinesToHtml(block.progressLines ?? [])
-  return progressHtml.trim().length > 0
-}
-
 function ceilTimestampToFiveMinutes(timestamp: number): number {
   const interval = 5 * 60_000
   return Math.ceil(timestamp / interval) * interval
@@ -393,38 +394,53 @@ function rewritePlannedTimeHeaders(document: JsonNode, replacements: Map<number,
   return cloned
 }
 
-function rescheduleUnworkedPlannedFocus(document: JsonNode, blocks: RichDayScriptBlock[], scriptDate: string, now: number): { document: JsonNode; changed: boolean } {
-  let lastWorkedIndex = -1
-  blocks.forEach((block, index) => {
-    if (hasActualProgressContent(block)) lastWorkedIndex = index
-  })
+function normalizeAnchorText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
+}
 
+function isSubmitAnchorBlock(block: RichDayScriptBlock, anchor?: DayScriptSubmitAnchor): boolean {
+  if (!anchor || !Number.isInteger(anchor.sortOrder)) return false
+  if (block.sortOrder !== anchor.sortOrder) return false
+  if (!anchor.startTime && !anchor.endTime && !anchor.headerText) return true
+  return block.startTime === anchor.startTime
+    || block.endTime === anchor.endTime
+    || normalizeAnchorText(block.headerText) === normalizeAnchorText(anchor.headerText)
+}
+
+function blockHasExistingSync(block: RichDayScriptBlock, syncMap: Map<string, ExistingSync>): boolean {
+  return block.taskIds.some((taskId) => syncMap.has(`${block.id}:${taskId}`))
+}
+
+function rescheduleUnworkedPlannedFocus(document: JsonNode, blocks: RichDayScriptBlock[], scriptDate: string, now: number, syncMap: Map<string, ExistingSync>, submitAnchor?: DayScriptSubmitAnchor): { document: JsonNode; changed: boolean } {
   const candidates = blocks
     .map((block, index) => ({ block, index }))
-    .filter(({ block, index }) =>
-      index > lastWorkedIndex
-      && Boolean(block.startTime && block.endTime)
-      && plannedDurationMinutes(block.startTime, block.endTime) !== null
-      && !hasActualProgressContent(block)
-    )
+    .filter(({ block }) => {
+      if (!block.startTime || !block.endTime) return false
+      if (plannedDurationMinutes(block.startTime, block.endTime) === null) return false
+      if (isSubmitAnchorBlock(block, submitAnchor)) return false
+      if (block.completed || block.appendOnSubmit) return false
+      if (blockHasExistingSync(block, syncMap)) return false
+      return true
+    })
 
   const first = candidates[0]
   if (!first) return { document, changed: false }
 
   const firstStartAt = plannedRangeTimestamps(scriptDate, first.block.startTime, first.block.endTime).startAt
-  const offsetMinutes = Math.max(0, minutesBetween(firstStartAt, ceilTimestampToFiveMinutes(now)))
-  if (offsetMinutes <= 0) return { document, changed: false }
+  let nextStartAt = Math.max(firstStartAt, ceilTimestampToFiveMinutes(now))
+  if (nextStartAt <= firstStartAt) return { document, changed: false }
 
   const replacements = new Map<number, { startTime: string; endTime: string }>()
   for (const { block, index } of candidates) {
     const duration = plannedDurationMinutes(block.startTime, block.endTime)
-    const startMinutes = timeToMinutes(block.startTime)
-    if (duration === null || startMinutes === null) continue
-    const nextStart = startMinutes + offsetMinutes
+    if (duration === null) continue
+    const nextStart = new Date(nextStartAt)
+    const startMinutes = nextStart.getHours() * 60 + nextStart.getMinutes()
     replacements.set(index, {
-      startTime: formatMinutesAsTime(nextStart),
-      endTime: formatMinutesAsTime(nextStart + duration),
+      startTime: formatMinutesAsTime(startMinutes),
+      endTime: formatMinutesAsTime(startMinutes + duration),
     })
+    nextStartAt += duration * 60_000
   }
 
   return { document: rewritePlannedTimeHeaders(document, replacements), changed: replacements.size > 0 }
@@ -1442,7 +1458,7 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   }
 }
 
-export function submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[]): SubmitDayScriptProgressResult {
+export function submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[], submitAnchor?: DayScriptSubmitAnchor): SubmitDayScriptProgressResult {
   const existing = getExistingScript(scriptDate)
   if (!existing) return { script: getDayScript(scriptDate), createdTasks: [], createdLogs: [], executionRecords: [], validationErrors: [], conflicts: [] }
 
@@ -1475,7 +1491,12 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
       richBlocks = assignBlockIds(rewrittenParsed.blocks, existing.blocks)
     }
 
-    const rescheduleResult = rescheduleUnworkedPlannedFocus(document, richBlocks, scriptDate, now)
+    const syncMap = new Map<string, ExistingSync>()
+    for (const sync of getExistingSyncs(scriptDate)) {
+      syncMap.set(`${sync.blockId}:${sync.taskId}`, sync)
+    }
+
+    const rescheduleResult = rescheduleUnworkedPlannedFocus(document, richBlocks, scriptDate, now, syncMap, submitAnchor)
     if (rescheduleResult.changed) {
       document = rescheduleResult.document
       documentChanged = true
@@ -1505,11 +1526,6 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
         'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
         [block.id, task.id, blockSyncText(block), blockSyncHtml(block), null, now]
       )
-    }
-
-    const syncMap = new Map<string, ExistingSync>()
-    for (const sync of getExistingSyncs(scriptDate)) {
-      syncMap.set(`${sync.blockId}:${sync.taskId}`, sync)
     }
 
     for (const block of richBlocks) {

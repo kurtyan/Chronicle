@@ -5,7 +5,7 @@ import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
 import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, fetchTodos, fetchWorkOverviewHiddenSignals, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, hideWorkOverviewSignal, saveDayScript, submitDayScriptProgress } from '@/services/api'
-import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext, WorkOverviewHidableSignalSourceType, WorkOverviewHiddenSignal } from '@/types'
+import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, DayScriptSubmitAnchor, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext, WorkOverviewHidableSignalSourceType, WorkOverviewHiddenSignal } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 import { dailySummarySourceKey, useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
@@ -1087,7 +1087,7 @@ export function TodayPage() {
     await saveDraft()
   }
 
-  async function handleSubmitProgress(getCurrentDocument?: () => Record<string, any>) {
+  async function handleSubmitProgress(getCurrentDocument?: () => Record<string, any>, submitAnchor?: DayScriptSubmitAnchor) {
     const saved = await saveDraft(getCurrentDocument)
     if (!saved.ok) return
     if (!saved.current) {
@@ -1103,7 +1103,7 @@ export function TodayPage() {
     try {
       setSaveError(null)
       const focusActivity = [...focusActivityRef.current.values()]
-      const result = await submitDayScriptProgress(displayDateRef.current, { focusActivity })
+      const result = await submitDayScriptProgress(displayDateRef.current, { focusActivity, submitAnchor })
       if (result.validationErrors.length > 0) {
         const message = recordDayScriptValidationError(`POST /api/day-scripts/${displayDateRef.current}/submit-progress`, result.validationErrors)
         setSaveError(message)

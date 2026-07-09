@@ -92,9 +92,14 @@ async function deleteEntry(page: Page, taskId: string, entryId: string) {
   expect(res.ok()).toBeTruthy()
 }
 
-async function submitProgress(page: Page, date: string, focusActivity?: Array<{ blockKey: string; taskId: string; firstEditedAt: number }>) {
+type SubmitAnchor = { sortOrder: number; startTime: string; endTime: string; headerText: string }
+
+async function submitProgress(page: Page, date: string, focusActivity?: Array<{ blockKey: string; taskId: string; firstEditedAt: number }>, submitAnchor?: SubmitAnchor) {
   const res = await page.request.post(`/api/day-scripts/${date}/submit-progress`, {
-    data: focusActivity ? { focusActivity } : {},
+    data: {
+      ...(focusActivity ? { focusActivity } : {}),
+      ...(submitAnchor ? { submitAnchor } : {}),
+    },
   })
   expect(res.ok()).toBeTruthy()
   return res.json()
@@ -145,12 +150,17 @@ test.describe('Day Script progress sync', () => {
       expect(save.ok()).toBeTruthy()
       const saved = await save.json()
 
-      const submitted = await submitProgress(page, date)
+      const submitted = await submitProgress(page, date, undefined, {
+        sortOrder: 0,
+        startTime: formatTime(firstStart),
+        endTime: formatTime(firstEnd),
+        headerText: `@${currentTask.title}`,
+      })
       expect(submitted.script.revision).toBe(saved.script.revision + 1)
       const lines = extractParagraphTexts(submitted.script.document)
       expect(lines[0]).toContain(`${formatTime(firstStart)}-${formatTime(firstEnd)}`)
       expect(lines[2]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 20))}`)
-      expect(lines[3]).toContain(`${formatTime(addMinutes(target, 5))}-${formatTime(addMinutes(target, 15))}`)
+      expect(lines[3]).toContain(`${formatTime(addMinutes(target, 20))}-${formatTime(addMinutes(target, 30))}`)
     } finally {
       await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
     }
@@ -189,8 +199,119 @@ test.describe('Day Script progress sync', () => {
       const submitted = await submitProgress(page, date)
       const lines = extractParagraphTexts(submitted.script.document)
       expect(lines[0]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 10))}`)
-      expect(lines[3]).toContain(`${formatTime(addMinutes(target, 15))}-${formatTime(addMinutes(target, 30))}`)
+      expect(lines[3]).toContain(`${formatTime(secondStart)}-${formatTime(secondEnd)}`)
       expect(submitted.createdLogs).toHaveLength(0)
+    } finally {
+      await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
+    }
+  })
+
+  test('submit progress reschedules unmarked planned focus lines before and after an out-of-order anchor', async ({ page }) => {
+    const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
+    expect(offsetRes.ok()).toBeTruthy()
+    const originalOffset = (await offsetRes.json()).offset
+    const skippedTask = await createTask(page, `DayScript-SkippedBefore-${Date.now()}`)
+    const currentTask = await createTask(page, `DayScript-OutOfOrderCurrent-${Date.now()}`)
+    const nextTask = await createTask(page, `DayScript-OutOfOrderNext-${Date.now()}`)
+    const dragonTask = await createTask(page, `DayScript-OutOfOrderDragon-${Date.now()}`)
+    const date = todayDate()
+    const target = ceilToFiveMinutes(new Date())
+    const skippedStart = addMinutes(target, -45)
+    const skippedEnd = addMinutes(skippedStart, 10)
+    const currentStart = addMinutes(target, -35)
+    const currentEnd = addMinutes(currentStart, 15)
+    const nextStart = addMinutes(target, -15)
+    const nextEnd = addMinutes(nextStart, 20)
+    const dragonStart = addMinutes(target, -5)
+    const dragonEnd = addMinutes(dragonStart, 10)
+
+    try {
+      const saveOffset = await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 0 } })
+      expect(saveOffset.ok()).toBeTruthy()
+
+      const save = await page.request.put(`/api/day-scripts/${date}`, {
+        data: {
+          expectedRevision: await getDayScriptRevision(page, date),
+          document: doc([
+            { text: `${formatTime(skippedStart)}-${formatTime(skippedEnd)} @${skippedTask.title}`, taskId: skippedTask.id },
+            { text: 'Planning note for skipped item' },
+            { text: `${formatTime(currentStart)}-${formatTime(currentEnd)} @${currentTask.title} ✅`, taskId: currentTask.id },
+            { text: 'Finished current item' },
+            { text: `${formatTime(nextStart)}-${formatTime(nextEnd)} @${nextTask.title}`, taskId: nextTask.id },
+            { text: 'Planning note for next item' },
+            { text: `${formatTime(dragonStart)}-${formatTime(dragonEnd)} @${dragonTask.title} 🐲`, taskId: dragonTask.id },
+            { text: 'Append-only current context' },
+          ]),
+        },
+      })
+      expect(save.ok()).toBeTruthy()
+
+      const submitted = await submitProgress(page, date, undefined, {
+        sortOrder: 1,
+        startTime: formatTime(currentStart),
+        endTime: formatTime(currentEnd),
+        headerText: `@${currentTask.title}`,
+      })
+      const lines = extractParagraphTexts(submitted.script.document)
+      expect(lines[0]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 10))}`)
+      expect(lines[1]).toBe('Planning note for skipped item')
+      expect(lines[2]).toContain(`${formatTime(currentStart)}-${formatTime(currentEnd)}`)
+      expect(lines[4]).toContain(`${formatTime(addMinutes(target, 10))}-${formatTime(addMinutes(target, 30))}`)
+      expect(lines[5]).toBe('Planning note for next item')
+      expect(lines[6]).toContain(`${formatTime(dragonStart)}-${formatTime(dragonEnd)}`)
+      expect(submitted.createdLogs.map((log: any) => log.taskId).sort()).toEqual([currentTask.id, dragonTask.id].sort())
+    } finally {
+      await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
+    }
+  })
+
+  test('submit progress keeps previously synced timed focus lines out of rescheduling', async ({ page }) => {
+    const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
+    expect(offsetRes.ok()).toBeTruthy()
+    const originalOffset = (await offsetRes.json()).offset
+    const syncedTask = await createTask(page, `DayScript-SyncedProtect-${Date.now()}`)
+    const plannedTask = await createTask(page, `DayScript-SyncedProtectPlanned-${Date.now()}`)
+    const date = todayDate()
+    const target = ceilToFiveMinutes(new Date())
+    const syncedStart = addMinutes(target, -30)
+    const syncedEnd = addMinutes(syncedStart, 10)
+    const plannedStart = addMinutes(target, -15)
+    const plannedEnd = addMinutes(plannedStart, 15)
+
+    try {
+      const saveOffset = await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 0 } })
+      expect(saveOffset.ok()).toBeTruthy()
+
+      const initialSave = await page.request.put(`/api/day-scripts/${date}`, {
+        data: {
+          expectedRevision: await getDayScriptRevision(page, date),
+          document: doc([
+            { text: `${formatTime(syncedStart)}-${formatTime(syncedEnd)} @${syncedTask.title} ✅`, taskId: syncedTask.id },
+            { text: 'Already synced progress' },
+            { text: `${formatTime(plannedStart)}-${formatTime(plannedEnd)} @${plannedTask.title}`, taskId: plannedTask.id },
+          ]),
+        },
+      })
+      expect(initialSave.ok()).toBeTruthy()
+      const firstSubmit = await submitProgress(page, date)
+      expect(firstSubmit.createdLogs).toEqual([{ taskId: syncedTask.id, entryId: expect.any(String), blockId: expect.any(String) }])
+
+      const removeMarker = await page.request.put(`/api/day-scripts/${date}`, {
+        data: {
+          expectedRevision: firstSubmit.script.revision,
+          document: doc([
+            { text: `${formatTime(syncedStart)}-${formatTime(syncedEnd)} @${syncedTask.title}`, taskId: syncedTask.id },
+            { text: 'Already synced progress' },
+            { text: `${formatTime(plannedStart)}-${formatTime(plannedEnd)} @${plannedTask.title}`, taskId: plannedTask.id },
+          ]),
+        },
+      })
+      expect(removeMarker.ok()).toBeTruthy()
+
+      const submitted = await submitProgress(page, date)
+      const lines = extractParagraphTexts(submitted.script.document)
+      expect(lines[0]).toContain(`${formatTime(syncedStart)}-${formatTime(syncedEnd)}`)
+      expect(lines[2]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 15))}`)
     } finally {
       await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
     }

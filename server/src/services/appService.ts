@@ -11,7 +11,7 @@ import {
 } from './taskService'
 import {
   getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
-  type DayScriptBlock, type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
+  type DayScriptBlock, type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptSubmitAnchor, type DayScriptExecutionRecord,
 } from './dayScriptService'
 import {
   getTaskContexts, refreshTaskContexts,
@@ -443,8 +443,8 @@ export class AppService {
     return saveDayScript(scriptDate, document, expectedRevision, focusActivities)
   }
 
-  async submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[]): Promise<SubmitDayScriptProgressResult> {
-    return submitDayScriptProgress(scriptDate, focusActivities)
+  async submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[], submitAnchor?: DayScriptSubmitAnchor): Promise<SubmitDayScriptProgressResult> {
+    return submitDayScriptProgress(scriptDate, focusActivities, submitAnchor)
   }
 
   async confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Promise<Array<{ taskId: string; entryId: string; blockId: string }>> {
