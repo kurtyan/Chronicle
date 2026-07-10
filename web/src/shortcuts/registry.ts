@@ -109,10 +109,17 @@ export function getShortcuts(): RegisteredShortcut[] {
  */
 export function findMatchingShortcut(e: KeyboardEvent): RegisteredShortcut | null {
   const shortcuts = getShortcuts();
+  const isInDialog = document.querySelector('[role="dialog"]') !== null;
 
   for (const shortcut of shortcuts) {
     if (matchesCombo(e, shortcut.combo)) {
       if (shortcut.context && !shortcut.context()) {
+        continue;
+      }
+      // When a modal dialog is open, only allow global/app-level shortcuts through.
+      // Page/component shortcuts (e.g. ArrowDown task list navigation) should not
+      // steal focus from dialog content.
+      if (isInDialog && shortcut.scope !== 'global' && shortcut.scope !== 'app') {
         continue;
       }
       return shortcut;

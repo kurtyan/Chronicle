@@ -41,6 +41,15 @@ async function createTask(page: Page, title: string) {
   return res.json()
 }
 
+async function cleanupStaleTasks(page: Page) {
+  const res = await page.request.get('/api/tasks')
+  if (!res.ok()) return
+  const tasks = await res.json()
+  for (const task of tasks) {
+    await page.request.put(`/api/tasks/${task.id}`, { data: { status: 'DONE' } }).catch(() => {})
+  }
+}
+
 async function saveDayScript(page: Page, date: string, document: Record<string, any>) {
   const currentRes = await page.request.get(`/api/day-scripts/${date}`)
   expect(currentRes.ok()).toBeTruthy()
@@ -56,6 +65,10 @@ async function saveDayScript(page: Page, date: string, document: Record<string, 
 }
 
 test.describe('Work overview keyboard navigation', () => {
+  test.beforeEach(async ({ page }) => {
+    await cleanupStaleTasks(page)
+  })
+
   test('j/k moves cursor and i plans the focused row into the Focus editor', async ({ page }) => {
     const today = workdayDate(5, 0)
     const originalSettings = await (await page.request.get('/api/settings/llm')).json()

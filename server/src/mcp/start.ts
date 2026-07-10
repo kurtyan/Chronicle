@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { AppService } from '../services/appService'
-import { searchTasks } from '../services/searchService'
+import { searchAll, searchTasks } from '../services/searchService'
 import { setTaskExtraInfo } from '../services/taskService'
 import type { IncomingMessage, ServerResponse } from 'http'
 import * as z from 'zod/v4'
@@ -289,10 +289,27 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
       inputSchema: {
         query: z.string().describe('Search query text.'),
         limit: z.number().optional().describe('Maximum results. Default: 50, max: 200.'),
+        includeArchived: z.boolean().optional().describe('Include archived notes. Default: false.'),
       },
     },
-    async ({ query, limit }): Promise<CallToolResult> => {
-      const result = await service.searchNotes(query, Math.min(limit ?? 50, 200))
+    async ({ query, limit, includeArchived }): Promise<CallToolResult> => {
+      const result = await service.searchNotes(query, Math.min(limit ?? 50, 200), includeArchived ?? false)
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+    }
+  )
+
+  server.registerTool(
+    'search_all',
+    {
+      description: 'Full-text search across tasks, task entries, and notes.',
+      inputSchema: {
+        query: z.string().describe('Search query text.'),
+        limit: z.number().optional().describe('Maximum results. Default: 50, max: 200.'),
+        includeArchived: z.boolean().optional().describe('Include archived notes. Default: false.'),
+      },
+    },
+    async ({ query, limit, includeArchived }): Promise<CallToolResult> => {
+      const result = searchAll(query, Math.min(limit ?? 50, 200), includeArchived ?? false)
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
     }
   )

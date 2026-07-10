@@ -3,7 +3,7 @@ import { cors } from 'hono/cors'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { AppService } from './services/appService'
-import { initDb, closeDb, getMetaValue, setMetaValue } from './db'
+import { initDb, closeDb, getDb, getMetaValue, setMetaValue } from './db'
 import { getConfig } from './config'
 import { startBackupService } from './services/backupService'
 import { exportDatabase, importDatabase, getSettingsInfo } from './services/settingsService'
@@ -710,37 +710,36 @@ app.post('/api/tasks/:taskId/entries/:entryId/add-to-note', async (c) => {
 })
 
 // --- Search API ---
-import { searchTasks, rebuildFtsIndex } from './services/searchService'
-import { rebuildNotesFtsIndex } from './services/noteService'
+import { searchTasks, searchAll, searchNotes } from './services/searchService'
+import { rebuildSearchIndex } from './services/searchIndexService'
+
+function parseSearchLimit(rawLimit: string | undefined): number {
+  if (rawLimit === undefined) return 50
+  const limit = Number(rawLimit)
+  if (!Number.isFinite(limit)) return 50
+  return Math.min(Math.max(Math.floor(limit), 1), 200)
+}
 
 app.get('/api/search', async (c) => {
   const q = c.req.query('q')
   if (!q) return c.json({ error: 'q parameter required' }, 400)
-  const limit = parseInt(c.req.query('limit') || '50')
+  const limit = parseSearchLimit(c.req.query('limit'))
   const scope = c.req.query('scope') || 'tasks'
   const includeArchived = c.req.query('includeArchived') === 'true'
   if (scope === 'notes') {
-    const { results, tokens } = await service.searchNotes(q, Math.min(limit, 200), includeArchived)
+    const { results, tokens } = searchNotes(q, limit, includeArchived)
     return c.json({ results, tokens, total: results.length })
   }
   if (scope === 'all') {
-    const taskResult = searchTasks(q, Math.min(limit, 200))
-    const noteResult = await service.searchNotes(q, Math.min(limit, 200), includeArchived)
-    const results = {
-      tasks: taskResult.results.filter((result) => result.matchType === 'task').map((result) => ({ kind: 'task', ...result })),
-      taskEntries: taskResult.results.filter((result) => result.matchType !== 'task').map((result) => ({ kind: 'task_entry', ...result })),
-      notes: noteResult.results,
-    }
-    const tokens = [...new Set([...taskResult.tokens, ...noteResult.tokens])]
-    return c.json({ results, tokens, total: results.tasks.length + results.taskEntries.length + results.notes.length })
+    const { results, tokens, counts, total } = searchAll(q, limit, includeArchived)
+    return c.json({ results, tokens, counts, total })
   }
-  const { results, tokens } = searchTasks(q, Math.min(limit, 200))
+  const { results, tokens } = searchTasks(q, limit)
   return c.json({ results, tokens, total: results.length })
 })
 
 app.post('/api/search/rebuild', async (c) => {
-  rebuildFtsIndex()
-  await service.rebuildNotesFtsIndex()
+  rebuildSearchIndex()
   return c.json({ ok: true })
 })
 
@@ -1123,17 +1122,17 @@ initDb()
 for (const task of interruptRunningBackgroundTasks()) emitBackgroundTask(task)
 backfillAgentConversationsFromTaskLogs()
 
-// Auto-rebuild FTS index when tokenizer version changes
-const FTS_INDEX_VERSION_KEY = 'fts_tokenizer_version'
-const CURRENT_TOKENIZER_VERSION = '4' // v4: normalized technical tokens and plain-text entry indexing
-const storedVersion = getMetaValue(FTS_INDEX_VERSION_KEY)
-if (storedVersion !== CURRENT_TOKENIZER_VERSION) {
+const SEARCH_INDEX_VERSION_KEY = 'search_index_version'
+const CURRENT_SEARCH_INDEX_VERSION = '1'
+const storedSearchVersion = getMetaValue(SEARCH_INDEX_VERSION_KEY)
+if (storedSearchVersion !== CURRENT_SEARCH_INDEX_VERSION) {
   const log = getLogger()
-  log.info(`FTS index version mismatch (stored: ${storedVersion}, current: ${CURRENT_TOKENIZER_VERSION}). Rebuilding...`)
-  rebuildFtsIndex()
-  rebuildNotesFtsIndex()
-  setMetaValue(FTS_INDEX_VERSION_KEY, CURRENT_TOKENIZER_VERSION)
-  log.info('FTS index rebuilt successfully')
+  log.info(`Search index version mismatch (stored: ${storedSearchVersion}, current: ${CURRENT_SEARCH_INDEX_VERSION}). Rebuilding...`)
+  rebuildSearchIndex()
+  setMetaValue(SEARCH_INDEX_VERSION_KEY, CURRENT_SEARCH_INDEX_VERSION)
+  getDb().exec('DROP TABLE IF EXISTS tasks_fts')
+  getDb().exec('DROP TABLE IF EXISTS notes_fts')
+  log.info('Search index rebuilt successfully')
 }
 
 startBackupService()

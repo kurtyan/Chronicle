@@ -3,6 +3,8 @@ import { getDb } from '../db'
 import { tokenize } from './tokenizer'
 import { htmlToPlainText } from './searchText'
 import { getTaskById, getTaskEntries, getPinnedEntry, type Task, type TaskEntry } from './taskService'
+import { upsertNoteSearchDocument, removeSearchDocument } from './searchIndexService'
+import { searchNotes as searchNotesCore, type NoteSearchResult } from './searchService'
 
 export interface Note {
   id: string
@@ -25,19 +27,7 @@ export interface NoteLink {
   context: string | null
 }
 
-export interface NoteSearchResult {
-  kind: 'note'
-  noteId: string
-  title: string
-  tags: string[]
-  snippet: string
-  matchedSource: 'note_title' | 'note_content' | 'note_tags'
-  updatedAt: number
-  pinned: boolean
-  tokens: string[]
-  exactMatch: boolean
-  rank: number
-}
+export type { NoteSearchResult }
 
 function escapeHtml(text: string): string {
   return text
@@ -79,17 +69,11 @@ function generateNoteId(): string {
 }
 
 function indexNote(note: Note): void {
-  const db = getDb()
-  db.prepare('DELETE FROM notes_fts WHERE note_id = ?').run(note.id)
-  db.prepare('INSERT INTO notes_fts(note_id, source, content) VALUES (?, ?, ?)').run(note.id, 'note_title', tokenize(note.title))
-  db.prepare('INSERT INTO notes_fts(note_id, source, content) VALUES (?, ?, ?)').run(note.id, 'note_content', tokenize(htmlToPlainText(note.contentHtml)))
-  if (note.tags.length > 0) {
-    db.prepare('INSERT INTO notes_fts(note_id, source, content) VALUES (?, ?, ?)').run(note.id, 'note_tags', tokenize(note.tags.join(' ')))
-  }
+  upsertNoteSearchDocument(note.id, note.title, note.contentHtml, note.tags, note.updatedAt)
 }
 
 function removeNoteFromIndex(noteId: string): void {
-  getDb().prepare('DELETE FROM notes_fts WHERE note_id = ?').run(noteId)
+  removeSearchDocument(`note:${noteId}`)
 }
 
 function syncTaskMentionLinks(note: Note): void {
@@ -340,78 +324,6 @@ export function addTaskEntryToNote(taskId: string, entryId: string, noteId?: str
   })
 }
 
-export function rebuildNotesFtsIndex(): void {
-  const db = getDb()
-  db.prepare('DELETE FROM notes_fts').run()
-  const notes = db.prepare('SELECT * FROM notes').all().map(rowToNote)
-  for (const note of notes) indexNote(note)
-}
-
 export function searchNotes(query: string, limit = 50, includeArchived = false): { results: NoteSearchResult[]; tokens: string[] } {
-  const trimmed = query.trim()
-  if (!trimmed) return { results: [], tokens: [] }
-  const db = getDb()
-  const safeLimit = Math.min(Math.max(limit, 1), 200)
-  const tokens = tokenize(trimmed).split(' ').filter(Boolean)
-  const ftsQuery = tokens.map((token) => `"${token.replace(/"/g, '')}"`).join(' ')
-  const ftsRows = ftsQuery.trim()
-    ? db.prepare(`
-      SELECT f.note_id, f.source, f.content, f.rank
-      FROM notes_fts f
-      INNER JOIN notes n ON n.id = f.note_id
-      WHERE notes_fts MATCH ? ${includeArchived ? '' : 'AND n.archived = 0'}
-      ORDER BY f.rank
-      LIMIT ?
-    `).all(ftsQuery, safeLimit) as Array<{ note_id: string; source: 'note_title' | 'note_content' | 'note_tags'; content: string; rank: number }>
-    : []
-
-  const normalizedQuery = trimmed.toLowerCase()
-  const noteRows = db.prepare(`
-    SELECT id, title, content_html, tags
-    FROM notes
-    ${includeArchived ? '' : 'WHERE archived = 0'}
-  `).all() as Array<{ id: string; title: string; content_html: string; tags: string }>
-  const exactRows = noteRows
-    .map((note) => {
-      if (note.title.toLowerCase().includes(normalizedQuery)) return { note, source: 'note_title' as const }
-      if ((note.tags || '').toLowerCase().includes(normalizedQuery)) return { note, source: 'note_tags' as const }
-      if (htmlToPlainText(note.content_html).toLowerCase().includes(normalizedQuery)) return { note, source: 'note_content' as const }
-      return null
-    })
-    .filter((match): match is { note: { id: string; content_html: string }; source: 'note_title' | 'note_content' | 'note_tags' } => Boolean(match))
-    .slice(0, safeLimit)
-    .map(({ note, source }) => ({
-      note_id: note.id,
-      source,
-      content: note.content_html,
-      rank: -1.0,
-    }))
-
-  const combined = [...exactRows, ...ftsRows]
-  const best = new Map<string, { source: 'note_title' | 'note_content' | 'note_tags'; rank: number }>()
-  for (const row of combined) {
-    const existing = best.get(row.note_id)
-    if (!existing || row.rank < existing.rank) best.set(row.note_id, { source: row.source, rank: row.rank })
-  }
-
-  const results: NoteSearchResult[] = []
-  for (const [noteId, match] of best) {
-    const note = getNoteById(noteId)
-    if (!note || (!includeArchived && note.archived)) continue
-    const plain = htmlToPlainText(note.contentHtml)
-    results.push({
-      kind: 'note',
-      noteId: note.id,
-      title: note.title,
-      tags: note.tags,
-      snippet: plain.slice(0, 240),
-      matchedSource: match.source,
-      updatedAt: note.updatedAt,
-      pinned: note.pinned,
-      tokens,
-      exactMatch: match.rank <= -1,
-      rank: match.rank,
-    })
-  }
-  return { results: results.sort((a, b) => a.rank - b.rank || Number(b.pinned) - Number(a.pinned) || b.updatedAt - a.updatedAt), tokens }
+  return searchNotesCore(query, limit, includeArchived)
 }

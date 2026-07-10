@@ -7,9 +7,11 @@ import { X, Search, Pin, PauseCircle } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
+import { FindBar } from '@/components/FindBar'
 import { getNextTaskId } from '@/services/api'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
+import { setSearchJumpIntent } from '@/lib/searchJump'
 import { registerShortcut } from '@/shortcuts/registry'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 
@@ -138,6 +140,20 @@ export function BoardPage() {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchSelectedIdx, setSearchSelectedIdx] = useState(-1)
 
+  // Debounced instant search: 180ms after typing stops
+  useEffect(() => {
+    if (!searchMode) return
+    const trimmed = searchInput.trim()
+    if (!trimmed) {
+      doSearch('')
+      return
+    }
+    const timer = window.setTimeout(() => {
+      doSearch(trimmed)
+    }, 180)
+    return () => window.clearTimeout(timer)
+  }, [searchInput, searchMode, doSearch])
+
   function clearAutoCollapseTimer() {
     if (autoCollapseRef.current) {
       clearTimeout(autoCollapseRef.current)
@@ -209,6 +225,15 @@ export function BoardPage() {
   const titleInputRef = useRef<HTMLInputElement>(null)
   const workspaceScrollRef = useRef<HTMLDivElement>(null)
 
+  // Find in content
+  const [showFindBar, setShowFindBar] = useState(false)
+  const [findTokens, setFindTokens] = useState<string[]>([])
+  const workspaceContainerRef = useRef<HTMLDivElement>(null)
+
+  function toggleFindBar() {
+    setShowFindBar((open) => !open)
+  }
+
   // Refs to access latest state without stale closures - MUST be defined before handleEscKey
   const stateRef = useRef({
     activeTaskId,
@@ -222,6 +247,7 @@ export function BoardPage() {
     editingEntryId,
     showDropDialog,
     showCancelConfirm,
+    showFindBar,
     tasks,
     currentSession,
     lastAfkTime,
@@ -232,7 +258,7 @@ export function BoardPage() {
     pinnedIds,
   })
   useEffect(() => {
-    stateRef.current = {
+      stateRef.current = {
       activeTaskId,
       selectedTask,
       draftTitle,
@@ -244,6 +270,7 @@ export function BoardPage() {
       editingEntryId,
       showDropDialog,
       showCancelConfirm,
+      showFindBar,
       tasks,
       currentSession,
       lastAfkTime,
@@ -514,7 +541,7 @@ export function BoardPage() {
       scope: 'page',
       context: () => {
         const isInEditor = document.activeElement?.closest('[data-rich-editor="true"]') !== null
-        return !stateRef.current.editingEntryId && !isInEditor
+        return !stateRef.current.editingEntryId && !isInEditor && !stateRef.current.showFindBar
       },
       handler: () => {
         const s = stateRef.current
@@ -523,6 +550,18 @@ export function BoardPage() {
         } else {
           handleEscKey()
         }
+      },
+    }))
+
+    // Cmd+F: find in content
+    unregisters.push(registerShortcut({
+      id: 'find-in-content',
+      combo: 'mod+f',
+      label: 'Find in content',
+      scope: 'page',
+      context: () => Boolean(stateRef.current.activeTaskId && stateRef.current.selectedTask),
+      handler: () => {
+        toggleFindBar()
       },
     }))
 
@@ -730,6 +769,21 @@ export function BoardPage() {
     startDraft({ title: draftTitle, body: val, type: draftType, priority: draftPriority, tags: draftTags.split(',').map(s => s.trim()).filter(Boolean), dueDate: draftDueDate ? new Date(draftDueDate).getTime() : null })
   }
 
+  function activateSearchResult(hit: SearchResult, index: number) {
+    setSearchJumpIntent({
+      target: 'task',
+      taskId: hit.taskId,
+      entryId: hit.entryId ?? null,
+      tokens: hit.tokens.length ? hit.tokens : searchTokens,
+      query: searchInput,
+      matchedSource: hit.matchType,
+    })
+    setActiveTask(hit.taskId)
+    setSearchSelectedIdx(index)
+    setFilterTypes([])
+    setStatusFilter(null)
+  }
+
   // ==================== Render ====================
 
   return (
@@ -772,13 +826,15 @@ export function BoardPage() {
                 }
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  if (!searchInput.trim()) return
-                  doSearch(searchInput)
+                  const index = searchSelectedIdx >= 0 ? searchSelectedIdx : 0
+                  const hit = searchResults[index]
+                  if (hit) activateSearchResult(hit, index)
                   return
                 }
                 if (e.key === 'Escape') {
                   e.preventDefault()
-                  e.stopPropagation()
+                  setSearchInput('')
+                  setSearchMode(false)
                   return
                 }
               }}
@@ -950,7 +1006,7 @@ export function BoardPage() {
                 <div className="text-sm text-muted-foreground text-center py-8">{t('search.noResults')}</div>
               )}
               {searchResults.length === 0 && !searchQuery && (
-                <div className="text-sm text-muted-foreground text-center py-8">输入关键词并按回车搜索</div>
+                <div className="text-sm text-muted-foreground text-center py-8">输入关键词搜索</div>
               )}
               {searchResults.map((r: SearchResult, i: number) => (
                 <div
@@ -961,17 +1017,12 @@ export function BoardPage() {
                     r.taskId === activeTaskId ? 'border-primary/50 bg-primary/5 ring-1 ring-primary/30' : i === searchSelectedIdx ? 'border-primary/30 bg-primary/5' : 'border-border hover:bg-muted/50'
                   }`}
                   onClick={() => {
-                    setActiveTask(r.taskId)
-                    setSearchSelectedIdx(i)
-                    setFilterTypes([])
-                    setStatusFilter(null)
+                    activateSearchResult(r, i)
                   }}
                   onKeyDown={e => {
                     if (e.key === 'Enter') {
                       e.preventDefault()
-                      setActiveTask(r.taskId)
-                      setFilterTypes([])
-                      setStatusFilter(null)
+                      activateSearchResult(r, i)
                     }
                   }}
                 >
@@ -995,6 +1046,11 @@ export function BoardPage() {
                           {t(`status.${r.taskStatus.toLowerCase()}`)}
                         </span>
                       </div>
+                      {r.matchedContent && (
+                        <div className="mt-1 text-xs text-muted-foreground line-clamp-1">
+                          {highlightText(r.matchedContent.slice(0, 120), searchTokens)}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1094,7 +1150,7 @@ export function BoardPage() {
       </div>
 
       {/* Workspace */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div ref={workspaceContainerRef} className="flex-1 flex flex-col overflow-hidden relative">
         {/* Scenario A: No active task, no draft, or active task filtered out */}
         {(!activeTaskId || !selectedTask) && !draftTask ? (
           <>
@@ -1232,7 +1288,15 @@ export function BoardPage() {
                 </div>
               </>
             ) : selectedTask ? (
-              <TaskDetailWorkspace />
+              <>
+                <FindBar
+                  open={showFindBar}
+                  onClose={() => { setShowFindBar(false); setFindTokens([]) }}
+                  containerRef={workspaceContainerRef}
+                  onTokensChange={setFindTokens}
+                />
+                <TaskDetailWorkspace findTokens={findTokens} />
+              </>
             ) : null}
           </>
         )}

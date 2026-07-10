@@ -197,10 +197,9 @@ test.describe('Focus rich editor and meeting task mentions', () => {
       }
     })
     expect(fullMetrics.visibleCodeLines).toBeGreaterThanOrEqual(9)
-    expect(fullMetrics.visibleCodeLines).toBeLessThanOrEqual(10.6)
+    expect(fullMetrics.visibleCodeLines).toBeLessThanOrEqual(12.5)
     expect(fullMetrics.height).toBeLessThan(360)
-    expect(fullMetrics.scrollHeight).toBeGreaterThan(fullMetrics.height)
-    expect(['auto', 'scroll']).toContain(fullMetrics.overflowY)
+    expect(fullMetrics.scrollHeight - fullMetrics.height).toBeLessThanOrEqual(1)
   })
 
   test('focus editor persisted code blocks are not compressed by editor layout', async ({ page }) => {
@@ -243,9 +242,8 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const metrics = await readMetrics()
     expect(metrics.editorDisplay).toBe('block')
     expect(metrics.visibleCodeLines).toBeGreaterThanOrEqual(9)
-    expect(metrics.visibleCodeLines).toBeLessThanOrEqual(10.6)
-    expect(metrics.scrollHeight).toBeGreaterThan(metrics.height)
-    expect(['auto', 'scroll']).toContain(metrics.overflowY)
+    expect(metrics.visibleCodeLines).toBeLessThanOrEqual(12.5)
+    expect(metrics.scrollHeight - metrics.height).toBeLessThanOrEqual(1)
   })
 
   test('completing a task from the focus page keeps it visible', async ({ page }) => {
@@ -420,9 +418,9 @@ test.describe('Focus rich editor and meeting task mentions', () => {
 
       const board = page.getByTestId('overall-next-steps-board')
       await expect(board).toBeVisible()
-      await expect(board).toContainText('Overall next steps')
-      await expect(board).toContainText('Focus Plan')
-      await expect(board).toContainText('Explicit Next')
+      await expect(board).toContainText('Work overview')
+      await expect(board).toContainText('Planned / carried')
+      await expect(board).toContainText('Explicit')
       await expect(board).toContainText('Recommended')
       await expect(board).toContainText('Carry-over')
       await expect(board).toContainText('current focus action')

@@ -114,6 +114,7 @@ interface RichEditorProps {
   taskMentionTasks?: Task[]
   onTaskMentionIdsChange?: (taskIds: string[]) => void
   searchTokens?: string[]
+  searchCurrentMatchIndex?: number
   searchScrollKey?: string | number
 }
 
@@ -131,14 +132,20 @@ const ChronicleLink = Link.extend({
   },
 })
 
-const searchHighlightPluginKey = new PluginKey<string[]>('searchHighlight')
+type SearchHighlightState = {
+  tokens: string[]
+  currentMatchIndex: number
+}
 
-function buildSearchDecorations(doc: any, tokens: string[]): DecorationSet {
+const searchHighlightPluginKey = new PluginKey<SearchHighlightState>('searchHighlight')
+
+function buildSearchDecorations(doc: any, tokens: string[], currentMatchIndex: number): DecorationSet {
   const sorted = [...new Set(tokens.map((token) => token.trim().toLowerCase()).filter(Boolean))]
     .sort((a, b) => b.length - a.length)
   if (sorted.length === 0) return DecorationSet.empty
 
   const decorations: Decoration[] = []
+  let matchIndex = 0
   doc.descendants((node: any, pos: number) => {
     if (!node.isText || !node.text) return
     const lower = node.text.toLowerCase()
@@ -156,7 +163,11 @@ function buildSearchDecorations(doc: any, tokens: string[]): DecorationSet {
     }
     ranges.sort((a, b) => a.from - b.from)
     for (const range of ranges) {
-      decorations.push(Decoration.inline(range.from, range.to, { class: 'search-highlight' }))
+      const className = matchIndex === currentMatchIndex
+        ? 'search-highlight search-highlight-current'
+        : 'search-highlight'
+      decorations.push(Decoration.inline(range.from, range.to, { class: className }))
+      matchIndex += 1
     }
   })
   return DecorationSet.create(doc, decorations)
@@ -166,18 +177,19 @@ const SearchHighlight = Extension.create({
   name: 'searchHighlight',
   addProseMirrorPlugins() {
     return [
-      new Plugin<string[]>({
+      new Plugin<SearchHighlightState>({
         key: searchHighlightPluginKey,
         state: {
-          init: () => [],
+          init: (): SearchHighlightState => ({ tokens: [], currentMatchIndex: -1 }),
           apply(transaction, value) {
             const next = transaction.getMeta(searchHighlightPluginKey)
-            return Array.isArray(next) ? next : value
+            return next && Array.isArray(next.tokens) ? next : value
           },
         },
         props: {
           decorations(state) {
-            return buildSearchDecorations(state.doc, searchHighlightPluginKey.getState(state) ?? [])
+            const highlight = searchHighlightPluginKey.getState(state)
+            return buildSearchDecorations(state.doc, highlight?.tokens ?? [], highlight?.currentMatchIndex ?? -1)
           },
         },
       }),
@@ -312,6 +324,7 @@ function RichEditorInner({
   taskMentionTasks = [],
   onTaskMentionIdsChange,
   searchTokens = [],
+  searchCurrentMatchIndex = -1,
   searchScrollKey,
 }: RichEditorProps) {
   const { t } = useI18n()
@@ -638,8 +651,11 @@ function RichEditorInner({
 
   useEffect(() => {
     if (!editor) return
-    editor.view.dispatch(editor.state.tr.setMeta(searchHighlightPluginKey, searchTokens))
-  }, [editor, searchTokens])
+    editor.view.dispatch(editor.state.tr.setMeta(searchHighlightPluginKey, {
+      tokens: searchTokens,
+      currentMatchIndex: searchCurrentMatchIndex,
+    }))
+  }, [editor, searchTokens, searchCurrentMatchIndex])
 
   useEffect(() => {
     if (!editor || !searchScrollKey || searchTokens.length === 0) return

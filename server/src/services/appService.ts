@@ -20,9 +20,9 @@ import {
 import {
   getNotes, getNoteById, createNote, updateNote, archiveNote, deleteNote,
   appendToNote, createNoteFromTask, addTaskEntryToNote, getNotesForTask, getLinkedTasksForNote, searchNotes,
-  rebuildNotesFtsIndex,
   type Note,
 } from './noteService'
+import { rebuildSearchIndex } from './searchIndexService'
 import { getDb } from '../db'
 
 export class AppService {
@@ -77,8 +77,8 @@ export class AppService {
     return searchNotes(query, limit, includeArchived)
   }
 
-  async rebuildNotesFtsIndex(): Promise<void> {
-    rebuildNotesFtsIndex()
+  async rebuildSearchIndex(): Promise<void> {
+    rebuildSearchIndex()
   }
 
   // --- Tasks ---

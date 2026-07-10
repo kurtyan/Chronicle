@@ -1,5 +1,5 @@
 import { getDb } from '../db'
-import { indexEntry, indexTask } from './searchService'
+import { upsertTaskSearchDocument, upsertTaskEntrySearchDocument, sourceForEntryType } from './searchIndexService'
 import { ensureMeetingTag, linkLlmCallLogToTask } from './llmService'
 import { getTaskById, type Task } from './taskService'
 
@@ -59,8 +59,8 @@ export function createMeeting(data: CreateMeetingRequest): Task {
   })
 
   tx()
-  indexTask(taskId, data.title.trim())
-  if (data.content.trim()) indexEntry(taskId, entryId, data.content.trim(), 'body')
+  upsertTaskSearchDocument(taskId, data.title.trim(), tags)
+  if (data.content.trim()) upsertTaskEntrySearchDocument(taskId, entryId, sourceForEntryType('body'), data.content.trim(), now)
   return getTaskById(taskId)!
 }
 

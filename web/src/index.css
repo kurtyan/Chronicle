@@ -93,6 +93,13 @@
     padding: 0 1px;
   }
 
+  .search-highlight-current {
+    background-color: hsl(25 95% 60% / 0.5) !important;
+    border: 1px solid hsl(25 95% 50%);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
   .field-input {
     @apply w-full rounded-xl border border-border/70 bg-background/90 px-3 py-2 text-sm shadow-sm outline-none transition focus:border-primary/60 focus:ring-2 focus:ring-primary/20;
   }

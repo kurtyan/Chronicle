@@ -1,103 +1,11 @@
 import { getDb } from '../db'
 import { tokenize } from './tokenizer'
 import { htmlToPlainText } from './searchText'
+import { sourceForEntryType, entryTypeForSource, type EntrySource } from './searchIndexService'
 
-// --- Index write operations ---
+// --- Types (backward compatible) ---
 
-type EntryType = 'body' | 'log' | 'pinned'
-type EntrySource = 'entry_body' | 'entry_log' | 'entry_pinned'
-
-function sourceForEntryType(type: string): EntrySource {
-  if (type === 'body') return 'entry_body'
-  if (type === 'pinned') return 'entry_pinned'
-  return 'entry_log'
-}
-
-function entryTypeForSource(source: string): EntryType {
-  if (source === 'entry_body') return 'body'
-  if (source === 'entry_pinned') return 'pinned'
-  return 'log'
-}
-
-export function indexTask(taskId: string, title: string): void {
-  const db = getDb()
-  db.prepare('DELETE FROM tasks_fts WHERE task_id = ? AND source = ?').run(taskId, 'task')
-  db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
-    taskId, null, 'task', tokenize(`${taskId} ${title}`)
-  )
-}
-
-export function indexEntry(taskId: string, entryId: string, content: string, type: EntryType): void {
-  const db = getDb()
-  const source = sourceForEntryType(type)
-  db.prepare('DELETE FROM tasks_fts WHERE entry_id = ?').run(entryId)
-  db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
-    taskId, entryId, source, tokenize(htmlToPlainText(content))
-  )
-}
-
-export function removeTaskFromIndex(taskId: string): void {
-  getDb().prepare('DELETE FROM tasks_fts WHERE task_id = ?').run(taskId)
-}
-
-export function removeEntryFromIndex(entryId: string): void {
-  getDb().prepare('DELETE FROM tasks_fts WHERE entry_id = ?').run(entryId)
-}
-
-// --- Populate FTS index from existing data ---
-
-export function populateFtsIndex(): void {
-  const db = getDb()
-  const exists = db.prepare("SELECT COUNT(*) as cnt FROM tasks_fts WHERE source = 'task'").get() as { cnt: number }
-  if (exists.cnt > 0) return
-
-  db.prepare('BEGIN').run()
-
-  const tasks = db.prepare('SELECT id, title FROM tasks').all() as Array<{ id: string; title: string }>
-  for (const t of tasks) {
-    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
-      t.id, null, 'task', tokenize(`${t.id} ${t.title}`)
-    )
-  }
-
-  const entries = db.prepare('SELECT id, task_id, type, content FROM task_entries').all() as Array<{ id: string; task_id: string; type: string; content: string }>
-  for (const e of entries) {
-    const source = sourceForEntryType(e.type)
-    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
-      e.task_id, e.id, source, tokenize(htmlToPlainText(e.content))
-    )
-  }
-
-  db.prepare('COMMIT').run()
-}
-
-// --- Rebuild FTS index from scratch (use after tokenizer changes) ---
-
-export function rebuildFtsIndex(): void {
-  const db = getDb()
-  db.prepare('DELETE FROM tasks_fts').run()
-
-  db.prepare('BEGIN').run()
-
-  const tasks = db.prepare('SELECT id, title FROM tasks').all() as Array<{ id: string; title: string }>
-  for (const t of tasks) {
-    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
-      t.id, null, 'task', tokenize(`${t.id} ${t.title}`)
-    )
-  }
-
-  const entries = db.prepare('SELECT id, task_id, type, content FROM task_entries').all() as Array<{ id: string; task_id: string; type: string; content: string }>
-  for (const e of entries) {
-    const source = sourceForEntryType(e.type)
-    db.prepare('INSERT INTO tasks_fts(task_id, entry_id, source, content) VALUES (?, ?, ?, ?)').run(
-      e.task_id, e.id, source, tokenize(htmlToPlainText(e.content))
-    )
-  }
-
-  db.prepare('COMMIT').run()
-}
-
-// --- Search query ---
+export type { EntrySource } from './searchIndexService'
 
 export interface SearchResult {
   taskId: string
@@ -108,12 +16,9 @@ export interface SearchResult {
   taskTags: string[]
   matchType: 'task' | EntrySource
   matchedContent: string
-  // Original text for highlighting
   originalTitle: string
   matchedOriginal: string
-  // Tokens from the query for highlighting
   tokens: string[]
-  // Whether this result matched via exact phrase match
   exactMatch: boolean
   rank: number
 }
@@ -123,225 +28,447 @@ export interface SearchResponse {
   tokens: string[]
 }
 
-export function searchTasks(query: string, limit = 50): SearchResponse {
-  const trimmed = query.trim()
-  if (!trimmed) return { results: [], tokens: [] }
+export interface NoteSearchResult {
+  kind: 'note'
+  noteId: string
+  title: string
+  tags: string[]
+  snippet: string
+  matchedSource: 'note_title' | 'note_content' | 'note_tags'
+  updatedAt: number
+  pinned: boolean
+  tokens: string[]
+  exactMatch: boolean
+  rank: number
+}
 
+export interface SearchCounts {
+  tasks: number
+  taskEntries: number
+  notes: number
+}
+
+interface RawHit {
+  docKey: string
+  kind: 'task' | 'task_entry' | 'note'
+  taskId: string | null
+  entryId: string | null
+  noteId: string | null
+  source: string
+  identifierText: string
+  titleText: string
+  contentText: string
+  tagsJson: string
+  updatedAt: number
+  bm25: number
+  exactFtsHit: boolean
+  prefixOnly: boolean
+  phraseFtsHit: boolean
+  taskTitle: string | null
+  taskType: string | null
+  taskStatus: string | null
+  taskTags: string | null
+  noteArchived: number | null
+  notePinned: number | null
+}
+
+// --- FTS query builder ---
+
+function escapeFtsToken(token: string): string {
+  return token.replace(/"/g, '')
+}
+
+function buildFtsQueries(tokens: string[]): { exact: string; prefix: string; phrase: string } {
+  const escaped = tokens.map(escapeFtsToken)
+  const exact = escaped.map((t) => `"${t}"`).join(' ')
+  const phrase = escaped.length > 1 ? `"${escaped.join(' ')}"` : ''
+  let prefix = ''
+  if (escaped.length === 1) {
+    if (escaped[0].length >= 2) prefix = `"${escaped[0]}"*`
+  } else {
+    const last = escaped[escaped.length - 1]
+    if (last.length >= 2) {
+      prefix = [...escaped.slice(0, -1).map((t) => `"${t}"`), `"${last}"*`].join(' ')
+    }
+  }
+  return { exact, prefix, phrase }
+}
+
+// --- Scope filter ---
+
+function buildScopeSql(scope: 'tasks' | 'notes' | 'all', includeArchived: boolean): { join: string; where: string } {
+  const join = 'LEFT JOIN notes n ON d.kind = \'note\' AND n.id = d.note_id'
+  let where: string
+  if (scope === 'tasks') {
+    where = "AND d.kind IN ('task', 'task_entry')"
+  } else if (scope === 'notes') {
+    where = includeArchived
+      ? "AND d.kind = 'note'"
+      : "AND d.kind = 'note' AND COALESCE(n.archived, 0) = 0"
+  } else {
+    where = includeArchived
+      ? ''
+      : "AND (d.kind != 'note' OR COALESCE(n.archived, 0) = 0)"
+  }
+  return { join, where }
+}
+
+// --- Core search ---
+
+function runFtsQuery(
+  ftsQuery: string,
+  scopeWhere: string,
+  scopeJoin: string,
+  limit: number,
+  hitType: 'exact' | 'prefix' | 'phrase',
+  oneHitPerTask: boolean,
+): Map<string, RawHit> {
+  if (!ftsQuery.trim()) return new Map()
   const db = getDb()
+  const baseQuery = `
+    SELECT
+      d.doc_key, d.kind, d.task_id, d.entry_id, d.note_id, d.source,
+      d.identifier_text, d.title_text, d.content_text, d.tags_json, d.updated_at,
+      bm25(search_fts, 0, 8, 5, 1, 3) as score,
+      t.title as task_title, t.type as task_type, t.status as task_status, t.tags as task_tags,
+      n.archived as note_archived, n.pinned as note_pinned
+    FROM search_fts f
+    JOIN search_documents d ON d.doc_key = f.doc_key
+    LEFT JOIN tasks t ON d.task_id = t.id
+    ${scopeJoin}
+    WHERE f.search_fts MATCH ?
+    ${scopeWhere}
+  `
+  // Board search presents one result per task. Deduplicate before applying the
+  // candidate limit so a task with many matching entries cannot crowd out others.
+  const query = oneHitPerTask
+    ? `WITH matches AS (${baseQuery})
+       SELECT * FROM (
+         SELECT matches.*, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY score) AS task_rank
+         FROM matches
+       )
+       WHERE task_rank = 1
+       ORDER BY score
+       LIMIT ?`
+    : `${baseQuery} ORDER BY score LIMIT ?`
+  const rows = db.prepare(query).all(ftsQuery, limit) as Array<any>
 
-  const tokenized = tokenize(trimmed)
-  const tokens = tokenized.split(' ').filter(Boolean)
-  const shortAsciiQuery = /^[a-z0-9]{1,2}$/i.test(trimmed)
-
-  // Escape tokens for FTS5: wrap each token in double quotes so special chars (., :, /) are treated literally
-  const ftsQuery = tokens.map(t => `"${t.replace(/"/g, '')}"`).join(' ')
-
-  // --- Phase 1: FTS5 tokenized search ---
-  const ftsResults = ftsQuery.trim()
-    ? db.prepare(`
-    SELECT f.task_id, f.entry_id, f.source, f.content, f.rank
-    FROM tasks_fts f
-    WHERE tasks_fts MATCH ?
-    ORDER BY f.rank
-    LIMIT ?
-  `).all(ftsQuery, limit) as Array<{
-    task_id: string
-    entry_id: string | null
-    source: string
-    content: string
-    rank: number
-  }>
-    : []
-
-  // --- Phase 2: Exact phrase match (LIKE) on original text ---
-  const exactTaskIds = new Set<string>()
-  const exactResults: Array<{
-    task_id: string
-    entry_id: string | null
-    source: 'task' | EntrySource
-    content: string
-    rank: number
-  }> = []
-
-  function addFallbackResult(result: {
-    task_id: string
-    entry_id: string | null
-    source: 'task' | EntrySource
-    content: string
-    rank: number
-  }) {
-    const key = `${result.task_id}:${result.entry_id ?? result.source}`
-    if (exactResults.some((existing) => `${existing.task_id}:${existing.entry_id ?? existing.source}` === key)) return
-    exactResults.push(result)
+  const hits = new Map<string, RawHit>()
+  for (const row of rows) {
+    const existing = hits.get(row.doc_key)
+    if (existing) {
+      if (hitType === 'exact') {
+        existing.exactFtsHit = true
+        existing.prefixOnly = false
+      } else if (hitType === 'prefix' && !existing.exactFtsHit) {
+        existing.prefixOnly = true
+      } else if (hitType === 'phrase') {
+        existing.phraseFtsHit = true
+      }
+      continue
+    }
+    hits.set(row.doc_key, {
+      docKey: row.doc_key,
+      kind: row.kind,
+      taskId: row.task_id,
+      entryId: row.entry_id,
+      noteId: row.note_id,
+      source: row.source,
+      identifierText: row.identifier_text || '',
+      titleText: row.title_text || '',
+      contentText: row.content_text || '',
+      tagsJson: row.tags_json || '[]',
+      updatedAt: row.updated_at,
+      bm25: row.score,
+      exactFtsHit: hitType === 'exact',
+      prefixOnly: hitType === 'prefix',
+      phraseFtsHit: hitType === 'phrase',
+      taskTitle: row.task_title,
+      taskType: row.task_type,
+      taskStatus: row.task_status,
+      taskTags: row.task_tags,
+      noteArchived: row.note_archived,
+      notePinned: row.note_pinned,
+    })
   }
+  return hits
+}
 
-  if (!shortAsciiQuery) {
-    const normalizedQuery = trimmed.toLowerCase()
-    // Match in task titles
-    const titleMatches = db.prepare(
-      `SELECT id, title FROM tasks`
-    ).all() as Array<{ id: string; title: string }>
-    for (const m of titleMatches) {
-      if (!m.title.toLowerCase().includes(normalizedQuery)) continue
-      exactTaskIds.add(m.id)
-      addFallbackResult({ task_id: m.id, entry_id: null, source: 'task', content: '', rank: -1.0 })
-    }
-
-    // Match in task entries (body + log + plan)
-    const entryMatches = db.prepare(
-      `SELECT id, task_id, type, content FROM task_entries`
-    ).all() as Array<{ id: string; task_id: string; type: string; content: string }>
-    for (const m of entryMatches) {
-      if (!htmlToPlainText(m.content).toLowerCase().includes(normalizedQuery)) continue
-      exactTaskIds.add(m.task_id)
-      addFallbackResult({
-        task_id: m.task_id,
-        entry_id: m.id,
-        source: sourceForEntryType(m.type),
-        content: m.content,
-        rank: -1.0,
-      })
-    }
-  }
-
-  const uniqueTokens = [...new Set(tokens)]
-  if (uniqueTokens.length > 1) {
-    const titleTokenMatches = db.prepare(
-      'SELECT id, title FROM tasks'
-    ).all() as Array<{ id: string; title: string }>
-    for (const m of titleTokenMatches) {
-      const title = m.title.toLowerCase()
-      if (!uniqueTokens.every((token) => title.includes(token))) continue
-      exactTaskIds.add(m.id)
-      addFallbackResult({ task_id: m.id, entry_id: null, source: 'task', content: '', rank: -0.5 })
-    }
-
-    const entryTokenMatches = db.prepare(
-      'SELECT id, task_id, type, content FROM task_entries'
-    ).all() as Array<{ id: string; task_id: string; type: string; content: string }>
-    for (const m of entryTokenMatches) {
-      const content = htmlToPlainText(m.content).toLowerCase()
-      if (!uniqueTokens.every((token) => content.includes(token))) continue
-      exactTaskIds.add(m.task_id)
-      addFallbackResult({
-        task_id: m.task_id,
-        entry_id: m.id,
-        source: sourceForEntryType(m.type),
-        content: m.content,
-        rank: -0.5,
-      })
+function generateSnippet(titleText: string, contentText: string, query: string, tokens: string[], maxLen = 240): string {
+  const normalizedQuery = query.toLowerCase()
+  const sources = [titleText, contentText]
+  let bestIdx = -1
+  let bestPos = -1
+  for (let i = 0; i < sources.length; i++) {
+    const src = sources[i].toLowerCase()
+    const pos = src.indexOf(normalizedQuery)
+    if (pos >= 0) {
+      bestIdx = i
+      bestPos = pos
+      break
     }
   }
-
-  // Combine FTS + exact results (exact matches get rank -1.0 so they sort first)
-  const combined = [...ftsResults]
-  const ftsTaskIds = new Set(ftsResults.map(r => r.task_id))
-  for (const er of exactResults) {
-    if (!ftsTaskIds.has(er.task_id)) {
-      combined.push(er)
+  if (bestIdx < 0) {
+    for (let i = 0; i < sources.length; i++) {
+      const src = sources[i].toLowerCase()
+      for (const token of tokens) {
+        const pos = src.indexOf(token.toLowerCase())
+        if (pos >= 0) {
+          bestIdx = i
+          bestPos = pos
+          break
+        }
+      }
+      if (bestIdx >= 0) break
     }
   }
+  if (bestIdx < 0) return contentText.slice(0, maxLen)
+  const source = sources[bestIdx]
+  const halfLen = Math.floor(maxLen / 2)
+  const start = Math.max(0, bestPos - halfLen)
+  const end = Math.min(source.length, start + maxLen)
+  let snippet = source.slice(start, end)
+  if (start > 0) snippet = '...' + snippet
+  if (end < source.length) snippet = snippet + '...'
+  return snippet
+}
 
-  if (combined.length === 0) {
-    // Tag fallback
-    const tagMatches = shortAsciiQuery ? [] : db.prepare(
-      `SELECT id, title, type, status, tags FROM tasks WHERE tags LIKE ?`
-    ).all(`%${trimmed}%`) as Array<{
-      id: string
-      title: string
-      type: string
-      status: string
-      tags: string
-    }>
-    if (tagMatches.length > 0) {
-      const results = tagMatches.map(t => ({
-        taskId: t.id,
-        taskTitle: t.title,
-        taskType: t.type,
-        taskStatus: t.status,
-        taskTags: JSON.parse(t.tags || '[]'),
-        matchType: 'task' as const,
-        matchedContent: '',
-        originalTitle: t.title,
-        matchedOriginal: '',
-        tokens,
-        exactMatch: false,
-        rank: 0.5,
-      }))
-      return { results, tokens }
-    }
-    return { results: [], tokens }
+interface RankedHit extends RawHit {
+  identifierExact: boolean
+  fieldExactPhrase: boolean
+  titleExactPhrase: boolean
+  titleHasAllTokens: boolean
+  tagExact: boolean
+  contentExactPhrase: boolean
+  snippet: string
+  rank: number
+}
+
+function rankHits(
+  allHits: Map<string, RawHit>,
+  query: string,
+  tokens: string[],
+): RankedHit[] {
+  const normalizedQuery = query.toLowerCase()
+  const lowerTokens = tokens.map((t) => t.toLowerCase())
+  const isMultiToken = tokens.length > 1
+  const ranked: RankedHit[] = []
+
+  for (const hit of allHits.values()) {
+    const identifierExact = hit.identifierText.toLowerCase() === normalizedQuery
+    const titleExactPhrase = hit.titleText.toLowerCase().includes(normalizedQuery)
+    const contentExactPhrase = hit.contentText.toLowerCase().includes(normalizedQuery)
+    const fieldExactPhrase = isMultiToken && (titleExactPhrase || contentExactPhrase)
+
+    const titleLower = hit.titleText.toLowerCase()
+    const titleHasAllTokens = lowerTokens.length > 0 && lowerTokens.every((t) => titleLower.includes(t))
+
+    const tags: string[] = JSON.parse(hit.tagsJson || '[]')
+    const tagExact = tags.some((t) => t.toLowerCase() === normalizedQuery)
+
+    const snippet = generateSnippet(hit.titleText, hit.contentText, query, tokens)
+
+    const exactMatch = identifierExact || fieldExactPhrase
+
+    ranked.push({
+      ...hit,
+      identifierExact,
+      fieldExactPhrase,
+      titleExactPhrase,
+      titleHasAllTokens,
+      tagExact,
+      contentExactPhrase,
+      snippet,
+      rank: 0,
+    })
   }
 
-  const taskIds = [...new Set(combined.map(r => r.task_id))]
-  const placeholders = taskIds.map(() => '?').join(', ')
-  const tasks = db.prepare(
-    `SELECT id, title, type, status, tags FROM tasks WHERE id IN (${placeholders})`
-  ).all(...taskIds) as Array<{
-    id: string
-    title: string
-    type: string
-    status: string
-    tags: string
-  }>
+  ranked.sort((a, b) => {
+    if (a.identifierExact !== b.identifierExact) return a.identifierExact ? -1 : 1
+    if (a.fieldExactPhrase !== b.fieldExactPhrase) return a.fieldExactPhrase ? -1 : 1
+    if (a.phraseFtsHit !== b.phraseFtsHit) return a.phraseFtsHit ? -1 : 1
+    if (a.titleExactPhrase !== b.titleExactPhrase) return a.titleExactPhrase ? -1 : 1
+    if (a.exactFtsHit !== b.exactFtsHit) return a.exactFtsHit ? -1 : 1
+    if (a.titleHasAllTokens !== b.titleHasAllTokens) return a.titleHasAllTokens ? -1 : 1
+    if (a.tagExact !== b.tagExact) return a.tagExact ? -1 : 1
+    if (a.contentExactPhrase !== b.contentExactPhrase) return a.contentExactPhrase ? -1 : 1
+    if (a.bm25 !== b.bm25) return a.bm25 - b.bm25
+    if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt
+    return a.docKey.localeCompare(b.docKey)
+  })
 
-  const taskMap = new Map(tasks.map(t => [t.id, t]))
+  ranked.forEach((hit, i) => { hit.rank = i })
+  return ranked
+}
 
-  // Tag fallback
-  const tagMatches = shortAsciiQuery ? [] : db.prepare(
-    `SELECT id, title, type, status, tags FROM tasks WHERE tags LIKE ?`
-  ).all(`%${trimmed}%`) as typeof tasks
+function searchCore(
+  query: string,
+  scope: 'tasks' | 'notes' | 'all',
+  limit: number,
+  includeArchived: boolean,
+  oneHitPerTask = false,
+): { hits: RankedHit[]; tokens: string[]; counts: SearchCounts; total: number } {
+  const trimmed = query.trim()
+  if (!trimmed) return { hits: [], tokens: [], counts: { tasks: 0, taskEntries: 0, notes: 0 }, total: 0 }
 
-  for (const tm of tagMatches) {
-    if (!taskMap.has(tm.id)) {
-      taskMap.set(tm.id, tm)
-      combined.push({ task_id: tm.id, entry_id: null, source: 'task', content: '', rank: 0.5 })
-    }
-  }
+  const tokens = tokenize(trimmed).split(' ').filter(Boolean)
+  if (tokens.length === 0) return { hits: [], tokens: [], counts: { tasks: 0, taskEntries: 0, notes: 0 }, total: 0 }
 
-  // Fetch original entry content for highlighting
-  const entryResultIds = combined.filter(r => r.source !== 'task' && r.entry_id).map(r => r.entry_id!)
-  let entryOriginalMap = new Map<string, string>()
-  if (entryResultIds.length > 0) {
-    const entryPlaceholders = entryResultIds.map(() => '?').join(', ')
-    const entries = db.prepare(`
-      SELECT id, content FROM task_entries WHERE id IN (${entryPlaceholders})
-    `).all(...entryResultIds) as Array<{ id: string; content: string }>
-    for (const entry of entries) {
-      entryOriginalMap.set(entry.id, entry.content)
-    }
-  }
+  const { exact, prefix, phrase } = buildFtsQueries(tokens)
+  const { join: scopeJoin, where: scopeWhere } = buildScopeSql(scope, includeArchived)
+  const candidateLimit = Math.min(limit * 4, 400)
 
-  // De-duplicate: keep highest-ranked match per task, enrich with original text
-  const bestPerTask = new Map<string, SearchResult>()
-  for (const f of combined) {
-    const task = taskMap.get(f.task_id)
-    if (!task) continue
+  const allHits = new Map<string, RawHit>()
 
-    const matchedOrig = f.source === 'task' ? '' : (f.entry_id ? entryOriginalMap.get(f.entry_id) || '' : '')
-    const isExact = exactTaskIds.has(f.task_id)
+  const exactHits = runFtsQuery(exact, scopeWhere, scopeJoin, candidateLimit, 'exact', oneHitPerTask)
+  for (const [key, hit] of exactHits) allHits.set(key, hit)
 
-    const result: SearchResult = {
-      taskId: f.task_id,
-      entryId: f.entry_id,
-      taskTitle: task.title,
-      taskType: task.type,
-      taskStatus: task.status,
-      taskTags: JSON.parse(task.tags || '[]'),
-      matchType: f.source === 'task' ? 'task' : sourceForEntryType(entryTypeForSource(f.source)),
-      matchedContent: f.source === 'task' ? '' : f.content,
-      originalTitle: task.title,
-      matchedOriginal: matchedOrig,
-      tokens,
-      exactMatch: isExact,
-      rank: f.rank,
-    }
-
-    const existing = bestPerTask.get(result.taskId)
-    if (!existing || result.rank < existing.rank) {
-      bestPerTask.set(result.taskId, result)
+  if (phrase) {
+    const phraseHits = runFtsQuery(phrase, scopeWhere, scopeJoin, candidateLimit, 'phrase', oneHitPerTask)
+    for (const [key, hit] of phraseHits) {
+      const existing = allHits.get(key)
+      if (existing) {
+        existing.phraseFtsHit = true
+      } else {
+        allHits.set(key, hit)
+      }
     }
   }
 
-  return { results: [...bestPerTask.values()].sort((a, b) => a.rank - b.rank), tokens }
+  if (prefix) {
+    const prefixHits = runFtsQuery(prefix, scopeWhere, scopeJoin, candidateLimit, 'prefix', oneHitPerTask)
+    for (const [key, hit] of prefixHits) {
+      if (!allHits.has(key)) allHits.set(key, hit)
+    }
+  }
+
+  const ranked = rankHits(allHits, trimmed, tokens)
+
+  let counts: SearchCounts = { tasks: 0, taskEntries: 0, notes: 0 }
+  for (const hit of ranked) {
+    if (hit.kind === 'task') counts.tasks++
+    else if (hit.kind === 'task_entry') counts.taskEntries++
+    else counts.notes++
+  }
+  const total = ranked.length
+
+  return { hits: ranked, tokens, counts, total }
+}
+
+// --- Adapters ---
+
+function hitToSearchResult(hit: RankedHit, tokens: string[], parentTitle: string): SearchResult {
+  const taskTags: string[] = hit.taskTags ? JSON.parse(hit.taskTags || '[]') : []
+  return {
+    taskId: hit.taskId || '',
+    entryId: hit.entryId,
+    taskTitle: parentTitle || hit.titleText || hit.taskTitle || '',
+    taskType: hit.taskType || '',
+    taskStatus: hit.taskStatus || '',
+    taskTags,
+    matchType: hit.kind === 'task' ? 'task' : (hit.source as EntrySource),
+    matchedContent: hit.contentText,
+    originalTitle: parentTitle || hit.taskTitle || '',
+    matchedOriginal: hit.contentText,
+    tokens,
+    exactMatch: hit.identifierExact || hit.fieldExactPhrase,
+    rank: hit.rank,
+  }
+}
+
+function hitToNoteSearchResult(hit: RankedHit, tokens: string[]): NoteSearchResult {
+  const tags: string[] = JSON.parse(hit.tagsJson || '[]')
+  const normalizedQuery = tokens.join(' ').toLowerCase()
+  let matchedSource: 'note_title' | 'note_content' | 'note_tags' = 'note_content'
+  if (hit.titleText.toLowerCase().includes(normalizedQuery) || hit.titleText.toLowerCase().includes(tokens[0]?.toLowerCase() || '')) {
+    matchedSource = 'note_title'
+  } else if (tags.some((t) => t.toLowerCase().includes(normalizedQuery))) {
+    matchedSource = 'note_tags'
+  }
+  return {
+    kind: 'note',
+    noteId: hit.noteId || '',
+    title: hit.titleText,
+    tags,
+    snippet: hit.snippet,
+    matchedSource,
+    updatedAt: hit.updatedAt,
+    pinned: Boolean(hit.notePinned),
+    tokens,
+    exactMatch: hit.identifierExact || hit.fieldExactPhrase,
+    rank: hit.rank,
+  }
+}
+
+// --- Public API (backward compatible signatures) ---
+
+export function searchTasks(query: string, limit = 50): SearchResponse {
+  const { hits, tokens } = searchCore(query, 'tasks', limit, false, true)
+  const safeLimit = Math.min(Math.max(limit, 1), 200)
+
+  const byTask = new Map<string, { best: RankedHit; count: number }>()
+  for (const hit of hits) {
+    const taskId = hit.taskId || ''
+    if (!taskId) continue
+    const existing = byTask.get(taskId)
+    if (existing) {
+      existing.count++
+      if (hit.rank < existing.best.rank) existing.best = hit
+    } else {
+      byTask.set(taskId, { best: hit, count: 1 })
+    }
+  }
+
+  const sortedTasks = [...byTask.values()].sort((a, b) => a.best.rank - b.best.rank)
+  const results: SearchResult[] = []
+  for (const { best, count } of sortedTasks.slice(0, safeLimit)) {
+    const parentTitle = best.taskTitle || best.titleText || ''
+    const result = hitToSearchResult(best, tokens, parentTitle)
+    if (count > 1) {
+      (result as any).matchCount = count
+    }
+    results.push(result)
+  }
+
+  return { results, tokens }
+}
+
+export function searchNotes(query: string, limit = 50, includeArchived = false): { results: NoteSearchResult[]; tokens: string[] } {
+  const safeLimit = Math.min(Math.max(limit, 1), 200)
+  const { hits, tokens } = searchCore(query, 'notes', safeLimit, includeArchived)
+  const results = hits.map((hit) => hitToNoteSearchResult(hit, tokens))
+  return { results, tokens }
+}
+
+export function searchAll(query: string, limit = 50, includeArchived = false): {
+  results: {
+    tasks: Array<SearchResult & { kind: 'task' }>
+    taskEntries: Array<SearchResult & { kind: 'task_entry' }>
+    notes: NoteSearchResult[]
+  }
+  tokens: string[]
+  counts: SearchCounts
+  total: number
+} {
+  const safeLimit = Math.min(Math.max(limit, 1), 200)
+  const { hits, tokens, counts, total } = searchCore(query, 'all', safeLimit, includeArchived)
+
+  const topHits = hits.slice(0, safeLimit)
+  const tasks: Array<SearchResult & { kind: 'task' }> = []
+  const taskEntries: Array<SearchResult & { kind: 'task_entry' }> = []
+  const notes: NoteSearchResult[] = []
+
+  for (const hit of topHits) {
+    if (hit.kind === 'task') {
+      const parentTitle = hit.taskTitle || hit.titleText || ''
+      tasks.push({ ...hitToSearchResult(hit, tokens, parentTitle), kind: 'task' })
+    } else if (hit.kind === 'task_entry') {
+      const parentTitle = hit.taskTitle || ''
+      taskEntries.push({ ...hitToSearchResult(hit, tokens, parentTitle), kind: 'task_entry' })
+    } else {
+      notes.push(hitToNoteSearchResult(hit, tokens))
+    }
+  }
+
+  return { results: { tasks, taskEntries, notes }, tokens, counts, total }
 }

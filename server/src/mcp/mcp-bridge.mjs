@@ -259,6 +259,42 @@ server.registerTool(
   }
 )
 
+server.registerTool(
+  'search_notes',
+  {
+    description: 'Full-text search across notes (title, content, tags).',
+    inputSchema: {
+      query: z.string().describe('Search query text.'),
+      limit: z.number().optional().describe('Maximum results. Default: 50.'),
+      includeArchived: z.boolean().optional().describe('Include archived notes. Default: false.'),
+    },
+  },
+  async ({ query, limit, includeArchived }) => {
+    const params = new URLSearchParams({ scope: 'notes', q: query, limit: String(limit ?? 50) })
+    if (includeArchived) params.set('includeArchived', 'true')
+    const result = await api(`/api/search?${params}`)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
+server.registerTool(
+  'search_all',
+  {
+    description: 'Full-text search across tasks, task entries, and notes.',
+    inputSchema: {
+      query: z.string().describe('Search query text.'),
+      limit: z.number().optional().describe('Maximum results. Default: 50.'),
+      includeArchived: z.boolean().optional().describe('Include archived notes. Default: false.'),
+    },
+  },
+  async ({ query, limit, includeArchived }) => {
+    const params = new URLSearchParams({ scope: 'all', q: query, limit: String(limit ?? 50) })
+    if (includeArchived) params.set('includeArchived', 'true')
+    const result = await api(`/api/search?${params}`)
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+  }
+)
+
 const transport = new StdioServerTransport()
 await server.connect(transport)
 console.error('Chronicle MCP stdio server started')

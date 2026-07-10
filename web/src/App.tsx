@@ -6,7 +6,7 @@ import { TodayPage } from './pages/TodayPage'
 import { NotesPage } from './pages/NotesPage'
 import { AlertCircle, BarChart3, Calendar, CheckCircle2, ClipboardList, FileText, ListTodo, Loader2, Search, Settings, X } from 'lucide-react'
 import { useI18n } from './i18n/context'
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import type React from 'react'
 import { createPortal } from 'react-dom'
 import { useSSE } from './hooks/useSSE'
@@ -24,6 +24,8 @@ import { fetchBackgroundTask } from '@/services/api'
 import * as api from '@/services/api'
 import type { GlobalSearchResponse, NoteSearchResult, SearchResult } from '@/types'
 import { setSearchJumpIntent } from '@/lib/searchJump'
+import { highlightText } from '@/lib/highlight'
+import { useSearchPersistStore, isSearchPersistValid } from '@/stores/searchPersistStore'
 
 // Open links in system browser when running in Tauri
 function useSystemBrowserLinks() {
@@ -765,13 +767,38 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<GlobalSearchResponse | null>(null)
   const [loading, setLoading] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const focusRestoreRef = useRef<HTMLElement | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const flattened = useMemo(() => {
+    if (!result?.results) return []
+    return [
+      ...result.results.tasks.map((item, i) => ({ ...item, kind: 'task' as const, flatIndex: i, section: 'tasks' as const })),
+      ...result.results.taskEntries.map((item, i) => ({ ...item, kind: 'task_entry' as const, flatIndex: result.results.tasks.length + i, section: 'taskEntries' as const })),
+      ...result.results.notes.map((item, i) => ({ ...item, kind: 'note' as const, flatIndex: result.results.tasks.length + result.results.taskEntries.length + i, section: 'notes' as const })),
+    ]
+  }, [result])
 
   useEffect(() => {
     if (!open) return
-    setQuery('')
-    setResult(null)
-    requestAnimationFrame(() => inputRef.current?.focus())
+    const persisted = useSearchPersistStore.getState().lastSearch
+    if (isSearchPersistValid(persisted)) {
+      setQuery(persisted.query)
+      setResult(persisted.results)
+      setSelectedIndex(persisted.selectedIndex)
+    } else {
+      setQuery('')
+      setResult(null)
+      setSelectedIndex(0)
+    }
+    focusRestoreRef.current = document.activeElement as HTMLElement
+    requestAnimationFrame(() => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    })
   }, [open])
 
   useEffect(() => {
@@ -780,29 +807,58 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
     if (!trimmed) {
       setResult(null)
       setLoading(false)
+      setSelectedIndex(0)
       return
     }
-    let cancelled = false
+    if (abortRef.current) abortRef.current.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
     setLoading(true)
     const timer = window.setTimeout(() => {
       api.searchAll(trimmed, 50)
         .then((next) => {
-          if (!cancelled) setResult(next)
+          if (!controller.signal.aborted) {
+            setResult(next)
+            setSelectedIndex(0)
+          }
         })
         .catch(() => {
-          if (!cancelled) setResult(null)
+          if (!controller.signal.aborted) setResult(null)
         })
         .finally(() => {
-          if (!cancelled) setLoading(false)
+          if (!controller.signal.aborted) setLoading(false)
         })
     }, 180)
     return () => {
-      cancelled = true
       window.clearTimeout(timer)
+      controller.abort()
     }
   }, [open, query])
 
+  useEffect(() => {
+    if (open) return
+    if (abortRef.current) abortRef.current.abort()
+    focusRestoreRef.current?.focus()
+    focusRestoreRef.current = null
+  }, [open])
+
+  useEffect(() => {
+    if (!open || flattened.length === 0) return
+    const selected = listRef.current?.querySelector(`[data-search-idx="${selectedIndex}"]`)
+    selected?.scrollIntoView({ block: 'nearest' })
+  }, [open, selectedIndex, flattened.length])
+
+  function persistSearchState() {
+    useSearchPersistStore.getState().setLastSearch({
+      query,
+      results: result,
+      selectedIndex,
+      timestamp: Date.now(),
+    })
+  }
+
   async function openSearchTask(item: SearchResult & { kind: 'task' | 'task_entry' }) {
+    persistSearchState()
     onOpenChange(false)
     setSearchJumpIntent({
       target: 'task',
@@ -817,6 +873,7 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
   }
 
   function openSearchNote(item: NoteSearchResult) {
+    persistSearchState()
     onOpenChange(false)
     setSearchJumpIntent({
       target: 'note',
@@ -828,39 +885,92 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
     navigate(`/notes?id=${encodeURIComponent(item.noteId)}`)
   }
 
-  function renderTaskResult(item: SearchResult & { kind: 'task' | 'task_entry' }) {
+  function focusResult(idx: number) {
+    setSelectedIndex(idx)
+    requestAnimationFrame(() => {
+      const el = listRef.current?.querySelector(`[data-search-idx="${idx}"]`) as HTMLElement | null
+      el?.focus()
+    })
+  }
+
+  function handleInputKeyDown(event: React.KeyboardEvent) {
+    if (event.key === 'ArrowDown' && flattened.length > 0) {
+      event.preventDefault()
+      focusResult(0)
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      onOpenChange(false)
+    }
+  }
+
+  function handleResultKeyDown(event: React.KeyboardEvent, flatIdx: number) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (flatIdx < flattened.length - 1) focusResult(flatIdx + 1)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (flatIdx === 0) {
+        inputRef.current?.focus()
+        setSelectedIndex(-1)
+      } else {
+        focusResult(flatIdx - 1)
+      }
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      onOpenChange(false)
+    }
+  }
+
+  function renderTaskResult(item: SearchResult & { kind: 'task' | 'task_entry' }, flatIdx: number) {
     const subtitle = item.kind === 'task'
       ? `${item.taskId} · ${item.taskStatus}`
       : `${item.taskId} · ${item.matchType.replace('entry_', '')}`
     const content = plainText(item.matchedOriginal || item.matchedContent || item.taskTitle).slice(0, 180)
+    const tokens = item.tokens.length ? item.tokens : result?.tokens ?? []
+    const isSelected = flatIdx === selectedIndex
     return (
       <button
-        key={`${item.kind}-${item.taskId}-${item.matchType}-${item.matchedOriginal}`}
-        className="w-full rounded-md border border-border bg-background px-3 py-2 text-left hover:bg-muted"
+        key={`${item.kind}-${item.taskId}-${item.matchType}-${flatIdx}`}
+        data-search-idx={flatIdx}
+        type="button"
+        tabIndex={isSelected ? 0 : -1}
+        className={`w-full rounded-md border px-3 py-2 text-left transition ${
+          isSelected ? 'border-primary/50 bg-primary/10 ring-1 ring-primary/30' : 'border-border bg-background hover:bg-muted'
+        }`}
         onClick={() => void openSearchTask(item)}
+        onKeyDown={(e) => handleResultKeyDown(e, flatIdx)}
       >
-        <div className="truncate text-sm font-medium">{item.taskTitle || item.originalTitle || item.taskId}</div>
+        <div className="truncate text-sm font-medium">{highlightText(item.taskTitle || item.originalTitle || item.taskId, tokens)}</div>
         <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>
-        {content && <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{content}</div>}
+        {content && <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{highlightText(content, tokens)}</div>}
       </button>
     )
   }
 
-  function renderNoteResult(item: NoteSearchResult) {
+  function renderNoteResult(item: NoteSearchResult, flatIdx: number) {
+    const tokens = item.tokens.length ? item.tokens : result?.tokens ?? []
+    const isSelected = flatIdx === selectedIndex
     return (
       <button
         key={item.noteId}
-        className="w-full rounded-md border border-border bg-background px-3 py-2 text-left hover:bg-muted"
+        data-search-idx={flatIdx}
+        type="button"
+        tabIndex={isSelected ? 0 : -1}
+        className={`w-full rounded-md border px-3 py-2 text-left transition ${
+          isSelected ? 'border-primary/50 bg-primary/10 ring-1 ring-primary/30' : 'border-border bg-background hover:bg-muted'
+        }`}
         onClick={() => openSearchNote(item)}
+        onKeyDown={(e) => handleResultKeyDown(e, flatIdx)}
       >
-        <div className="truncate text-sm font-medium">{item.title}</div>
+        <div className="truncate text-sm font-medium">{highlightText(item.title, tokens)}</div>
         <div className="mt-0.5 text-xs text-muted-foreground">{item.noteId} · {item.matchedSource.replace('note_', '')}</div>
-        {item.snippet && <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.snippet}</div>}
+        {item.snippet && <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{highlightText(item.snippet, tokens)}</div>}
       </button>
     )
   }
 
   const sections = result?.results
+  const counts = result?.counts
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -884,6 +994,7 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
               ref={inputRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={handleInputKeyDown}
               className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none"
               placeholder="Search..."
             />
@@ -896,23 +1007,35 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
           ) : !sections || result.total === 0 ? (
             <div className="px-1 text-sm text-muted-foreground">{query.trim() ? 'No results.' : 'Type to search.'}</div>
           ) : (
-            <div className="space-y-4">
+            <div ref={listRef} className="space-y-4">
               {sections.tasks.length > 0 && (
                 <section>
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Tasks</div>
-                  <div className="space-y-2">{sections.tasks.map(renderTaskResult)}</div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+                    Tasks {counts ? `(${counts.tasks})` : `(${sections.tasks.length})`}
+                  </div>
+                  <div className="space-y-2">
+                    {sections.tasks.map((item, i) => renderTaskResult(item, i))}
+                  </div>
                 </section>
               )}
               {sections.taskEntries.length > 0 && (
                 <section>
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Task Entries</div>
-                  <div className="space-y-2">{sections.taskEntries.map(renderTaskResult)}</div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+                    Task Entries {counts ? `(${counts.taskEntries})` : `(${sections.taskEntries.length})`}
+                  </div>
+                  <div className="space-y-2">
+                    {sections.taskEntries.map((item, i) => renderTaskResult(item, sections.tasks.length + i))}
+                  </div>
                 </section>
               )}
               {sections.notes.length > 0 && (
                 <section>
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Notes</div>
-                  <div className="space-y-2">{sections.notes.map(renderNoteResult)}</div>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+                    Notes {counts ? `(${counts.notes})` : `(${sections.notes.length})`}
+                  </div>
+                  <div className="space-y-2">
+                    {sections.notes.map((item, i) => renderNoteResult(item, sections.tasks.length + sections.taskEntries.length + i))}
+                  </div>
                 </section>
               )}
             </div>

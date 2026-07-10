@@ -116,7 +116,7 @@ test.describe('Pinned content', () => {
     await page.waitForTimeout(200)
     const editor = page.locator('[data-rich-editor="true"] .ProseMirror').first()
     await editor.fill('Updated pinned content')
-    await page.getByRole('button', { name: 'Save' }).click()
+    await page.getByRole('button', { name: 'Save', exact: true }).click()
     await page.waitForTimeout(500)
     await expect(pinnedSection.getByText('Updated pinned content')).toBeVisible()
 

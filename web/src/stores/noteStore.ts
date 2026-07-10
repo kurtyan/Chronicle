@@ -52,11 +52,13 @@ export const useNoteStore = create<NoteState>((set, get) => ({
     set({ activeNote: existing ?? null })
     const note = await api.getNoteById(id)
     if (!note) {
-      set({ activeNote: null, linkedTasks: [] })
+      if (get().activeNote?.id === id) set({ activeNote: null, linkedTasks: [] })
       return
     }
-    set({ activeNote: note })
-    await get().loadLinkedTasks(note.id)
+    if (!get().activeNote || get().activeNote?.id === id) {
+      set({ activeNote: note })
+      await get().loadLinkedTasks(note.id)
+    }
   },
 
   createNote: async (data) => {

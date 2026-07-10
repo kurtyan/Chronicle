@@ -409,6 +409,61 @@ export function initDb() {
     db.prepare('DELETE FROM _meta WHERE key = ?').run('fts_tokenizer_version')
   }
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS search_documents (
+      doc_key TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK(kind IN ('task', 'task_entry', 'note')),
+      task_id TEXT,
+      entry_id TEXT,
+      note_id TEXT,
+      source TEXT NOT NULL,
+      identifier_text TEXT NOT NULL DEFAULT '',
+      title_text TEXT NOT NULL DEFAULT '',
+      content_text TEXT NOT NULL DEFAULT '',
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      updated_at INTEGER NOT NULL,
+      content_hash TEXT NOT NULL
+    )
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_search_documents_kind
+    ON search_documents(kind)
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_search_documents_task
+    ON search_documents(task_id)
+  `)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_search_documents_note
+    ON search_documents(note_id)
+  `)
+
+  const searchFtsExists = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'search_fts'"
+  ).get() as { sql: string } | undefined
+  let searchFtsSchemaChanged = false
+  if (searchFtsExists) {
+    if (!/prefix\s*=\s*'2\s+3\s+4'/i.test(searchFtsExists.sql || '')) {
+      db.exec('DROP TABLE search_fts')
+      searchFtsSchemaChanged = true
+    }
+  }
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
+      doc_key UNINDEXED,
+      identifier,
+      title,
+      content,
+      tags,
+      tokenize = 'unicode61',
+      prefix = '2 3 4'
+    )
+  `)
+  if (searchFtsSchemaChanged) {
+    // A recreated FTS table is empty even when the document rows still exist.
+    db.prepare('DELETE FROM _meta WHERE key = ?').run('search_index_version')
+  }
+
   cleanupOrphans()
   db.pragma('foreign_keys = ON')
 

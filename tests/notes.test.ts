@@ -174,6 +174,8 @@ test.describe('Notes', () => {
     await page.waitForLoadState('load')
 
     await page.getByTitle('New note').click()
+    await page.waitForURL(/\/notes\?id=N\d{10}/)
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Untitled note')
     await page.getByPlaceholder('Untitled note').fill(`UiNote-${unique}`)
     const editor = page.locator('[data-rich-editor="true"] .ProseMirror')
     await editor.click()
@@ -189,6 +191,59 @@ test.describe('Notes', () => {
 
     const search = await (await page.request.get(`/api/search?q=${encodeURIComponent(`UiNote-${unique}`)}&scope=notes`)).json()
     expect(search.results.some((result: any) => result.title === `UiNote-${unique}`)).toBeTruthy()
+  })
+
+  test('create then immediately rename and type body preserves title', async ({ page }) => {
+    const unique = Date.now()
+    await page.goto('/notes?lang=en')
+    await page.waitForLoadState('load')
+
+    await page.getByTitle('New note').click()
+    await page.waitForURL(/\/notes\?id=N\d{10}/)
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Untitled note')
+    await page.getByPlaceholder('Untitled note').fill(`UiRenameA-${unique}`)
+    const editor = page.locator('[data-rich-editor="true"] .ProseMirror')
+    await editor.click()
+    await page.keyboard.type(`RenameBodyA-${unique}`)
+
+    await expect(page.getByText('saved', { exact: true })).toBeVisible({ timeout: 5000 })
+    const savedTitle = await page.getByPlaceholder('Untitled note').inputValue()
+    expect(savedTitle).toBe(`UiRenameA-${unique}`)
+
+    await expect.poll(async () => {
+      const note = await (await page.request.get(`/api/notes/${(page.url().match(/id=(N\d{10})/) || [])[1]}`)).json()
+      return note.title
+    }).toBe(`UiRenameA-${unique}`)
+
+    await expect.poll(async () => {
+      const search = await (await page.request.get(`/api/search?q=${encodeURIComponent(`UiRenameA-${unique}`)}&scope=notes`)).json()
+      return search.results.some((result: any) => result.title === `UiRenameA-${unique}`)
+    }).toBeTruthy()
+  })
+
+  test('rapid title changes preserve last value', async ({ page }) => {
+    const unique = Date.now()
+    await page.goto('/notes?lang=en')
+    await page.waitForLoadState('load')
+
+    await page.getByTitle('New note').click()
+    await page.waitForURL(/\/notes\?id=N\d{10}/)
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Untitled note')
+
+    const titleInput = page.getByPlaceholder('Untitled note')
+    await titleInput.fill(`UiFastA-${unique}`)
+    await titleInput.fill(`UiFastB-${unique}`)
+    await titleInput.fill(`UiFastC-${unique}`)
+
+    await expect(page.getByText('saved', { exact: true })).toBeVisible({ timeout: 5000 })
+    const savedTitle = await titleInput.inputValue()
+    expect(savedTitle).toBe(`UiFastC-${unique}`)
+
+    const noteId = (page.url().match(/id=(N\d{10})/) || [])[1]
+    await expect.poll(async () => {
+      const note = await (await page.request.get(`/api/notes/${noteId}`)).json()
+      return note.title
+    }).toBe(`UiFastC-${unique}`)
   })
 
   test('Notes page searches body content through the API', async ({ page }) => {

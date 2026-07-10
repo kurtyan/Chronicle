@@ -1,1225 +1,1096 @@
-# Chronicle 搜索增强方案
+# Chronicle 搜索增强：调查结论与实施计划
 
-> **状态**：调研完成，待实施
-> **覆盖范围**：(1) 现有搜索功能精准度与体验优化 (2) 语义向量搜索接入
-> **目标读者**：将实施这些改动的 agent 或开发者
-> **前置阅读**：`README.md`（架构总览）、`AGENTS.md`（构建运行环境）
-
----
-
-## 目录
-
-- [一、现状速览](#一现状速览)
-- [二、精准度问题](#二精准度问题17-项)
-- [三、交互体验问题](#三交互体验问题15-项)
-- [四、改进建议按-ROI-排序](#四改进建议按-roi-排序)
-- [五、语义搜索架构总览](#五语义搜索架构总览)
-- [六、语义搜索技术选型](#六语义搜索技术选型)
-- [七、语义搜索实施计划4-阶段](#七语义搜索实施计划4-阶段)
-- [八、Tauri-分发要点](#八tauri-分发要点最容易踩坑的地方)
-- [九、关键陷阱清单](#九关键陷阱清单)
-- [十、实施优先级](#十实施优先级)
-- [附录A-现有代码结构索引](#附录a-现有代码结构索引)
-- [附录B-参考资料](#附录b-参考资料)
+> **状态**：调查完成，方案已决策，待按阶段实施<br>
+> **调查日期**：2026-07-10<br>
+> **代码基线**：`main@70cd9e8`（Chronicle 2.2.5）<br>
+> **目标读者**：接手实现的 agent / 开发者<br>
+> **前置阅读**：`README.md`、`AGENTS.md`
 
 ---
 
-## 一、现状速览
+## Agent 快速开始
 
-Chronicle 搜索分三个入口（行为不一致的体验）：
+阅读路线：先读本节，再读“已完成能力”“旧方案纠正”“已锁定决策”和“完整实施顺序”；开始具体
+commit 时只需展开对应 Phase 的数据模型、接口和验收小节。调查细节保留在前半部分，供遇到设计疑问时
+回查，不要求实现前逐字重读。
 
-| 入口 | 快捷键 | 触发方式 | 范围 | 高亮 | 键盘导航 |
-|---|---|---|---|---|---|
-| Board 内联搜索 | `Cmd+F` | Enter 触发 | 只搜任务 | 仅标题 | ✅ ArrowUp/Down |
-| 全局搜索 Dialog | `Cmd+Shift+F` | 180ms 防抖即时 | 任务+条目+笔记 | ❌ 无 | ❌ 无 |
-| Notes 搜索 | 直接输入 | 250ms 防抖 | 仅笔记 | 仅跳转时 | ❌ 无 |
+不要从旧版本文档的任务清单逐项实现。调查确认其中一部分已经在
+`dd8fec0 Improve search indexing and result navigation` 完成，另一部分的技术设计与当前
+架构不兼容。
 
-### 后端架构
+正确推进顺序：
 
-- **数据库**：SQLite（better-sqlite3 v12.9.0），WAL 模式
-- **全文索引**：FTS5，两个虚拟表 `tasks_fts`（任务+条目）、`notes_fts`（笔记）
-- **tokenizer**：`unicode61`；nodejieba 在索引前**预分词**（token 前置、FTS5 只按空白切）
-- **搜索 4 阶段流水线**（`server/src/services/searchService.ts` 的 `searchTasks()`）：
-  1. FTS5 tokenized 搜索 → `ORDER BY f.rank`
-  2. LIKE 精确匹配（全表扫描任务标题 + 条目内容）
-  3. 多 token 全 token 命中回退（全表扫描）
-  4. tags `LIKE '%query%'` 兜底
-  5. 按 rank 去重排序（人工 rank -1.0 / -0.5 / 0.5 + FTS5 bm25 混用）
+1. 先修复当前 Notes 新建/自动保存竞态，使现有搜索相关回归稳定全绿。
+2. 建立统一 `search_documents + search_fts`，删除搜索请求中的全表扫描和混合 rank。
+3. 在统一搜索核心之上补齐 Global / Board / Notes 的高亮、键盘导航、计数和精确跳转。
+4. Phase 1 验收通过后，再接 Provider embedding、可靠后台索引和 RRF 混合搜索。
+5. 首版语义搜索只实现 OpenAI-compatible Provider，覆盖任务标题、task entries 和 notes；
+   不实现内置 Transformers.js 模型。
 
-### 现有 LLM 基础设施（语义搜索可复用）
+开始实现前必须知道的五件事：
 
-- `config.llm.{baseUrl, model, apiKey, timeoutMs}` — OpenAI 兼容格式，默认 `http://localhost:11434/v1`（Ollama）
-- `llmService.ts` 用裸 `fetch()` 调 `${baseUrl}/chat/completions`，**无 SDK 依赖**
-- `backgroundTaskService.ts` — 已有去重后台任务队列（`createOrReuseRunningTask`）
-- Settings 已有 `ai.provider` 面板，可扩展为 embedding 选择器
+- Task ID 是用户需要的搜索能力，必须保留，不能按旧方案删除。
+- Chronicle 桌面端始终通过 HTTP 连接独立安装的 Node server；`sqlite-vec` 属于 server npm 包，
+  不属于 Tauri `.app` resources。
+- 现有 FTS 内容是 nodejieba 预分词后的字符串，不能直接拿 FTS `snippet()` 当可读摘要。
+- `backgroundTaskService` 目前是后台任务状态登记器，不是一个能恢复 payload 的 durable queue。
+- 语义结果也必须能落到具体 task entry 或 note 内容，不能只返回一个 task 级向量结果。
 
----
+### 第一批应打开的文件
 
-## 二、精准度问题（17 项）
-
-### 🔴 P0 — 根本性缺陷
-
-**1. 全表扫描回退（Phase 2-3）每搜索都跑**
-- `searchService.ts` 第 178-234 行：每次搜索都用 `SELECT id, title FROM tasks` 配 JS `includes()` 扫完所有任务和所有条目
-- 对大库就是 O(n) × N 次 `htmlToPlainText` 调用
-- 根因：分词后存储和原始文本脱节，必须修分词策略才能去掉这层 fallback
-
-**2. BM25 不分列权重**
-- `ORDER BY f.rank` 直接用 FTS5 默认 bm25，标题和正文命中权重一致
-- FTS5 原生支持 `bm25(tasks_fts, 3.0, 0.0, 1.0, 1.5)` 让 `task_id/source/content` 不同列各拿不同权重
-- 任务标题命中应该远高于 entry 正文命中
-
-**3. 人造 rank 与 FTS5 rank 混用无归一化**
-- 精确匹配 `-1.0`、全 token 命中 `-0.5`、FTS5 bm25（约 -3 ~ -12）、tag 兜底 `0.5` 直接放一起比大小
-- FTS5 bm25 在 -3 ~ -12 范围摆动，被 `-1.0` 硬压上去时，FTS5 命中的多 keyword 任务反而会被排到精确匹配后面
-- 包括像 "neo4j" vs "neo4j 部署" 这种明显应该排第一的 case
-
-**4. 字段存索引的是 `tokenize(id + " " + title)`，不是原始文本**
-- `indexTask` 把 `taskId + " " + title` 一起分词塞进 FTS5
-- Task ID（如 "T0000012345"）被切成 token 进索引，把噪声推向极高位置
-- 用户真正搜任务不会按 ID 搜，除非用 `id:T0000012*` 这种语法（目前没暴露）
-
-**5. Tokenizer 过滤策略丢词**
-- 1 个 ASCII 字符直接丢 → 搜 "a"、"x"、"3" 零结果
-- 2 字 ASCII 只放行 `{ai, go, ui, ux, id}` → 搜 "js"、"ts"、"go" 之外的语言名进不去
-- 用了 `cut` 不是 `cutForSearch` → 索引端召回率不如 `cutForSearch`（后者会插入二级分词，提升短词命中率）
-
-**6. `shortAsciiQuery` 短查询完全不走 FTS5**
-- 1-2 字 ASCII 查询跳过 FTS5 与精确匹配回退，仅靠 tag LIKE 兜底
-- 用户搜 "go" 找含 "Go" 的任务，会命中一堆 tag 里含 "go" 的，完全错过标题/正文里含 "Go" 字面量的
-
-### 🟡 P1 — 明显可改进
-
-**7. 没有 prefix 索引，无法做 `meet*` 自动补全**
-- 建表没设 `prefix='2 3 4'`
-- `MATCH 'meet*'` 也能跑但全靠扫描，评分差
-- 加上 prefix 索引立即获得 "边打字边搜" 的能力
-
-**8. 没有 NEAR/bigram 邻近搜索**
-- `"daily standup"` 当前只能命中 token 级，不能限定词序或邻近度
-- 加 `NEAR(daily standup, 5)` 让 "daily meeting" 也能被 "standup daily" 命中
-
-**9. 没有列过滤查询语法**
-- FTS5 支持 `title:meeting`、`source:entry_log:crash`，但前端没暴露
-- 用户想只搜日志、只搜标题、只搜笔记内容都做不到
-
-**10. Tag fallback 用 `LIKE '%query%'` 整串匹配**
-- `tasks.tags LIKE '%trimmed%'` 是整串匹配，会把 tag 列当字符串查
-- 用户搜 "dev" 会命中 `["ai", "devops"]` 但也会命中 `["node_development"]`
-- 应该 tokenize 后按 tag 对象查 `JSON_EACH(tags)`
-
-**11. 每个任务只保留最佳匹配**
-- `bestPerTask` 保 rank 最低的一条进结果
-- 用户搜 "微服务" 一个任务里有 5 条 log 都提到微服务，应该能看到 5 条或至少有提示 "另有 4 处命中"
-
-**12. Tasks 和 Notes 分两个 FTS 表、不能跨表搜索**
-- `searchAll` 实际是两次独立搜索后合并
-- 无法做 "某个 tag 在任务和笔记里同时出现" 这种联合查询
-- FTS5 支持 UNION ALL + bm25 排序实现跨表（虽然 rank 不归一）
-
-**13. `htmlToPlainText` 在 LIKE 回退里重复工作**
-- 每次搜索都把每条 entry 的 HTML 重跑一遍
-- 索引应该把纯文本原始内容另存一列，搜索时直接 `content_text LIKE ?`，避免每搜索全库剥 HTML
-
-**14. MCP stdio bridge 缺 `search_notes` 工具**
-- `mcp-bridge.mjs` 只暴露了 `search_tasks`
-- HTTP MCP（`start.ts`）有两个，但 Claude Code 用户走 stdio 搜不到笔记
-- MCP 响应也没 `total` 字段和 `includeArchived` 支持
-
-### 🟢 P2 — 锦上添花
-
-**15. 没有事前 spellfix1 容错**
-- `editdist3` 或 spellfix1 对英文 typo 很有效（`meetin → meeting`）
-- 对中文剪前面分词也能补救
-- 当前完全无容错
-
-**16. 没有 trigram 子串匹配**
-- FTS5 的 trigram tokenizer 原生支持子串匹配（`"会议室"` 能命中 `"会议室预约"`）
-- 对中文短查询比 jieba 切词更友好
-- 可以二表并存：jieba 表做相关性排名，trigram 表做子串召回
-
-**17. 索引范围窄**
-- 当前只索引 tasks、task_entries、notes
-- work sessions、day scripts、agent conversations、attachments 内容都不能搜
-- 如要扩展，每加一个数据源就要重复一套 indexing + search 的样板
+- `server/src/services/searchService.ts`
+- `server/src/services/noteService.ts`
+- `server/src/services/tokenizer.ts`
+- `server/src/db.ts`
+- `server/src/index.ts`
+- `web/src/App.tsx`
+- `web/src/pages/BoardPage.tsx`
+- `web/src/pages/NotesPage.tsx`
+- `web/src/lib/searchJump.ts`
+- `tests/data-integrity.test.ts`
+- `tests/notes.test.ts`
 
 ---
 
-## 三、交互体验问题（15 项）
+# 第一部分：调查结果
 
-### 🔴 P0 — 明显影响体验
+## 1. 调查范围与验证方式
 
-**1. GlobalSearchDialog 不高亮搜索结果**
-- `App.tsx` 第 831-861 行：`renderTaskResult`/`renderNoteResult` 直接显示原始 title/snippet 纯文本
-- `tokens` 字段拿到了但**完全没用**
-- `searchJump.ts` 只负责跳转到目标页面后再高亮
-- 全局搜索弹窗里的结果完全没视觉反馈，用户看到 "Meeting preparation" 不知道到底匹配了 "meeting" 还是 "preparation"
+本次调查不是只阅读旧方案，而是与当前 `main` 的实现逐项比对，覆盖：
 
-**2. Board 内联搜索跳转后不高亮**
-- `taskStore.ts` `doSearch` 只存 `searchResults/searchTokens`，没 `setSearchJumpIntent`
-- 用户按回车跳进任务详情 → workspace 完全不知道是从搜索进来的
-- Tokens 在 store 里但 TaskDetailWorkspace 看不到 searchMode 状态
+- FTS schema、tokenizer、任务与笔记索引写入路径。
+- `/api/search` 的 tasks / notes / all 三种 scope。
+- Global Search、Board 内联搜索、Notes 搜索及 jump/highlight 消费链路。
+- HTTP MCP、stdio MCP、Node server 构建发布和 Tauri 连接方式。
+- 当前搜索相关 Playwright 基线。
+- `sqlite-vec@0.1.9` 在当前 Node 25 + `better-sqlite3@12.9.0` 下的实际加载和 schema 创建。
 
-**3. GlobalSearchDialog 无键盘导航**
-- 没有 ArrowUp/Down/Enter 处理用户在结果列表里上下移动的交互
-- Escape 能关闭但用户只能鼠标点
-- 一个面向键盘的搜索弹窗居然只能鼠标
+调查时工作树为 clean，`main` 与 `origin/main` 一致。
 
-**4. 三套搜索行为不一致**
-- Board 用 Enter-to-search（落后）
-- Global 用 180ms 防抖即时搜索
-- Notes 用 250ms 防抖过滤
-- 用户在每个页面体验到三套搜索 UX 范式，心智成本高
-- 应该统一为即时 + 防抖
+### 当前测试基线
 
-### 🟡 P1 — 体验短板
+执行：
 
-**5. Board 内联搜索结果卡片没内容预览**
-- `BoardPage.tsx` 第 955-1000 行：结果卡只显示标题 + 类型徽章 + 状态
-- 命中日志内容时不显示 `matchedOriginal` 的片段
-- 用户看到标题 "T0000012345" 不知道匹配了哪段日志，只能点进去看
-
-**6. 没有搜索历史/最近搜索**
-- 每次打开搜索都得重新打
-- 一个本地优先的应用保存最近 10-20 条 query 到 localStorage 几乎零成本
-
-**7. 没有结果计数**
-- GlobalSearchDialog 没显示 "找到 8 个任务、3 条日志、2 个笔记"
-- `result.total` 字段后端返回了但前端没用
-- 各 section 单独计数也没显示
-
-**8. 没有高级过滤/搜索运算符**
-- 不能按 status 过滤搜索
-- 不能按 type 过滤搜索
-- 不能按日期范围
-- 不能用 `title:foo`、`tag:bar`、`status:done` 这种语法
-- 不能按某个 entry type 限定（只搜 log / 只搜 pinned）
-
-**9. 没有自动补全/输入建议**
-- 打字过程中没有前缀提示、tag 建议、常用查询补全
-- `prefix='2 3 4'` 加上后端语法就能做
-
-**10. searchJump 的 10 秒 TTL 太脆**
-- `sessionStorage` + 10s TTL
-- 如果用户在搜索结果看一会再点另一条，第一条的 jump intent 已经吃掉了
-- 应该按动作计算而不是按时间
-
-### 🟢 P2 — 体验加分
-
-**11. GlobalSearchDialog 的 plainText 处理粗糙**
-- `plainText()` 只是 strip HTML 标签
-- 匹配命中 `<img alt="...">` 这种节点时容易生成乱码片段
-
-**12. Board 搜索模式无法看任务日志**
-- 搜索模式下点结果只是 `setActiveTask`，但搜索框还在
-- 如果用户想在搜索的同时看任务详情的日志，detail panel 还展示着上一个任务的，体验割裂
-
-**13. 高亮算法不处理嵌套 token**
-- `highlight.ts` 用 greedy 贪心选最长 token 先匹配
-- 如果 token 是 `["meeting", "meet"]`，"meet" 永远不会高亮
-- 应该全 token 都尝试匹配，取最早出现的
-
-**14. 搜索结果无法批量操作**
-- 搜出来 10 个状态为 DROPPED 的任务，想批量改成 DONE 没办法
-
-**15. Board 退出搜索后焦点不归位**
-- Escape 退出搜索模式 → 焦点丢失
-- 之前的 `preSearchTaskId` 恢复了但没 `focus()` 对应元素
-
----
-
-## 四、改进建议（按 ROI 排序）
-
-### 立即做（1-2 天，改动极小，收益巨大）
-
-| # | 改动 | 文件 | 估计 |
-|---|---|---|---|
-| A | GlobalSearchDialog 加 `highlightText` 包到 task/note 渲染 | `App.tsx` | 0.5h |
-| B | Board 内联搜索点击时 `setSearchJumpIntent` | `BoardPage.tsx` | 0.5h |
-| C | GlobalSearchDialog 加 ArrowUp/Down/Enter 键盘导航 | `App.tsx` | 1h |
-| D | 各 section 显示结果计数（"Tasks · 12"） | `App.tsx` | 0.5h |
-| E | BM25 分列权重 `bm25(tasks_fts, 3.0, 0.0, 1.0, 1.5)` | `searchService.ts` | 1h |
-| F | FTS5 表加 `prefix='2 3 4'` 索引（需 rebuild） | `db.ts` | 1h |
-| G | 删除 `indexTask` 里把 taskId 一起索引进去的逻辑 | `searchService.ts` | 0.5h |
-| H | 字符串 tag 查询改为 `JSON_EACH(tags)` 查询 | `searchService.ts` | 1h |
-| I | MCP stdio bridge 加 `search_notes` 工具 | `mcp-bridge.mjs` | 0.5h |
-
-### 短期做（1 周，精准度质变）
-
-| # | 改动 | 说明 |
-|---|---|---|
-| J | **重构分词对称性** — 索引和查询都用 `cutForSearch`，去掉 Phase 2/3 全表扫描 | 改完后段 2/3 可直接删除 |
-| K | **归一化 rank** — 把 FTS5 bm25 分数归一到 [0,1]，再和人工权重组合 | 让多阶段排序可控 |
-| L | **加 `prefix='2 3 4'` 后做搜索即时模式** — GlobalSearchDialog 的 180ms 已有，Board 内联改为即时 | 三套搜索行为统一为即时 |
-| M | **加 server 端 snippet()** — 用 FTS5 内置 `snippet()` 替代手动 180 字截断 | Backend 拿出带上下文的匹配片段 |
-| N | **每任务显示匹配次数** — bestPerTask 改成 group by 出 `matchCount`，至少在 UI 标示 "×5 hits" | 知道任务内有多少匹配 |
-| O | **`htmlToPlainText` 在 indexing 时落库** — 加一列 `entry_plaintext`，搜索 LIKE 直接查它 | 干掉每次搜索的 HTML 解析 |
-| P | **JSON_EACH(tags)** 用 B-tree 索引替代 LIKE | tag 搜索精准且能用索引 |
-
-### 中期做（2-4 周，体验质变）
-
-| # | 改动 |
-|---|---|
-| Q | 统一三套搜索为一套 "Search Slash Command" 模式（弹窗 + 即时 + 键盘导航 + 跨 scope） |
-| R | 加搜索历史（localStorage 保留最近 20 条），下次打开默认显示 |
-| S | 加高级过滤（status/type/date/tag），后端 API 暴露 `status=DOING&type=TODO` 查询参数 |
-| T | 加列过滤搜索语法 `title:foo content:bar`，前端解析后路由到 FTS5 column filter |
-| U | 见本文下半部分「语义搜索方案」— 加 trigram 备表 + 向量检索做 hybrid RRF 融合 |
-| V | 加 spellfix1 做英文 typo 容错（`meetin → meeting`） |
-| W | 加 FTS5 5GB 以下的 optimize 命令定期跑（每天空闲时段） |
-| X | 搜索结果支持选中多条批量操作 |
-| Y | MCP 输出加 `total` 字段、加 `includeArchived`、加一个 `search_all` 工具 |
-
-### 长期做（如有需要）
-
-- 自定义 FTS5 rank 函数（C/Rust 扩展），综合考虑 recency、priority、status
-- 索引扩展：work sessions、agent conversations、attachments 内容
-- 搜索范围分租户/工作空间（如果将来支持多用户）
-
-### 建议的推进顺序
-
-投入回报率最高的 5 件事（按这个顺序做）：
-
-1. **A + B + C + D**：4h 改完，搜索体验从 "感觉不到在做搜索" 到 "凸现当前在做搜索"
-2. **E + F + G + H**：半天改完，搜索精准度直接翻一倍以上
-3. **J + K**：1 周干完，干掉 O(n) 全表扫描，让搜索性能可承载大规模数据
-4. **L + M + N + O**：3 天干完，统一三套交互
-5. **R + S + T**：1 周做完，搜索进入 "专业级" 水平
-
----
-
-## 五、语义搜索架构总览
-
-```
-用户查询
-  │
-  ├─ 预过滤 (status/type/tags) ── 应用到两条检索路径
-  │
-  ├─┬─ PATH A: FTS5 BM25（现有 searchTasks）
-  │ └─ tokenize → FTS5 MATCH → rank
-  │
-  ├─┬─ PATH B: 向量 KNN（新增 sqlite-vec）
-  │ ├─ embed(query) → 向量
-  │ └─ vec0 MATCH → distance → top-K
-  │
-  ├─ RRF 融合 (score = Σ weight / (k + rank))
-  │  └─ k=60, keyword weight=1.25, vector weight=1.0
-  │
-  ├─ 后融合重排 (recency boost / priority boost)
-  │
-  └─ Top-K 结果
-```
-
-**核心思路**：FTS5 不替换，加一路向量检索并行跑，RRF 融合排序。
-
-- 精确匹配由 BM25 保障
-- 语义召回由向量保障
-- 融合排序由 RRF 保障
-
-### RRF 公式
-
-来自原始论文 Cormack, Clarke, Büttcher (SIGIR 2009):
-
-```
-RRFscore(d) = Σ_over_retriever_r (1 / (k + rank_r(d)))
-```
-
-参数：
-- `rank_r(d)` = 文档 `d` 在检索器 `r` 的结果列表中的位置（1-based）
-- `k` = 平滑常数，**k=60** 为论文发现的最优值，在生产中（Logseq、Elasticsearch、Azure AI Search）作为通用默认值
-- 一个文档在某检索器列表中不存在则该路贡献为 0
-
-**关键论文发现**：k=60 "near-optimal, but the choice was not critical"，RRF 比 Condorcet Fuse 和 CombMNZ 高 4-5%。
-
-### 权重取舍
-
-Logseq 生产验证的做法（推荐 Chronicle 参考）：
-- keyword weight = **1.25** — 让精确匹配不被弱向量结果挤掉
-- vector weight = **1.0** — 基准线
-- 设计哲学："Hybrid ranking should keep vector similarity as an auxiliary signal. Exact or strong keyword matches must not be displaced by weak vector hits."
-
----
-
-## 六、语义搜索技术选型
-
-### 6.1 向量存储：`sqlite-vec` v0.1.9
-
-| 特性 | 说明 |
-|---|---|
-| npm 包 | `sqlite-vec`（自动安装平台子包如 `sqlite-vec-darwin-arm64`） |
-| 加载方式 | `sqliteVec.load(db)` 一行代码，内部调 `db.loadExtension()` |
-| 二进制大小 | `vec0.dylib` 仅 50KB |
-| 查询语法 | `WHERE embedding MATCH ? AND k = 10 ORDER BY distance` |
-| 距离度量 | cosine / L2 / L1，建表时 `distance_metric=cosine` |
-| 性能 | 暴力扫描，<10K 向量 sub-10ms；v0.1.10-alpha 加 DiskANN 索引 |
-| 与现有栈兼容 | ✅ better-sqlite3 v12.9.0 原生支持 `loadExtension()` |
-| 旧版替代 | `sqlite-vss` 已废弃，所有开发精力在 sqlite-vec（纯 C 零依赖） |
-| GitHub | [asg017/sqlite-vec](https://github.com/asg017/sqlite-vec) 8K+ stars |
-| 许可证 | MIT / Apache-2.0 dual |
-
-**加载示例**:
-```typescript
-import * as sqliteVec from "sqlite-vec";
-import Database from "better-sqlite3";
-
-const db = new Database(":memory:");
-sqliteVec.load(db);  // 一行加载
-
-// 验证
-const { vec_version } = db.prepare("select vec_version() as vec_version;").get();
-```
-
-### 6.2 嵌入模型：两条路径并存
-
-| 路径 | 模型 | 大小 | 维度 | 中文 C-MTEB Retrieval | 运行方式 |
-|---|---|---|---|---|---|
-| **Provider API**（默认） | 复用 `config.llm.baseUrl` | 0 | 取决于模型 | 取决于模型 | `fetch(${baseUrl}/embeddings)` |
-| **本地模型**（可选） | `Xenova/bge-small-zh-v1.5` (q8) | **24MB** | 512 | **61.77** | `@huggingface/transformers` + onnxruntime-node |
-
-**为什么 Provider 路径是默认**：Chronicle 默认指向 Ollama `localhost:11434/v1`，Ollama 同时提供 `/embeddings` 端点，零额外安装。
-
-**为什么 bge-small-zh-v1.5 是本地模型推荐**：
-- 24MB int8 模型 — 是 300MB 以内所有模型中**最小**的
-- C-MTEB 检索得分 61.77 — 是 300MB 以内所有模型中**最高**的中文检索得分
-- 512 维向量 — 存储和查询效率好
-- M 系列 CPU 上 ~80-120 embed/s
-- MIT 许可证
-
-**被淘汰的模型**：
-| 模型 | 否决原因 |
-|---|---|
-| mxbai-embed-large-v1 | 337MB quantized 超过 300MB 目标 |
-| jina-embeddings-v3 | >2 GB |
-| bge-m3 | >2 GB |
-| all-MiniLM-L6-v2 | 只支持英文，中文需求失败 |
-| multilingual-e5-small | 118MB int8，比 bge-large 5x 大，中文检索 59.95 略低 |
-
-**模型对比表（候选模型）**：
-
-| Model | Dim | C-MTEB Avg | C-MTEB Retrieval | ONNX int8 Size | Languages |
-|---|:---:|:---:|:---:|:---:|---|
-| **bge-small-zh-v1.5** | 512 | 57.82 | 61.77 | ~24 MB | Chinese |
-| multilingual-e5-small | 384 | 55.38 | 59.95 | ~118 MB | 100 langs |
-| gte-small | 384 | N/A (EN 61.36) | N/A | ~34 MB | EN+some CN |
-
-### 6.3 运行时：`@huggingface/transformers` v3
-
-- npm: `@huggingface/transformers` (v3)；`@xenova/transformers` (v2 已废弃)
-- Node.js 环境下底层用 `onnxruntime-node`（原生 CPU 绑定，非 WASM）
-- Pipeline API: `pipeline('feature-extraction', modelId, { dtype: 'q8' })` 一行
-- 模型首次下载自动缓存到 `env.cacheDir`
-
-### 6.4 量化推荐
-
-| Dtype | 质量保留 | 大小 vs fp32 | 推荐度 |
-|---|:---:|:---:|---|
-| **int8 / q8** | ~99% | **25%** | **✅ Sweet spot** |
-| fp16 | ~100% | 50% | 可接受但更大 |
-| q4 | ~95% | 15% | 有明显退化 |
-| fp32 | 100% | 100% | 没有必要 |
-
-**Verdict**: 永远用 `dtype: 'q8'` (int8)。BERT-based 嵌入模型对 int8 量化基本无感。
-
-### 6.5 模型前缀
-
-- **bge-small-zh-v1.5**: 索引和查询都需要前缀 `为这个句子生成表示以用于检索相关文章：`
-- **multilingual-e5-small**: 文档用 `passage: ` 前缀，查询用 `query: ` 前缀
-- **gte-small**: 不需要前缀
-
----
-
-## 七、语义搜索实施计划（4 阶段）
-
-### 阶段 1：基础设施（~500 行新增，0 行改动现有代码）
-
-#### 1.1 数据库 Schema（`server/src/db.ts`）
-
-```sql
--- 向量表：一个任务一个向量
-CREATE VIRTUAL TABLE IF NOT EXISTS tasks_vec USING vec0(
-  task_id TEXT PRIMARY KEY,
-  embedding FLOAT[512]     -- bge-small-zh = 512 维; e5-small = 384 维
-);
-
--- 嵌入缓存表：避免重复 embed 同一段文本
-CREATE TABLE IF NOT EXISTS embedding_cache (
-  text_hash TEXT,           -- SHA1(plaintext + model)
-  model TEXT,
-  embedding BLOB,           -- Float32Array 序列化
-  created_at INTEGER,
-  PRIMARY KEY (text_hash, model)
-);
-```
-
-**注意**：`vec0` 表维度取决于模型。建议在加载时检查并若不匹配则 drop+rebuild（参考现有 `tasks_fts` 在 schema 变更时 drop 的做法，见 `db.ts` 第 73-80 行）。
-
-#### 1.2 嵌入服务（新文件 `server/src/services/embeddingService.ts`）
-
-```typescript
-import { getConfig } from '../config'
-import { getDb } from '../db'
-import { createHash } from 'crypto'
-import { getLogger } from '../logging'
-
-// --- Provider API 路径 ---
-async function embedViaProvider(texts: string[]): Promise<number[][]> {
-  const config = getConfig().llm
-  const res = await fetch(`${config.baseUrl.replace(/\/$/, '')}/embeddings`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
-    },
-    signal: AbortSignal.timeout(config.timeoutMs),
-    body: JSON.stringify({
-      model: config.embeddingModel || config.model,
-      input: texts,
-    }),
-  })
-  const json = await res.json()
-  return json.data.map((item: any) => item.embedding)
-}
-
-// --- 本地模型路径 ---
-let localPipeline: any = null
-async function getLocalPipeline() {
-  if (!localPipeline) {
-    // 动态导入避免打包到主二进制（按需加载，仅 local 模式用户触发）
-    const { pipeline, env } = await import('@huggingface/transformers')
-    const path = require('path')
-    const os = require('os')
-    env.cacheDir = path.join(os.homedir(), '.chronicle', 'models')
-    localPipeline = await pipeline(
-      'feature-extraction',
-      'Xenova/bge-small-zh-v1.5',
-      { dtype: 'q8' }
-    )
-  }
-  return localPipeline
-}
-
-async function embedViaLocal(texts: string[]): Promise<number[][]> {
-  const pipe = await getLocalPipeline()
-  // bge 模型需要前缀
-  const prefixed = texts.map(t => `为这个句子生成表示以用于检索相关文章：${t}`)
-  const output = await pipe(prefixed, { pooling: 'cls', normalize: true })
-  return output.tolist()
-}
-
-// --- 统一入口：带缓存 ---
-export async function embed(texts: string[]): Promise<number[][]> {
-  const config = getConfig().llm
-  const mode = config.embeddingMode ?? 'off'
-  if (mode === 'off') return []
-  const model = config.embeddingModel || config.model || 'bge-small-zh-v1.5'
-
-  // 查缓存
-  const db = getDb()
-  const results: (number[] | null)[] = new Array(texts.length).fill(null)
-  const uncached: { idx: number; text: string }[] = []
-
-  for (let i = 0; i < texts.length; i++) {
-    const hash = createHash('sha1').update(texts[i] + model).digest('hex')
-    const row = db.prepare(
-      'SELECT embedding FROM embedding_cache WHERE text_hash = ? AND model = ?'
-    ).get(hash, model) as { embedding: Buffer } | undefined
-    if (row) {
-      results[i] = Array.from(new Float32Array(
-        row.embedding.buffer,
-        row.embedding.byteOffset,
-        row.embedding.byteLength / 4
-      ))
-    } else {
-      uncached.push({ idx: i, text: texts[i] })
-    }
-  }
-
-  if (uncached.length === 0) return results as number[][]
-
-  const uncachedTexts = uncached.map(u => u.text)
-  const embeddings = mode === 'local'
-    ? await embedViaLocal(uncachedTexts)
-    : await embedViaProvider(uncachedTexts)
-
-  // 回写缓存
-  const insertStmt = db.prepare(
-    'INSERT OR REPLACE INTO embedding_cache (text_hash, model, embedding, created_at) VALUES (?, ?, ?, ?)'
-  )
-  const tx = db.transaction((items: Array<{ idx: number; text: string; embedding: number[] }>) => {
-    for (const it of items) {
-      const hash = createHash('sha1').update(it.text + model).digest('hex')
-      const buf = Buffer.from(new Float32Array(it.embedding).buffer)
-      insertStmt.run(hash, model, buf, Date.now())
-      results[it.idx] = it.embedding
-    }
-  })
-  tx(uncached.map((u, i) => ({ ...u, embedding: embeddings[i] })))
-
-  return results as number[][]
-}
-
-// --- 向量索引写入 ---
-import { htmlToPlainText } from './searchText'
-
-export async function indexTaskVector(
-  taskId: string,
-  title: string,
-  body: string,
-  tags: string[]
-): Promise<void> {
-  const db = getDb()
-  const embeddingText = [title, htmlToPlainText(body), tags.join(' ')]
-    .filter(Boolean).join(' ')
-  if (!embeddingText.trim()) {
-    db.prepare('DELETE FROM tasks_vec WHERE task_id = ?').run(taskId)
-    return
-  }
-  // 截断到模型上下文长度
-  const truncated = embeddingText.slice(0, 2000)
-  const [vec] = await embed([truncated])
-  if (!vec || vec.length === 0) return  // embeddingMode=off 或失败
-  
-  db.prepare('DELETE FROM tasks_vec WHERE task_id = ?').run(taskId)
-  db.prepare('INSERT INTO tasks_vec (task_id, embedding) VALUES (?, ?)').run(
-    taskId,
-    new Float32Array(vec)
-  )
-}
-
-export function removeTaskVector(taskId: string): void {
-  getDb().prepare('DELETE FROM tasks_vec WHERE task_id = ?').run(taskId)
-}
-```
-
-**关键集成点**：在 `taskService.ts` 的 `createTask`/`updateTask`/`deleteTask` 旁，现有的 `indexTask`/`indexEntry` 调用旁边，加一行异步 `indexTaskVector`：
-
-```typescript
-// server/src/services/taskService.ts
-// createTask 内（在现有 indexTask 之后）
-indexTask(id, title)
-indexEntry(id, entryId, body, 'body')
-// 新增 — 异步不阻塞
-void indexTaskVector(id, title, body, tags).catch(err =>
-  getLogger().error({ err }, 'Vector indexing failed')
-)
-
-// updateTask 内（在现有 indexTask 之后）
-indexTask(id, title)
-if (bodyChanged) {
-  void indexTaskVector(id, title, newBody, tags).catch(err =>
-    getLogger().error({ err }, 'Vector indexing failed')
-  )
-}
-
-// deleteTask 内（在现有 removeTaskFromIndex 之后）
-removeTaskFromIndex(id)
-removeTaskVector(id)  // 同步即可，是简单 DELETE
-```
-
-### 阶段 2：混合搜索（~200 行）
-
-#### 2.1 RRF 融合函数（新文件 `server/src/services/rrf.ts`）
-
-```typescript
-export interface RRFConfig {
-  k: number          // 默认 60
-  weights: Record<string, number>  // { bm25: 1.25, vector: 1.0 }
-  topK: number
-}
-
-export const DEFAULT_RRF_CONFIG: RRFConfig = {
-  k: 60,
-  weights: { bm25: 1.25, vector: 1.0 },
-  topK: 50,
-}
-
-export interface FusionCandidate<T> extends T {
-  rrfScore: number
-  rrfRanks: Record<string, number>
-}
-
-/**
- * Reciprocal Rank Fusion: 合并多个排序好的结果列表。
- * 每个列表第一个元素 = rank 1。
- */
-export function rrfFusion<T extends { id: string }>(
-  lists: Array<{ name: string; results: T[] }>,
-  config: Partial<RRFConfig> = {},
-): Array<FusionCandidate<T>> {
-  const { k, weights, topK } = { ...DEFAULT_RRF_CONFIG, ...config }
-  const candidates = new Map<string, FusionCandidate<T>>()
-
-  for (const { name, results } of lists) {
-    const weight = weights[name] ?? 1.0
-    for (let rank = 0; rank < results.length; rank++) {
-      const item = results[rank]
-      const key = item.id
-      const contribution = weight / (k + rank)  // rank 0-based
-      
-      let candidate = candidates.get(key)
-      if (!candidate) {
-        candidate = { ...item, rrfScore: 0, rrfRanks: {} }
-        candidates.set(key, candidate)
-      }
-      candidate.rrfRanks[name] = rank + 1  // 存 1-based rank
-      candidate.rrfScore += contribution
-    }
-  }
-
-  return Array.from(candidates.values())
-    .sort((a, b) => b.rrfScore - a.rrfScore)
-    .slice(0, topK)
-}
-```
-
-#### 2.2 混合搜索（扩展 `server/src/services/searchService.ts`）
-
-```typescript
-import { rrfFusion } from './rrf'
-import { embed } from './embeddingService'
-
-// 新增：向量搜索
-async function searchTasksVector(
-  query: string,
-  limit: number,
-  filters?: { status?: string; type?: string },
-): Promise<SearchResult[]> {
-  const db = getDb()
-  const [queryVec] = await embed([query])
-  if (!queryVec || queryVec.length === 0) return []  // embeddingMode=off 或失败
-
-  const where: string[] = []
-  const params: any[] = []
-  if (filters?.status) {
-    where.push('t.status = ?')
-    params.push(filters.status)
-  }
-  if (filters?.type) {
-    where.push('t.type = ?')
-    params.push(filters.type)
-  }
-
-  const rows = db.prepare(`
-    SELECT t.id, t.title, t.type, t.status, t.tags, v.distance
-    FROM tasks t
-    INNER JOIN (
-      SELECT task_id, distance
-      FROM tasks_vec
-      WHERE embedding MATCH ?
-        AND k = ?
-    ) v ON t.id = v.task_id
-    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY v.distance
-    LIMIT ?
-  `).all(new Float32Array(queryVec), limit, limit, ...params)
-
-  return rows.map((row: any) => ({
-    taskId: row.id,
-    entryId: null,
-    taskTitle: row.title,
-    taskType: row.type,
-    taskStatus: row.status,
-    taskTags: JSON.parse(row.tags || '[]'),
-    matchType: 'task',
-    matchedContent: '',
-    originalTitle: row.title,
-    matchedOriginal: '',
-    tokens: [],
-    exactMatch: false,
-    rank: row.distance,
-  }))
-}
-
-// 新增：混合搜索入口（保留原有 searchTasks 不变）
-export async function hybridSearchTasks(
-  query: string,
-  limit = 50,
-  filters?: { status?: string; type?: string },
-): Promise<SearchResponse> {
-  const trimmed = query.trim()
-  if (!trimmed) return { results: [], tokens: [] }
-
-  // 过采样：每路取 limit*2，融合后取 limit
-  const searchLimit = limit * 2
-
-  // 并行两路
-  const [bm25Result, vectorResults] = await Promise.all([
-    Promise.resolve(searchTasks(trimmed, searchLimit)),  // 同步函数包 Promise
-    searchTasksVector(trimmed, searchLimit, filters),
-  ])
-
-  const bm25List = bm25Result.results.map(r => ({ id: r.taskId, data: r }))
-  const vectorList = vectorResults.map(r => ({ id: r.taskId, data: r }))
-
-  const fused = rrfFusion(
-    [
-      { name: 'bm25', results: bm25List },
-      { name: 'vector', results: vectorList },
-    ],
-    { k: 60, weights: { bm25: 1.25, vector: 1.0 }, topK: limit }
-  )
-
-  return {
-    results: fused.map(f => f.data),
-    tokens: bm25Result.tokens,
-  }
-}
-```
-
-#### 2.3 API 路由切换（`server/src/index.ts`）
-
-```typescript
-// 现有 GET /api/search 内的逻辑
-app.get('/api/search', async (c) => {
-  const q = c.req.query('q')
-  if (!q) return c.json({ error: 'q parameter required' }, 400)
-  const limit = parseInt(c.req.query('limit') || '50')
-  const scope = c.req.query('scope') || 'tasks'
-  const includeArchived = c.req.query('includeArchived') === 'true'
-  const hybrid = c.req.query('hybrid') === 'true'  // 新增
-  
-  // 若 hybrid=true 且 scope=tasks → 走新路径
-  if (hybrid) {
-    const { results, tokens } = await hybridSearchTasks(q, Math.min(limit, 200))
-    return c.json({ results, tokens, total: results.length })
-  }
-  // ... 现有逻辑保持不变
-})
-```
-
-**切换策略**：先以 `?hybrid=true` 参数灰度发布，Settings 加 `embeddingMode` 开关后再默认走 hybrid。
-
-### 阶段 3：配置 + UI
-
-#### 3.1 扩展 config（`server/src/config.ts`）
-
-```typescript
-llm: {
-  // 现有字段保持不变
-  baseUrl: string
-  model: string
-  apiKey: string
-  timeoutMs: number
-  meetingExtractionMaxTokens: number
-  taskSummaryMaxTokens: number
-  dailySummaryMaxTokens: number
-  meetingExtractionPrompt: string
-  taskSummaryPrompt: string
-  dailySummaryPrompt: string
-  // 新增
-  embeddingMode: 'provider' | 'local' | 'off'  // 默认 'off'
-  embeddingModel?: string                       // 空时复用 model
-}
-```
-
-环境变量覆盖：`CHRONICLE_LLM_EMBEDDING_MODE`、`CHRONICLE_LLM_EMBEDDING_MODEL`
-
-#### 3.2 Settings UI（`web/src/pages/SettingsPage.tsx` AI > Provider 区域）
-
-在现有 Provider 设置卡片底部加：
-
-```
-┌─ AI > Provider ─────────────────────────────┐
-│ Base URL:    [http://localhost:11434/v1]    │
-│ Model:       [qwen2.5:7b              ]     │
-│ API Key:     [                        ]     │
-│ Timeout:     [30000] ms                    │
-│                                             │
-│ ── 语义搜索 ──                              │  ← 新增
-│ 模式: ( ) 关闭  (●) Provider API  ( ) 本地模型 │
-│ Embedding Model: [text-embedding-3-small]   │  ← 仅 provider 模式显示
-│ [测试 Embedding 连接]                       │
-│                                             │
-│ （开启语义搜索后将触发后台索引重建任务）        │
-└─────────────────────────────────────────────┘
-```
-
-#### 3.3 测试连接端点（`server/src/index.ts`）
-
-```typescript
-app.post('/api/settings/llm/test-embeddings', async (c) => {
-  try {
-    const [vec] = await embed(['test'])
-    if (!vec || vec.length === 0) {
-      return c.json({ ok: false, error: 'Embedding mode is off' })
-    }
-    return c.json({ ok: true, dim: vec.length, latencyMs: /* 测一下 */ 0 })
-  } catch (err) {
-    return c.json({ ok: false, error: String(err) })
-  }
-})
-```
-
-### 阶段 4：批量索引 + 渐进上线
-
-#### 4.1 初始索引（复用现有 `backgroundTaskService`）
-
-```typescript
-// server/src/services/embeddingService.ts 追加
-
-import { createOrReuseRunningTask, finishBackgroundTask, failBackgroundTask } from './backgroundTaskService'
-
-// 在 BackgroundTaskType 联合类型里加 'embedding'
-// type BackgroundTaskType = 'daily_summary' | 'task_summary' | 'meeting_extract' | 'embedding'
-
-export async function rebuildVectorIndex(): Promise<void> {
-  const task = createOrReuseRunningTask({
-    type: 'embedding' as any,  // 先 cast，等类型扩展后去掉
-    sourceKey: 'rebuild-all',
-    title: 'Rebuilding vector index',
-    timeoutAt: Date.now() + 600_000,  // 10 min 超时
-  })
-
-  try {
-    const db = getDb()
-    // 读取所有任务（含已完成的，方便搜索全部历史）
-    const tasks = db.prepare(`
-      SELECT t.id, t.title, t.tags, 
-             (SELECT content FROM task_entries 
-              WHERE task_id = t.id AND type = 'body' 
-              ORDER BY created_at DESC LIMIT 1) as body
-      FROM tasks t
-    `).all() as Array<{ id: string; title: string; tags: string; body: string | null }>
-
-    db.prepare('DELETE FROM tasks_vec').run()
-
-    const BATCH_SIZE = 32
-    for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
-      const batch = tasks.slice(i, i + BATCH_SIZE)
-      // 构造 embedding 文本（title + tags + body 前 2000 字）
-      const texts = batch.map(t => 
-        [t.title, t.body ? htmlToPlainText(t.body).slice(0, 2000) : '', JSON.parse(t.tags || '[]').join(' ')]
-          .filter(Boolean).join(' ')
-      )
-      const embeddings = await embed(texts)
-      
-      if (embeddings.length === 0) break  // embeddingMode=off
-      
-      const insert = db.prepare('INSERT INTO tasks_vec (task_id, embedding) VALUES (?, ?)')
-      const insertTx = db.transaction(() => {
-        for (let j = 0; j < batch.length; j++) {
-          if (embeddings[j] && embeddings[j].length > 0) {
-            insert.run(batch[j].id, new Float32Array(embeddings[j]))
-          }
-        }
-      })
-      insertTx()
-    }
-
-    finishBackgroundTask(task.id, { indexed: tasks.length })
-  } catch (err) {
-    failBackgroundTask(task.id, String(err))
-    throw err
-  }
-}
-```
-
-**复用现有 SSE 通知机制**：`finishBackgroundTask` 会通过 `eventBus` 广播，前端 `useBackgroundTaskStore` 已有 toast UI 展示进度。
-
-#### 4.2 增量索引
-
-见阶段 1.2 末尾的集成点说明。
-
-#### 4.3 上线策略
-
-- `embeddingMode` 默认 `'off'` → 不影响现有用户
-- Settings 页加 "启用语义搜索" 开关 → 用户主动开启  
-  - 可以在 UI 加一个 "重建索引" 按钮，手动触发 `POST /api/search/rebuild-vector`
-  - 或在 `saveLlmSettings` 检测到 `embeddingMode` 从 `'off'` 变更时自动触发后台任务
-- 索引完成后 `hybridSearchTasks()` 自动取代 `searchTasks()` 作为搜索后端
-- API 端：`?hybrid=false` 保持向后兼容，前端默认 `?hybrid=true` 当 `embeddingMode != 'off'`
-
----
-
-## 八、Tauri 分发要点（最容易踩坑的地方）
-
-### 1. esbuild/tsup 配置 — 必须加 external
-
-```typescript
-// server/tsup.config.ts
-import { defineConfig } from 'tsup'
-
-export default defineConfig({
-  // ... 现有配置
-  external: ['better-sqlite3', 'sqlite-vec'],  // ← 必须加 sqlite-vec
-})
-```
-
-不加 `external` 的话 bundler 会把 `sqlite-vec` 的代码内联，导致 `import.meta.url` 指向打包后文件，找不到 `.dylib`。
-
-### 2. macOS 代码签名
-
-`vec0.dylib` 是未签名 npm 包分发的 .dylib。Tauri 打包后 `dlopen()` 会报 code signature 错误：
-
-```
-dlopen(.../vec0.dylib): code signature in <UUID> not valid for use in process:
-  mapped file has no cdhash, completely unsigned?
-```
-
-**两个解法**：
-
-**选项 A（开发期简单）**：给 dylib 加 ad-hoc 签名
 ```bash
-codesign -f -s - node_modules/sqlite-vec-darwin-arm64/vec0.dylib
+./scripts/with-node.sh npx playwright test \
+  tests/data-integrity.test.ts \
+  tests/notes.test.ts \
+  tests/search-done-detail.test.ts
 ```
 
-**选项 B（正式分发）**：Tauri entitlements plist 加
-```xml
-<key>com.apple.security.cs.disable-library-validation</key>
-<true/>
+调查期间完整运行分别出现过 **27 passed / 1 failed** 和 **28 passed**；该用例属于现有 flaky
+baseline，而不是稳定失败。失败项：
+
+```text
+Notes page creates and autosaves a note
 ```
 
-### 3. Tauri Resources 配置
+单独重复三次后为 **1 passed / 2 failed**，独立 `--repeat-each=10` 复核为 **7 passed / 3 failed**。
+失败截图显示标题变成：
 
-```json
-// tauri/tauri.conf.json
-{
-  "bundle": {
-    "resources": {
-      "node_modules/sqlite-vec-darwin-arm64/vec0.dylib": "sqlite-vec/"
-    }
-  }
-}
+```text
+Untitled noteUiNote-<timestamp>
 ```
 
-这会把 .dylib 复制到 `.app` 包的 `Resources` 目录。
-
-### 4. 生产环境加载路径
-
-```typescript
-import Database from 'better-sqlite3'
-import * as sqliteVec from 'sqlite-vec'
-import path from 'path'
-
-const db = new Database(dbPath)
-
-if (process.env.NODE_ENV === 'production' && process.resourcesPath) {
-  // Tauri sidecar 模式 — 手动指定路径
-  db.loadExtension(path.join(process.resourcesPath, 'sqlite-vec', 'vec0.dylib'))
-} else {
-  // 开发模式 — 让 sqlite-vec 自动找到 dylib
-  sqliteVec.load(db)
-}
-```
-
-### 5. @huggingface/transformers 打包
-
-不要把这个包加到 `dependencies`，让它通过 `dynamic import()` 按需加载：
-
-```typescript
-// 只在 mode=local 触发时才加载
-async function getLocalPipeline() {
-  const { pipeline, env } = await import('@huggingface/transformers')
-  // ...
-}
-```
-
-tsup 配置需要加 external：
-```typescript
-external: ['better-sqlite3', 'sqlite-vec', '@huggingface/transformers', 'onnxruntime-node']
-```
-
-没开启 local 模式的用户根本不会触发这个 import，不会下载模型文件，也不会增加应用体积。
+这不是 FTS 召回本身的问题，而是新建 note 后 route、active note 和 draft 初始化之间存在竞态；
+UI 已显示 `saved`，但保存的是被重复初始化后的标题。它必须作为 Phase 0 修复，否则后续搜索回归没有
+稳定基线。
 
 ---
 
-## 九、关键陷阱清单
+## 2. 当前真实架构
 
-### 精准度改进陷阱
+### 2.1 后端搜索
 
-| # | 陷阱 | 解决方案 |
-|---|---|---|
-| 1 | 改 tokenizer 后老索引失效 | bump `_meta.fts_tokenizer_version`，db.ts 已有 auto-rebuild 逻辑（见第 408-409 行） |
-| 2 | 改 schema 后老 FTS5 表残留 | db.ts 已有 drop-if-not-match 模式（第 73-80 行），新 vec0 表照做 |
-| 3 | BM25 列权重改动后想回滚 | 把 `bm25(tasks_fts, ...)` 改回 `f.rank` 即可，无需 rebuild |
-| 4 | prefix='2 3 4' 加上后 FTS5 索引膨胀 | 索引体积+30-50%，搜索速度大幅提升，权衡可行 |
+当前有两个 FTS5 表：
 
-### 语义搜索陷阱
+```text
+tasks_fts(task_id, entry_id, source, content)
+notes_fts(note_id, source, content)
+```
 
-| # | 陷阱 | 解决方案 |
-|---|---|---|
-| 1 | `sqlite-vec` dylib 在 Tauri 包里找不到 | tsup `external` + Tauri `bundle.resources` |
-| 2 | macOS codesign 拒绝加载未签名 dylib | ad-hoc 签名 (`codesign -f -s -`) 或 `disable-library-validation` entitlement |
-| 3 | 向量索引阻塞写入主线程 | `indexTaskVector` 调用用 `void` 异步，不 await |
-| 4 | 首次安装时向量表为空 | `embeddingMode=off` 默认，用户手动开启触发 `rebuildVectorIndex()` |
-| 5 | bge-small-zh 需要前缀 `为这个句子生成表示以用于检索相关文章：` | `embeddingService.ts` 统一加前缀 |
-| 6 | Ollama 没装嵌入模型 | Settings 加 "测试 Embedding 连接" 按钮 |
-| 7 | 向量维度和 FTS5 表不兼容 | 向量表和 FTS5 表完全独立，不需要对齐 |
-| 8 | RRF 中 BM25 返回 0 但向量有结果 | 正常 — RRF 自然处理，不受影响 |
-| 9 | embed 查询缓存 | session 内 LRU `Map<string, number[]>`，50 条上限 |
-| 10 | 旧数据无向量索引 | 开启语义搜索时后台 `rebuildVectorIndex()` |
-| 11 | 模型切换后向量维度变了 | 监测 dim 变化 → drop 并 rebuild `tasks_vec` 表（参考 db.ts 现有 FTS5 schema 变更模式） |
-| 12 | 用户关闭语义搜索后要回到原 searchTasks | API 端 `?hybrid=false` 兜底，前端根据 `embeddingMode` 选择 |
+两表都使用 `unicode61`。中文和技术文本先由 TypeScript `tokenize()` 预分词，再把以空格连接的
+token 字符串写进 FTS。
+
+`searchTasks()` 当前流程：
+
+1. FTS5 MATCH，按默认 `f.rank` 排序。
+2. 扫描全部 task title，在 JS 中做大小写不敏感 `includes()`。
+3. 扫描全部 task entries，每次把 HTML 转 plain text 后做 `includes()`。
+4. 多 token 查询再重复扫描 title 和 entries，要求所有 token 都出现。
+5. 用 `tags LIKE '%query%'` 补召回。
+6. 把 `-1.0`、`-0.5`、`0.5` 和 FTS BM25 原始值混在一起排序。
+7. `bestPerTask` 每个 task 只保留一个 hit。
+
+`searchNotes()` 同样先走 FTS，然后扫描全部 notes，对 title、序列化 tags 和每次转换后的 plain text
+做 substring fallback。
+
+因此当前主要性能问题仍然存在：请求时间与 task / entry / note 总量线性相关，并且 HTML 清洗在
+查询时重复执行。
+
+### 2.2 前端搜索入口
+
+| 入口 | 当前行为 | 已有能力 | 仍缺失 |
+|---|---|---|---|
+| Board `Cmd+F` | 输入后按 Enter 搜索 | 标题 token 高亮、上下选择 | 即时搜索、entry 摘要、精确 entry jump |
+| Global `Cmd+Shift+F` | 180ms debounce | task / entry / note 分组、点击后精确跳转 | 结果内高亮、Arrow/Enter、分组计数 |
+| Notes 搜索框 | 250ms debounce | 搜 note title/body | 与统一搜索的排序和交互一致性 |
+
+Global Search 点击 task entry 时已经携带 `entryId`。Task workspace 和 Notes page 会消费一次性的
+`SearchJumpIntent`，RichEditor 用 ProseMirror decorations 做只读高亮，不会把 `<mark>` 写回 HTML。
+
+### 2.3 API 与 MCP
+
+- `/api/search` 已支持 `scope=tasks|notes|all` 和 `includeArchived`。
+- HTTP MCP 已有 `search_tasks`、`search_notes`。
+- stdio bridge 只有 `search_tasks`，没有 `search_notes` 和 `search_all`。
+- HTTP API 的 `total` 目前只是返回数组长度，不代表 limit 之前的真实匹配数。
+
+### 2.4 运行与分发
+
+`web/src/services/api.ts` 明确规定所有环境都走 HTTP API；旧的 embedded sql.js path 已停用。
+Tauri 只从配置读取 Node server URL，并不在 Rust/Tauri 进程内打开 Chronicle SQLite 数据库。
+
+发布流程：
+
+1. `server/tsup.config.ts` 构建 Node server。
+2. `publish.js` 把 server dist、public、MCP bridge 和 production dependencies 组装为 npm 包。
+3. `npm install -g` 安装并运行独立的 Chronicle Node server。
+4. Tauri app 通过 HTTP 连接该 server。
+
+因此任何 SQLite extension 都应作为 server npm dependency 被安装和加载。旧方案中把 `vec0.dylib`
+复制到 `tauri.conf.json` resources、从 `process.resourcesPath` 加载、修改 Tauri library validation 的
+设计均不适用于当前 Chronicle 架构。
 
 ---
 
-## 十、实施优先级
+## 3. 已经完成、必须保留的能力
 
-### 第一波：现有搜索精准度 + 体验（不依赖语义搜索）
+以下内容已由 `dd8fec0` 实现，不应重复或回滚：
 
-| 顺序 | 任务 | 工作量 | 依赖 |
-|---|---|---|---|
-| 1 | A. GlobalSearchDialog 加高亮 | 0.5h | 无 |
-| 2 | B. Board 内联搜索加 searchJumpIntent | 0.5h | 无 |
-| 3 | C. GlobalSearchDialog 键盘导航 | 1h | 无 |
-| 4 | D. 结果计数 | 0.5h | 无 |
-| 5 | E. BM25 分列权重 | 1h | 无 |
-| 6 | F. FTS5 prefix 索引 | 1h | 5 |
-| 7 | G. 去掉 taskId 索引 | 0.5h | 无 |
-| 8 | H. JSON_EACH(tags) 查询 | 1h | 无 |
-| **小计** | | **6.5h** | |
+1. **技术 ASCII token 单独提取**
+   - ID、URL、path、package-like token、带数字单词不再交给 nodejieba 拆成单字母。
+   - 当前正则：`/[a-z0-9]+(?:[._:/@+-][a-z0-9]+)*/g`。
 
-### 第二波：语义搜索基础链路（Provider API 路径）
+2. **索引前 HTML 纯文本化**
+   - task entries 和 notes 通过共享 `htmlToPlainText()` 处理。
+   - `<code>`、`<p>` 等标签名不再成为搜索噪声。
 
-| 顺序 | 任务 | 工作量 | 依赖 |
-|---|---|---|---|
-| 9 | db.ts 加 vec0 + embedding_cache 表 | 0.5h | 无 |
-| 10 | embeddingService.ts (Provider 路径 + 缓存) | 2h | 9 |
-| 11 | rrf.ts | 1h | 无 |
-| 12 | searchService 加 searchTasksVector + hybridSearchTasks | 3h | 9,10,11 |
-| 13 | API 路由加 `?hybrid=true` 参数 | 1h | 12 |
-| 14 | config 加 embeddingMode/embeddingModel | 1h | 无 |
-| 15 | Settings UI 加语义搜索开关 | 2h | 14 |
-| 16 | taskService 写入路径加 indexTaskVector | 1h | 10 |
-| 17 | rebuildVectorIndex 后台任务 | 2h | 10,16 |
-| 18 | Tauri 分发配置 (dylib + codesign + resources) | 2h | 9 |
-| **小计** | | **15.5h** | |
+3. **Task ID 可搜索**
+   - task FTS row 中包含 task ID。
+   - 这是有意加入的产品能力，不是应删除的噪声。
 
-### 第三波：本地模型路径（可选增强）
+4. **精确 entry 定位元数据**
+   - `SearchResult` 已返回 `entryId`。
 
-| 顺序 | 任务 | 工作量 | 依赖 |
-|---|---|---|---|
-| 19 | 本地模型路径 (@huggingface/transformers + bge-small-zh) | 3h | 10 |
-| 20 | 测试本地模型在 Tauri 包内能正常加载 | 2h | 18,19 |
-| **小计** | | **5h** | |
+5. **Global Search 跳转并高亮**
+   - sessionStorage one-shot intent + `chronicle:search-jump` window event。
+   - task entry 可滚动到具体 entry；note 内容用 ProseMirror decoration 高亮。
 
-### 第四波：长期演进（在基础链路跑通后）
+6. **FTS 版本化重建**
+   - 当前 `CURRENT_TOKENIZER_VERSION = '4'`。
+   - tokenizer 变化会重建 task 和 note FTS。
+   - `db.ts` 已兼容旧 contentless `notes_fts`，避免启动时 DELETE 失败。
 
-| # | 改动 | 说明 |
-|---|---|---|
-| 21 | 统一三套搜索为单一搜索面板 | 三套当前行为差异大，建议合并 |
-| 22 | 搜索历史 localStorage | 20 条最近 query |
-| 23 | 高级过滤 status/type/date/tag | API 已有 `apiFetch` 模式可参考 |
-| 24 | 列过滤语法 `title:foo` 前端解析 | FTS5 已支持 column filter |
-| 25 | trigram 备表做 CJK 子串召回 | 二表并存，RRF 三路融合 |
-| 26 | spellfix1 typo 容错 | 加一个 `search_aux` 表 |
-| 27 | 搜索结果批量操作 | 选中状态 + 批量 update |
-| 28 | MCP 输出加 `total` 字段 + `search_all` 工具 | 现有 `mcp-bridge.mjs` 缺 `search_notes` |
-
-### 完整里程碑
-
-- **里程碑 1**（第一波完成）：现有搜索体验显著提升，精准度翻倍 — **~6.5h**
-- **里程碑 2**（第二波完成）：Provider 路径语义搜索全链路可用，用户开启后立即生效 — **~22h**
-- **里程碑 3**（+ 本地模型）：完全离线语义搜索，无外部依赖 — **~27h**
-- **里程碑 4**（长期演进）：进入 "专业级" 搜索水平 — 持续迭代
+7. **相关回归覆盖**
+   - 中文多 token。
+   - OAuth2、react-native、node_modules、URL、task ID。
+   - HTML tag 噪声。
+   - 短英文 `AI` 不命中 `repair/pair/stairs`。
+   - Global Search 打开 DONE task、note body 和 task entry。
 
 ---
 
-## 附录A：现有代码结构索引
+## 4. 经代码确认仍存在的问题
 
-### 后端
+### P0：必须在 Phase 1 解决
 
-| 文件 | 用途 | 改动相关 |
-|---|---|---|
-| `server/src/db.ts` | SQLite schema + migration | 加 vec0/embedding_cache 表 |
-| `server/src/services/searchService.ts` | `searchTasks()` 核心搜索 | 阶段 1 精准度改进 + hybridSearchTasks |
-| `server/src/services/searchText.ts` | `htmlToPlainText()` 工具函数 | 落 plaintext 列时可复用 |
-| `server/src/services/tokenizer.ts` | nodejieba 分词 | 改用 cutForSearch |
-| `server/src/services/noteService.ts` | `searchNotes()` 笔记搜索 | 同样改造思路 |
-| `server/src/services/llmService.ts` | `callChatCompletionsWithRaw()` | callEmbeddings 的模板 |
-| `server/src/services/backgroundTaskService.ts` | 后台任务队列 | 加 'embedding' 类型 |
-| `server/src/services/taskService.ts` | `indexTask` 调用点 | 加 indexTaskVector |
-| `server/src/config.ts` | LLM 配置 | 加 embeddingMode/embeddingModel |
-| `server/src/index.ts` | HTTP API 路由 | 在 `/api/search` 加 `hybrid` 参数；加 `test-embeddings` route |
-| `server/src/mcp/mcp-bridge.mjs` | stdio MCP bridge | 加 `search_notes` 工具 |
-| `server/src/mcp/start.ts` | HTTP MCP server | MCP search tools 升级 |
-| `server/tsup.config.ts` | 打包配置 | 加 external: sqlite-vec |
-| `server/package.json` | 依赖 | 加 `sqlite-vec`；可选：`@huggingface/transformers` |
+1. **tasks 和 notes fallback 都会全表扫描。**
+2. **默认 BM25 无字段权重，且现有 schema 没有独立 title/content/tag 字段。**
+3. **人工 rank 和负数 BM25 直接混排，排序不可解释。**
+4. **查询时重复 HTML 纯文本化。**
+5. **每个 task 只保留一个 hit，Global Search 无法展示同 task 的多个 entry 命中。**
+6. **Global Search 结果不高亮、没有键盘导航和 section counts。**
+7. **Board 仍是 Enter-to-search，entry hit 没摘要，也没把 entryId 写入 jump intent。**
+8. **Notes 新建/自动保存竞态导致当前搜索测试不稳定。**
 
-### 前端
+### P1：与 Phase 1 一并完成
 
-| 文件 | 用途 | 改动相关 |
-|---|---|---|
-| `web/src/App.tsx` | GlobalSearchDialog | 加高亮、键盘导航、计数 |
-| `web/src/pages/BoardPage.tsx` | Board 内联搜索 | 加 searchJumpIntent、内容预览 |
-| `web/src/pages/NotesPage.tsx` | Notes 搜索 | 搜索体验统一 |
-| `web/src/pages/SettingsPage.tsx` | 设置 | 加语义搜索开关 |
-| `web/src/lib/highlight.ts` | `highlightText`/`highlightHtml` | 在 GlobalSearchDialog 接入 |
-| `web/src/lib/searchJump.ts` | searchJump 意图系统 | Board 搜索点击时调用 |
-| `web/src/stores/taskStore.ts` | searchMode/doSearch | 加内容预览 state |
-| `web/src/services/httpApi.ts` | searchTasks/searchAll/searchNotes | hybrid 参数 |
-| `web/src/services/api.ts` | API 包装层 | hybrid 标志 |
-| `web/src/types/index.ts` | SearchResult 等类型 | 可能加 rrfScore 等字段 |
-| `web/src/shortcuts/registry.ts` | 快捷键注册 | 可能加 shortcut 打开搜索 |
-| `web/src/index.css` | `.search-highlight` 样式 | 现有高亮 CSS 复用 |
+1. 当前 tokenizer 丢弃所有单字符 token，并只放行少数两字母英文，导致 `js`、`ts` 等无法搜索。
+2. FTS 没有 prefix index；即使添加 prefix index，当前查询也没有生成 `token*`。
+3. tags 使用序列化 JSON substring，而不是独立索引字段和 exact-tag 排序信号。
+4. snippet 固定从正文开头截取，未围绕命中位置。
+5. stdio MCP 缺 notes/all 搜索，HTTP/stdio 能力不一致。
+6. 异步搜索只用 UI boolean 忽略结果，未取消请求；快速输入时仍会制造无用后端负载。
 
-### Tauri/Ops
+### 暂不作为当前里程碑的问题
 
-| 文件 | 用途 |
+- 搜索历史。
+- status/type/date 高级过滤语法。
+- trigram 备表。
+- spellfix1。
+- NEAR/phrase 高级语法。
+- 批量操作。
+- attachments / work sessions / day scripts / agent conversations 索引。
+
+这些功能只有在统一搜索文档层和相关性评测稳定之后才有安全的落点。
+
+---
+
+## 5. 旧方案中必须纠正的结论
+
+| 旧方案 | 调查结论 |
 |---|---|
-| `tauri/tauri.conf.json` | Tauri 配置 — 加 dylib 到 `bundle.resources` |
-| `server/scripts/with-node.sh` | Node 运行时管理 |
+| 删除 task ID 索引 | 不采用。ID 搜索已被明确实现并有测试，应放入独立高权重 identifier 字段。 |
+| `bm25(tasks_fts, 3,0,1,1.5)` 可提高标题权重 | 不成立。当前列是 task_id / entry_id / source / content，没有 title 列；必须先改 schema。 |
+| 加 `prefix='2 3 4'` 即可即时前缀搜索 | 不完整。查询端必须安全地产生最后一个 token 的 `*`。 |
+| 使用 FTS `snippet()` 返回可读上下文 | 不采用。FTS 保存的是预分词 token 串，会显示不自然的空格；摘要应来自原始纯文本。 |
+| index/query 都改 `cutForSearch` 后直接加 NEAR | 暂不采用。预分词的重叠 token 会改变 token position 语义，先只用于召回。 |
+| 每个 task 一个向量 | 不采用。会丢失具体 entry/note hit，破坏“高亮并定位”。 |
+| `void indexTaskVector()` 即可非阻塞增量索引 | 不采用。并发请求可能让旧 embedding 后写覆盖新内容，也无法在进程重启后恢复。 |
+| `backgroundTaskService` 已是后台队列 | 不准确。它持久化状态，但不持久化可恢复的 embedding job payload。 |
+| embedding model 缺省复用 chat model | 不采用。chat model 通常不能调用 embeddings，必须显式配置。 |
+| vec0 固定 512 维并在模型变化时 drop/rebuild | Provider 维度不固定。首版使用普通 BLOB + sqlite-vec cosine function，profile 记录维度。 |
+| sqlite-vec dylib 放进 Tauri resources | 不采用。扩展随独立 Node server npm 包分发。 |
+| 动态 import Transformers.js，但不加 dependency | 不可发布。首版直接不实现内置模型。 |
+| BGE 索引和查询都加中文 instruction | 错误。BGE model card 说明 instruction 只加 query，不加 passage；本地模型已延期。 |
+| searchJump 10 秒 TTL 导致用户在结果里停留后失效 | 不成立。intent 在点击时才创建，并立即由目标页面消费。 |
 
 ---
 
-## 附录B：参考资料
+## 6. 外部技术核验结论
 
-### RRF 与混合搜索
+### SQLite FTS5
 
-- **原始 RRF 论文**: Cormack, Clarke, Büttcher (SIGIR 2009) "Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods under Combining Rank-Based Retrieval Models"
-- **Logseq 生产实现**: [logseq/logseq commit fd1906a](https://github.com/logseq/logseq/commit/fd1906a0c84135f30c34ae84a20876cc46057dbe) "feat: semantic search with zvec" — constants: `rrf-k=60`, `keyword-rrf-weight=1.25`, `vector-rrf-weight=1.0`
-- **Logseq 向量搜索设计文档**: `docs/agent-guide/077-vector-embedding-context.md` — "Hybrid ranking should keep vector similarity as an auxiliary signal"
-- **gbrain TypeScript RRF**: [garrytan/gbrain](https://github.com/garrytan/gbrain) — 含 post-fusion 阶段：normalize → boost → cosine re-score → backlink boost → dedup
-- **ChatLab minimalist RRF**: [ChatLab/ChatLab](https://github.com/ChatLab/ChatLab) — 含 first-seen-order tiebreaker
-- **retriv TypeScript library**: [skilld-dev/retriv](https://github.com/skilld-dev/retriv) — SQLite hybrid search 库
-- **Obsidian Hybrid Search**: [dobryakov/obsidian-hybrid-search](https://github.com/dobryakov/obsidian-hybrid-search) — 3-way parallel retrieval + Cross-encoder reranking with bge-reranker-v2-m3
-- **vault-search** (Obsidian fork): [mzazon/vault-search](https://github.com/mzazon/vault-search) — query expansion: 2× weight on original query
-- **SIGIR 2023 fusion paper**: "An Analysis of Fusion Functions for Hybrid Retrieval" — CC (weighted sum) 超过 RRF on in-domain，但需要评估数据调 α
+- BM25 支持按列传权重。
+- prefix index 只优化带 `*` 的 prefix query。
+- UNINDEXED 列不会进入倒排索引，适合保存 doc key。
+- 当前预分词设计下，原始文本和索引 token 必须分开保存。
+
+参考：<https://www.sqlite.org/fts5.html>
 
 ### sqlite-vec
 
-- **官方文档**: https://alexgarcia.xyz/sqlite-vec/
-- **JS 文档** (better-sqlite3 集成): https://alexgarcia.xyz/sqlite-vec/js.html
-- **vec0 虚拟表**: https://alexgarcia.xyz/sqlite-vec/vec0.html
-- **API 参考**: https://alexgarcia.xyz/sqlite-vec/api-reference.html
-- **GitHub**: https://github.com/asg017/sqlite-vec
-- **npm**: https://www.npmjs.com/package/sqlite-vec
-- **Alex Garcia 混合搜索博文**: https://alexgarcia.xyz/blog/2024/sqlite-vec-hybrid-search/index.html
-- **v0.1.10-alpha DiskANN**: https://github.com/asg017/sqlite-vec/issues/25
-- **旧版 sqlite-vss** (已废弃): https://github.com/asg017/sqlite-vss
+- 截至调查时最新 stable 为 `0.1.9`，项目仍是 pre-v1，必须精确 pin 版本。
+- 已在临时目录验证 `sqlite-vec@0.1.9 + better-sqlite3@12.9.0`：
+  - `sqliteVec.load(db)` 成功。
+  - `vec_version()` 返回 `v0.1.9`。
+  - TEXT PRIMARY KEY 和 FLOAT vector schema 可创建。
+- npm 包通过 platform optional dependency 安装对应 dylib；Chronicle 发布脚本会把 production dependencies
+  带进 Node server npm artifact。
 
-### 本地嵌入模型
+参考：
 
-- **Transformers.js**: https://huggingface.co/docs/transformers.js
-- **bge-small-zh-v1.5 (Xenova)**: https://huggingface.co/Xenova/bge-small-zh-v1.5
-- **multilingual-e5-small (Xenova)**: https://huggingface.co/Xenova/multilingual-e5-small
-- **gte-small (Xenova)**: https://huggingface.co/Xenova/gte-small
-- **C-MTEB 中文基准**: https://github.com/FlagOpen/FlagEmbedding/blob/master/C_MTEB/README.md
-- **APSW fts5aux** (参考 rank 函数实现): https://rogerbinns.github.io/apsw/_modules/apsw/fts5aux.html
+- <https://alexgarcia.xyz/sqlite-vec/js.html>
+- <https://github.com/asg017/sqlite-vec/releases/tag/v0.1.9>
 
-### FTS5 高级技巧（参见第一波改进）
+### Provider embeddings
 
-- **SQLite FTS5 官方文档**: https://www.sqlite.org/fts5.html
-  - §5.1.1 bm25() 函数和列权重
-  - §5.1.2-5.1.3 highlight() 和 snippet()
-  - §4.2 prefix 索引
-  - §3.5 NEAR 查询
-  - §6.11 rank 配置选项
-  - §6.8-6.9 merge 命令（增量优化）
-- **spellfix1 扩展**: https://sqlite.org/spellfix1.html
-- **trigram tokenizer**: https://www.sqlite.org/fts5.html#the_trigram_tokenizer
-- **CJK FTS5 Trigram + Hybrid 策略**: https://zenn.dev/kanseilink/articles/kanseilink-fts5-trigram-cjk-20260507
-- **React Native FTS5 input handling**: https://dev.to/sathish_daggula/react-native-offline-first-instant-search-in-sqlite-35kd
-- **Anamnesis CJK pre-tokenization pattern**: https://github.com/Trapezohe/Anamnesis/commit/9249065da7d4f3d72b0cb997365b5765c8954a0d
-- **wangfenjin/simple jieba tokenizer**: https://www.wangfenjin.com/posts/simple-jieba-tokenizer/
-- **better-trigram**: https://github.com/streetwriters/sqlite-better-trigram
-- **FTS5 索引结构深度剖析**: https://darksi.de/13.sqlite-fts5-structure/
-- **indutny FTS5 合并算法说明**: https://gist.github.com/indutny/ae44fd93dde2736205609d19a21b87cc
-- **FTS5 bulk-load 优化研究**: https://github.com/mihaela-mj/cupertino/commit/9b9e6b79224d0e0130aa5f343932eea7ca08f9ab
+- Ollama 的 OpenAI compatibility 当前支持 `/v1/embeddings`，input 可为字符串或字符串数组。
+- 仍必须配置真正的 embedding model，不能把默认 `qwen2.5:7b` chat model 当 embedding model。
 
-### Tauri / better-sqlite3 分发
+参考：<https://docs.ollama.com/api/openai-compatibility>
 
-- **Tauri 资源打包**: https://tauri.app/v1/guides/distribution/file-resources/
-- **better-sqlite3 codesigning issue #1110**: https://github.com/WiseLibs/better-sqlite3/issues/1110 — `disable-library-validation` entitlement 是关键
-- **episodic-memory bundling issue**: https://github.com/obra/episodic-memory/issues/4 — `--external:sqlite-vec` 的来源
-- **Midswirl SQLite-vec walkthrough**: https://www.midswirl.com/blog/road-to-sqlite-vec-exploring-sqlite-as-a-rag-vector-database
+---
+
+# 第二部分：作为结论的实施计划
+
+## 7. 已锁定的产品与技术决策
+
+| 决策 | 结论 |
+|---|---|
+| 交付方式 | 两阶段：关键词/交互先交付，Provider hybrid 后交付。 |
+| 搜索范围 | task title、task body/log/pinned、notes title/content/tags。 |
+| Task ID | 保留并作为最高权重 identifier。 |
+| 关键词索引 | 统一 `search_documents + search_fts`。 |
+| 结果粒度 | 核心返回 document hit；Board 再按 task 聚合。 |
+| 语义粒度 | task title 和每个 entry/note 的内容 chunks，不做 task-only vector。 |
+| Embedding v1 | OpenAI-compatible Provider；显式 embedding model；默认关闭。 |
+| 本地模型 | 不在当前计划内；本机 Ollama 走 Provider 路径。 |
+| 向量存储 | 普通 SQLite BLOB + sqlite-vec cosine function。 |
+| 混合排序 | keyword + vector 的 RRF，精确 ID/title 在 RRF 之前固定优先。 |
+| 失败策略 | semantic disabled/building/error/timeout 时完整降级到 keyword。 |
+| 分发 | sqlite-vec 随 Node server npm 包；Tauri 无资源或 entitlement 改动。 |
+
+---
+
+## 8. Phase 0：先获得可信基线
+
+### 8.1 修复 Notes draft 初始化竞态
+
+目标：`saved` 只在当前用户可见 draft 的相同 revision 已持久化后出现。
+
+实现要求：
+
+1. `applyNoteDraft()` 只在 note ID 真正变化时初始化一次。
+2. `handleCreateNote()`、URL effect 和 `activeNote` effect 不得对同一 note 重复初始化 draft。
+3. title/tags 的 ref 在 input `onChange` 中同步更新，不能只等待 React effect。
+4. save 操作串行化并携带 local revision；旧 save response 不得覆盖更新的 draft 或把状态标成 `saved`。
+5. note 切换前继续 flush 当前 draft，但 stale `setActiveNote()` response 不能切回旧 note。
+
+验收：
+
+- 现有 autosave test `--repeat-each=10` 全绿。
+- 新增“创建后立即改标题并输入正文”回归，API title 必须与 input 完全一致。
+- 新增“连续快速改标题”回归，最终保存值必须等于最后一次输入。
+
+### 8.2 锁定相关性 fixture 和 benchmark 规格
+
+Phase 0 先锁定以下数据和 expected ordering；可执行的 `tests/search-relevance.test.ts` 与 benchmark
+在统一索引完成的 Commit B 一起提交，避免 Commit A 引入注定失败的测试。fixture 固定创建互相竞争的
+task / entry / note 数据，验证：
+
+- 完整 ID > title exact > title token > exact tag > content exact > 其他 FTS。
+- `neo4j` 的 title 精确命中排在只在长正文中出现的 task 前。
+- 一个 task 的多个 entry hit 在 Global Search 都可见，Board 只显示一个聚合 task 并显示 hit count。
+- 中文、英文、技术 token、HTML、archived scope 的原有行为不回退。
+
+新增独立 benchmark 脚本，用临时 DB 生成约 4 万 search documents；它不进入每次 CI，但必须作为
+Phase 1 验收运行并记录结果。
+
+---
+
+## 9. Phase 1：统一关键词索引和搜索体验
+
+### 9.1 数据模型
+
+在 `server/src/db.ts` 增加：
+
+```sql
+CREATE TABLE search_documents (
+  doc_key TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('task', 'task_entry', 'note')),
+  task_id TEXT,
+  entry_id TEXT,
+  note_id TEXT,
+  source TEXT NOT NULL,
+  identifier_text TEXT NOT NULL DEFAULT '',
+  title_text TEXT NOT NULL DEFAULT '',
+  content_text TEXT NOT NULL DEFAULT '',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  updated_at INTEGER NOT NULL,
+  content_hash TEXT NOT NULL
+);
+
+CREATE INDEX idx_search_documents_kind
+  ON search_documents(kind);
+CREATE INDEX idx_search_documents_task
+  ON search_documents(task_id);
+CREATE INDEX idx_search_documents_note
+  ON search_documents(note_id);
+
+CREATE VIRTUAL TABLE search_fts USING fts5(
+  doc_key UNINDEXED,
+  identifier,
+  title,
+  content,
+  tags,
+  tokenize = 'unicode61',
+  prefix = '2 3 4'
+);
+```
+
+`doc_key` 格式固定：
+
+```text
+task:<taskId>
+entry:<entryId>
+note:<noteId>
+```
+
+写入规则：
+
+- task document：identifier = task ID，title = task title，tags = task tags，content 为空。
+- task entry document：task_id + entry_id + source，content 为一次性清洗后的 plain text；title 为空，
+  展示时 join parent task title；`updated_at` 使用 entry 的 `created_at`。
+- note document：identifier = note ID，title/content/tags 分字段保存。
+- `search_documents` 保存原始可读纯文本；`search_fts` 保存对对应字段调用 `tokenize()` 后的 token 串。
+
+`content_hash` 固定为以下 UTF-8 字符串的 SHA-256 hex：
+
+```text
+kind + "\0" + identifier_text + "\0" + title_text + "\0" + content_text + "\0" + canonical_tags_json
+```
+
+`canonical_tags_json` 是 trim 后、保持业务数据顺序的 JSON array；所有空值写为空字符串/空数组，保证
+rebuild 和 incremental indexing 得到相同 hash。
+
+新增共享服务，职责固定为：
+
+```text
+upsertTaskSearchDocument
+upsertTaskEntrySearchDocument
+upsertNoteSearchDocument
+removeSearchDocument
+removeTaskSearchDocuments
+rebuildSearchIndex
+```
+
+task/note source write和搜索文档写入必须在同一 better-sqlite3 transaction 内完成。不能先提交业务数据，
+再用 fire-and-forget 更新关键词索引。
+
+### 9.2 迁移
+
+使用新的 `_meta.search_index_version = 1`，不要继续让所有结构变化只依赖 tokenizer version。
+
+启动迁移顺序：
+
+1. 检查 `search_documents/search_fts` 是否存在且列形状正确。
+2. 不兼容则 drop 新搜索表并重新创建。
+3. 在 transaction 中从 tasks / task_entries / notes 重建。
+4. 写入 `search_index_version=1`。
+5. 新索引可查询后，删除不再使用的 `tasks_fts/notes_fts`。
+
+迁移必须同时替换所有 legacy hooks，不能只换搜索读路径：
+
+- `taskService.ts` 和 `meetingService.ts` 的 `indexTask/indexEntry/remove*` 调用。
+- `noteService.ts` 的 note FTS 写入、删除和 rebuild。
+- `appService.ts` 暴露的旧 note rebuild wrapper。
+- `/api/search/rebuild`，改为只调用统一 `rebuildSearchIndex()`。
+- server startup 的 `CURRENT_TOKENIZER_VERSION` task/note 双 rebuild，改为统一 search index version 检查。
+
+完成以上替换、验证没有旧 symbol/table 引用后，才允许 drop `tasks_fts/notes_fts`。
+
+必须有从以下历史状态启动的测试：
+
+- 没有搜索表。
+- 旧 `tasks_fts` 无 `entry_id`。
+- 旧 contentless `notes_fts`。
+- tokenizer version 3/4，但没有统一 search index。
+
+### 9.3 Tokenizer 与 query builder
+
+保留当前 technical token 正则，并作以下调整：
+
+1. 中文索引/查询统一使用 `nodejieba.cutForSearch()`。
+2. 不再维护两字母 allowlist；`js`、`ts`、`db` 等作为完整 token。
+3. 单字符字母/数字允许作为完整 token，但绝不走 substring LIKE。
+4. 去重时保持 token 首次出现顺序。
+5. FTS query 的每个 token 都必须安全转义。
+6. 始终先构造完整 token 的 exact query；最后一个 ASCII token 长度至少 2 时，再构造一条
+   `"token"*` 的 supplemental prefix query。
+7. exact/prefix query 内的其他 token 都使用 AND 语义；本阶段不暴露用户自定义 FTS 运算符。
+
+返回给前端高亮的 tokens 使用原查询中可读 token，不使用加 `*` 后的 FTS 表达式。
+
+### 9.4 召回与排序
+
+删除当前 Phase 2/3 全表 fallback 和 tags LIKE。
+
+查询过程固定为：
+
+1. exact FTS query 先召回 candidates；符合条件时再用 prefix query 补召回。两路合并后最多保留
+   `min(limit * 4, 400)` 个 documents，并记录 `exactFtsHit/prefixOnly`，exact hit 永远优先于仅 prefix hit。
+2. 使用 `bm25(search_fts, 0, 8, 5, 1, 3)`；`doc_key` 权重为 0，identifier/title/content/tags
+   依次为 8/5/1/3。
+3. join `search_documents` 取得原始文本和 scope 元数据。
+4. 只在 candidates 上计算精确特征，不扫描全库。
+5. 用确定性 tuple 排序：
+
+```text
+identifierExact DESC
+titleExactPhrase DESC
+exactFtsHit DESC
+titleHasAllTokens DESC
+tagExact DESC
+contentExactPhrase DESC
+bm25 ASC
+updatedAt DESC
+docKey ASC
+```
+
+6. snippet 从 title/content 原文中第一个命中位置向前后扩展，总长不超过 240 字；没有 literal 命中时
+   使用正文开头。
+7. 搜索核心返回 document hits，不在 service 内按 task 去重。
+8. `counts/total/matchCount` 使用独立的 FTS COUNT/GROUP 查询计算，不能从最多 400 个排序 candidates
+   推算。exact 与 prefix 两路按 doc_key UNION 去重后计数。
+
+Board adapter 按 task ID 取最佳 hit，返回：
+
+- 最佳 entryId/source/snippet。
+- `matchCount`。
+- task metadata。
+
+Board 为满足 task-group limit，应按排名分批读取 document hits，直到得到 limit 个 distinct task 或达到
+400 个 candidate 上限；不能只裁剪前 limit 个 documents 后再分组。
+
+Global Search 保留 task、task_entry、note 三种独立 hits；同 task 的多个 entry 可以同时出现。
+
+limit 语义固定：
+
+- `scope=all`：limit 是统一排序后的全局 hit 上限，裁剪后再按三类分 section。
+- `scope=notes`：limit 是 note hit 上限。
+- 默认 task/Board scope：limit 是聚合后的 task 数上限；`matchCount` 是该 task 在 limit 前命中的
+  document 数。
+
+### 9.5 API 和类型
+
+保留现有 `/api/search` query 参数和响应大结构，所有变化尽量 additive。
+
+新增通用字段：
+
+```ts
+type SearchRetrieval = 'keyword' | 'semantic' | 'hybrid'
+
+interface SearchHitMeta {
+  hitId: string
+  snippet: string
+  matchCount: number
+  retrieval: SearchRetrieval
+  exactMatch: boolean
+  rank: number
+  semanticAnchor?: {
+    documentHash: string
+    startOffset: number
+    endOffset: number
+    anchorText: string
+  }
+}
+
+interface SearchCounts {
+  tasks: number
+  taskEntries: number
+  notes: number
+}
+```
+
+`scope=all` 响应增加：
+
+```ts
+{
+  results: { tasks, taskEntries, notes },
+  tokens,
+  counts,
+  total,              // limit 前的真实 hit 总数
+  retrievalMode,      // Phase 1 固定 keyword
+  semanticStatus      // Phase 1 固定 disabled
+}
+```
+
+旧字段 `taskId/entryId/noteId/matchType/matchedOriginal/tokens` 保留，避免前端和 MCP 一次性破坏。
+Phase 2 时，`GET /api/notes/:id` 返回的 Note 增加只读 `searchContentHash`，由 server 使用与
+`search_documents.content_hash` 完全相同的 builder 计算；它不写入 notes table。NotesPage 用它判断搜索
+结果 offsets 是否仍对应当前内容，避免前端重复实现 server 的 HTML normalization/hash 算法。
+
+### 9.6 Global Search
+
+在 `web/src/App.tsx`：
+
+1. title 和 snippet 都用 `highlightText()`。
+2. section 标题显示真实 counts。
+3. 将三组结果映射成一个 flattened selection list。
+4. ArrowUp/Down 循环选择，Enter 打开，Escape 关闭。
+5. 选中项使用可见样式、`aria-selected`，并 `scrollIntoView({ block: 'nearest' })`。
+6. query 或结果变化时把 selection 重置为第一项。
+7. 关闭后把焦点还给打开搜索前的元素。
+8. 对请求使用 AbortController 或 request sequence，旧响应不得覆盖新 query。
+
+点击后继续使用现有 `setSearchJumpIntent()`；task entry 必须携带 entryId，note 必须携带 matchedSource。
+
+### 9.7 Board 搜索
+
+1. 从 Enter-to-search 改为与 Global 一致的 180ms debounce。
+2. 保留上下选择快捷键。
+3. 结果卡增加围绕命中的 snippet 和 `×N hits`。
+4. click/Enter 时先写 search jump intent，再 `setActiveTask()`。
+5. entry hit 打开后滚动到具体 entry 并高亮；title hit 聚焦标题区域。
+6. Escape 退出搜索后恢复原 task，并把焦点还给 Board 搜索触发点。
+
+### 9.8 Notes 搜索
+
+Notes 列表仍只展示 note，但必须复用统一后端排序和 snippet。debounce 统一为 180ms，旧 response
+不能覆盖新 query。Global Search 打开 note 时继续使用 ProseMirror decoration，不修改 note HTML。
+
+### 9.9 MCP parity
+
+stdio bridge 增加：
+
+- `search_notes(query, limit?, includeArchived?)`
+- `search_all(query, limit?, includeArchived?)`
+
+HTTP MCP 的 `search_notes` 增加 `includeArchived`。所有工具直接复用统一 search service/API 语义，返回
+`total/counts`，不得单独实现另一套搜索排序。
+
+### 9.10 Phase 1 验收门槛
+
+功能：
+
+- 旧搜索测试和新 relevance tests 全绿。
+- Global Search 结果高亮、键盘操作、分组计数可用。
+- Board 从 entry hit 打开后准确滚动并高亮。
+- task ID、中文、AI/JS/TS、URL/path、tags、notes 都有确定性结果。
+- 同 task 多 entry hit 在 Global 可见，Board 显示聚合次数。
+
+性能：
+
+- 搜索 request path 不再执行 `SELECT all tasks/entries/notes` 后 JS filter。
+- 4 万 search documents 的 warm keyword P95 < 150ms。
+- query 时不调用全库 `htmlToPlainText()`。
+
+构建与回归：
+
+```bash
+./scripts/with-node.sh npm --prefix server run build
+./scripts/with-node.sh npm --prefix web run build
+./scripts/with-node.sh npx playwright test \
+  tests/search-relevance.test.ts \
+  tests/data-integrity.test.ts \
+  tests/notes.test.ts \
+  tests/search-done-detail.test.ts
+```
+
+Phase 1 未满足以上门槛前，不开始 Phase 2。
+
+---
+
+## 10. Phase 2：Provider 语义搜索与 Hybrid RRF
+
+### 10.1 配置
+
+扩展 `ChronicleConfig.llm`、Settings API 和前端 `LlmSettings`：
+
+```ts
+semanticSearchEnabled: boolean   // default false
+embeddingModel: string           // default ''，enabled 时必填
+```
+
+首版复用已有：
+
+```text
+llm.baseUrl
+llm.apiKey
+llm.timeoutMs
+```
+
+环境变量：
+
+```text
+CHRONICLE_SEMANTIC_SEARCH_ENABLED
+CHRONICLE_LLM_EMBEDDING_MODEL
+```
+
+规则：
+
+- 不允许 enabled=true 且 embeddingModel 为空。
+- 不自动把 `llm.model` 当 embedding model。
+- Settings 启用前先测试 embedding endpoint。
+- 非 localhost/127.0.0.1 base URL 必须显示“内容会发送给该 Provider”的确认提示。
+- API key 继续沿用现有脱敏返回策略，不写日志。
+
+### 10.2 sqlite-vec 加载与发布
+
+在 `server/package.json` 精确依赖：
+
+```json
+"sqlite-vec": "0.1.9"
+```
+
+在 `server/tsup.config.ts` external 中加入 `sqlite-vec`。DB 初始化时：
+
+1. 尝试 `sqliteVec.load(db)`。
+2. 验证 `vec_version()`。
+3. 加载失败只把 semantic status 设为 error；keyword search 和 server 启动必须继续工作。
+
+不要修改：
+
+- `tauri/src-tauri/tauri.conf.json` resources。
+- Tauri entitlements。
+- `process.resourcesPath`。
+
+发布验证必须走 `publish.js` 生成的 npm artifact：先确认 `npm pack` tarball 声明了 `sqlite-vec`
+dependency，再把 tarball 安装到临时 prefix，确认安装阶段解析出的 platform optional package 可被 server
+实际加载。
+
+### 10.3 向量数据模型
+
+首版不使用固定维度 vec0 table。增加普通表：
+
+```sql
+CREATE TABLE semantic_profiles (
+  profile_hash TEXT PRIMARY KEY,
+  base_url_hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  index_version INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('building', 'ready', 'ready_with_errors', 'error')),
+  error_message TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER
+);
+
+CREATE TABLE embedding_cache (
+  profile_hash TEXT NOT NULL,
+  chunk_input_hash TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  embedding BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(profile_hash, chunk_input_hash),
+  FOREIGN KEY(profile_hash) REFERENCES semantic_profiles(profile_hash) ON DELETE CASCADE
+);
+
+CREATE TABLE search_embedding_chunks (
+  profile_hash TEXT NOT NULL,
+  doc_key TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  document_hash TEXT NOT NULL,
+  chunk_input_hash TEXT NOT NULL,
+  start_offset INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
+  anchor_text TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(profile_hash, doc_key, chunk_index),
+  FOREIGN KEY(profile_hash) REFERENCES semantic_profiles(profile_hash) ON DELETE CASCADE,
+  FOREIGN KEY(doc_key) REFERENCES search_documents(doc_key) ON DELETE CASCADE
+);
+
+CREATE TABLE semantic_index_jobs (
+  profile_hash TEXT NOT NULL,
+  doc_key TEXT NOT NULL,
+  document_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'error')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  available_at INTEGER NOT NULL,
+  last_error TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(profile_hash, doc_key),
+  FOREIGN KEY(profile_hash) REFERENCES semantic_profiles(profile_hash) ON DELETE CASCADE,
+  FOREIGN KEY(doc_key) REFERENCES search_documents(doc_key) ON DELETE CASCADE
+);
+```
+
+`profile_hash` 必须包含：规范化 base URL、embedding model、dimensions、chunk/index version；不包含
+API key 明文。`document_hash` 对应 `search_documents.content_hash`；`chunk_input_hash` 对实际送给 Provider
+的单个 chunk UTF-8 输入计算 SHA-256 hex，避免同一 document 的多个 chunks 在 cache 中互相覆盖。
+
+### 10.4 Embedding service
+
+新增 `embeddingService.ts`，Provider 请求规则：
+
+```text
+POST {baseUrl without trailing slash}/embeddings
+Authorization: Bearer <apiKey>     // 非空时
+body: { model: embeddingModel, input: string[] }
+```
+
+实现要求：
+
+- response 必须校验 HTTP status、data 顺序、每个 embedding 类型和统一维度。
+- rebuild batch size 固定 16；Provider 明确拒绝 batch 时可以降为 1，并记录 profile error/context。
+- query embedding 使用最多 50 项的进程内 LRU。
+- 每个 chunk embedding 优先用 `chunk_input_hash` 查 `embedding_cache`。
+- timeout/abort/error 不得暴露 API key 或正文到日志。
+
+新增测试端点：
+
+```text
+POST /api/settings/llm/test-embeddings
+```
+
+request body 使用尚未保存的 Settings draft：
+
+```ts
+{
+  baseUrl: string
+  apiKey: string
+  embeddingModel: string
+  timeoutMs: number
+}
+```
+
+端点只验证这组临时参数，不落盘；字段缺失或类型错误返回 400。Settings UI 必须先用 draft 测试成功，
+再保存并启用 semantic search。
+
+返回：
+
+```ts
+{ ok: true, model: string, dimensions: number, latencyMs: number }
+```
+
+失败返回可操作错误，但不回显 secret。
+
+### 10.5 Chunk 规则
+
+基于 `search_documents` 的 plain text 生成 chunks：
+
+- task title/tags：一个 document chunk。
+- task entry：按内容块切分。
+- note：title/tags 作为上下文，正文按内容块切分。
+- 每 chunk 最多 400 Unicode code points。
+- 相邻 chunk overlap 60 code points。
+- 优先在换行/段落边界切分。
+- `anchor_text` 保存该 chunk 开头最多 160 个规范化字符，用于 note 内定位。
+- `start_offset/end_offset` 使用规范化 plain-text projection 的 UTF-16 code-unit offset；前后端必须使用
+  同一 whitespace/newline normalization 规则。
+- embedding 输入不超过 provider/model 已知限制；若 Provider 没提供限制，使用上述保守 chunk。
+
+### 10.6 Durable indexing worker
+
+不能在 `createTask/updateNote` 中直接 `void embed()`。
+
+业务写入时：
+
+1. transaction 内更新 `search_documents`。
+2. 为 active profile UPSERT 一条 pending job，携带最新 document_hash。
+3. 不删除旧 embedding，但查询时只允许 chunk document_hash 与当前 search document hash 一致，因此旧
+   vector 自动失效。
+
+单并发 worker：
+
+1. server 启动时把遗留 `running` job 恢复为 `pending`。
+2. 按 batch 取 pending jobs。
+3. embed 前后都检查当前 `search_documents.content_hash` 是否仍等于 job document_hash。
+4. 若内容已变，丢弃旧 response 并让最新 job 保持 pending。
+5. transaction 写 cache/chunks；cache key 使用 chunk_input_hash，chunk row 同时写 document_hash 和
+   chunk_input_hash。
+6. source 删除时删除 job 和 chunks。
+7. 最多重试 3 次，指数退避；超过后记录 error，但继续处理其他 documents。
+
+job 成功写入后直接删除对应 `semantic_index_jobs` row；失败 row 保留 error/attempts 供 UI 和手动重建
+诊断。全量 rebuild 的总进度由 `embedding_index` background task 记录，不依赖已删除的成功 job rows。
+全部 documents 都失败时 profile=`error`，搜索 keyword-only；部分失败时 profile=`ready_with_errors`，
+允许用成功 vectors 做 hybrid，同时在 status/progress 中显示失败数并允许重试。
+
+扩展 `BackgroundTaskType`：
+
+```text
+embedding_index
+```
+
+增加 background task progress 更新能力；meta 至少包含 total/completed/failed/model，SSE UI 展示进度。
+
+模型或维度变化时创建新 profile 并全量 enqueue。新 profile ready 前搜索只走 keyword；不要混用旧模型
+向量。新 profile ready 后保留当前和上一个 ready profile 作为一次回滚余地，删除更旧 profiles，并依靠
+foreign-key cascade 清理 cache/chunks/jobs。
+
+### 10.7 Vector search 与 RRF
+
+向量检索：
+
+```sql
+SELECT doc_key,
+       chunk_index,
+       anchor_text,
+       vec_distance_cosine(embedding, ?) AS distance
+FROM search_embedding_chunks
+WHERE profile_hash = ?
+  AND document_hash = (
+    SELECT content_hash FROM search_documents d
+    WHERE d.doc_key = search_embedding_chunks.doc_key
+  )
+ORDER BY distance
+LIMIT ?;
+```
+
+先按 doc_key 保留 distance 最小的 chunk，再进入融合。
+
+scope 与 `includeArchived` 必须在 keyword/vector 两条召回路径上同时生效。vector SQL 需要 join
+`search_documents` 及必要的 source table，在 top-K 之前排除不属于当前 scope 的 documents 和 archived
+notes，不能先占用 top-K 名额后再在应用层过滤。
+
+RRF 固定参数：
+
+```text
+k = 60
+keyword weight = 1.25
+vector weight = 1.0
+rank 使用 1-based
+```
+
+融合 key 为 `doc_key`，不是 task ID。否则同 task 的不同 entry 会再次被错误折叠。
+
+排序顺序：
+
+1. keyword 的 identifierExact/titleExactPhrase 固定置顶。
+2. 其余结果按加权 RRF score 降序。
+3. score 相同按 keyword rank、vector rank、doc_key 稳定排序。
+
+每路取 `limit * 2`，融合后再裁剪到 limit。
+
+semantic query 有独立 1500ms deadline。任一情况完整返回 keyword：
+
+- semantic disabled。
+- profile building/error。
+- sqlite-vec 未加载。
+- Provider timeout/error。
+- query embedding 为空或维度不匹配。
+
+传给 `vec_distance_cosine()` 的查询参数使用 `new Float32Array(queryEmbedding).buffer`，与
+`sqlite-vec` 的 Node binding 约定一致。
+
+### 10.8 Semantic API 与 UI
+
+新增：
+
+```text
+GET  /api/search/semantic/status
+POST /api/search/semantic/rebuild
+```
+
+搜索响应：
+
+- `retrievalMode = keyword | hybrid`。
+- `semanticStatus = disabled | building | ready | ready_with_errors | error | timeout`。
+- 每个 hit 的 `retrieval = keyword | semantic | hybrid`。
+- semantic-only hit 的 tokens 可以为空，但必须返回 snippet、doc key 和 best chunk anchor。
+
+Settings：
+
+- 开关、embedding model、测试连接、重建索引、状态/进度。
+- enabled 但 building 时明确显示“关键词搜索仍可用”。
+
+跳转：
+
+- task entry semantic hit：按 entryId 滚动并闪烁整个 entry 容器；不要尝试高亮不存在的 query 词。
+- task title semantic hit：打开 task 并闪烁标题区。
+- note semantic hit：返回 documentHash、start/end UTF-16 offsets 和 anchor_text。加载后的 Note
+  `searchContentHash` 与结果 documentHash 一致时，RichEditor 遍历 ProseMirror doc 构造同规范化
+  projection 及 offset→ProseMirror-position mapping，用 offsets 装饰并滚动到精确范围。
+- note hash 已变化时只能使用 anchor fallback；anchor 在当前 projection 中恰好唯一且上下文校验一致才
+  高亮。零次或多次出现时只打开 note 并保留结果 snippet，不猜测位置。
+
+### 10.9 Phase 2 验收门槛
+
+自动测试：
+
+- mock OpenAI-compatible embedding server：batch、维度、timeout、401、invalid JSON、乱序/缺项。
+- cache hit 不重复请求 Provider。
+- stale job response 不能覆盖新 content hash。
+- server restart 可恢复 pending/running jobs。
+- 删除 task/entry/note 清理 jobs/chunks。
+- 模型变化新建 profile，ready 前 keyword-only。
+- RRF 使用 1-based rank，权重和稳定 tie-break 正确。
+- semantic failure 不改变 keyword 结果和 HTTP success。
+- task entry / note semantic hit 精确定位。
+
+质量评测：
+
+- 建立至少 20 条中英文同义/概念查询与 expected doc keys。
+- 选定 Provider 模型后 Recall@5 >= 80%。
+- Phase 1 keyword golden set 零回退。
+- exact task ID/title 不被弱 semantic hit 挤下第一名。
+
+发布烟测：
+
+1. `publish.js` 生成 npm artifact。
+2. `npm pack` 只验证 tarball 中有正确 dependency declaration；再把 tarball 安装到临时 prefix，由 npm
+   在安装阶段解析对应 platform optional package。
+3. 从临时 prefix 安装后的 artifact 启动 Node server，使用隔离 config/DB。
+4. 验证 `vec_version()`、embedding test、rebuild、hybrid search。
+5. 启动 Tauri client 连接该 server；不依赖 repo `node_modules`。
+
+---
+
+## 11. 完整实施顺序与交接点
+
+严格按以下顺序提交，避免一个超大不可审查 change：
+
+1. **PR/Commit A — Baseline stability**
+   - 修 Notes draft/save 竞态。
+   - 新增只针对该竞态的稳定性回归。
+
+2. **PR/Commit B — Unified keyword index**
+   - search_documents/search_fts schema、迁移、事务性 indexer。
+   - tokenizer/query builder、候选排序、snippet、多 hit。
+   - 新增 relevance fixtures/tests 和 benchmark；不能在新索引实现前提交注定失败的排序断言。
+
+3. **PR/Commit C — Search UX and MCP parity**
+   - Global keyboard/highlight/counts。
+   - Board instant search/snippet/jump。
+   - Notes debounce 一致性。
+   - stdio/HTTP MCP parity。
+   - 完成 Phase 1 build/test/benchmark。
+
+4. **PR/Commit D — Semantic infrastructure**
+   - config、sqlite-vec load/package、profiles/cache/chunks/jobs。
+   - Provider embedding service、测试连接、durable worker。
+
+5. **PR/Commit E — Hybrid retrieval and semantic UX**
+   - vector search、RRF、fallback。
+   - Settings progress、semantic result/jump。
+   - Phase 2 quality、failure 和 packaging 验收。
+
+6. **PR/Commit F — Documentation closeout**
+   - 把本文状态更新为实际完成状态。
+   - 记录最终模型、benchmark、Recall@5 和验证命令结果。
+   - 未完成项明确移动到 future work，不保留模糊“可能做”。
+
+每个交接点都必须在 commit message/PR description 说明：
+
+- 当前完成到哪个阶段。
+- schema/index version。
+- 实际执行的测试和结果。
+- 是否需要重建索引。
+- semantic 是否默认关闭以及 fallback 状态。
+
+---
+
+## 12. 非目标与后续方向
+
+当前两阶段明确不包含：
+
+- 内置 Transformers.js / ONNX 模型。
+- trigram 第三路召回。
+- spellfix1。
+- 用户可写的 FTS5/NEAR/column-filter 语法。
+- 搜索历史和 query suggestions。
+- status/type/date UI filter。
+- 搜索结果批量修改。
+- attachments OCR/PDF、work sessions、day scripts、agent conversations 搜索。
+- ANN / DiskANN。
+
+未来增加这些能力时，必须复用 `search_documents` 的 doc key、scope、snippet、jump anchor 和评测框架，
+不能再建立一套平行搜索实现。
+
+---
+
+## 13. 构建和环境注意事项
+
+- 所有 Node/npm 命令使用 `./scripts/with-node.sh`，避免系统旧 Node 6。
+- Playwright 已隔离 `CHRONICLE_CONFIG_DIR/CHRONICLE_CONFIG_PATH`；新增测试继续使用隔离 DB。
+- localhost/127.0.0.1 请求必须设置 `NO_PROXY` 或使用 `curl --noproxy '*'`。
+- 不运行 `npm run release`，除非用户明确要求完整 release；该脚本包含 `git checkout -- ...`。
+- benchmark、Provider mock 和 packaging smoke 都使用临时目录，不读取或改写 `getDbPath()` 解析出的
+  用户生产 DB。不要假设固定路径：配置可能指向 `~/.chronicle/data.db`，默认路径则是
+  `~/.chronicle/data/tasks.db`。
+- tokenizer/schema 变更后必须验证旧 `.dev-data/tasks-dev.db` 启动迁移，不只验证全新 DB。
+
+---
+
+## 14. 参考资料
+
+### 当前 Chronicle 代码
+
+- `server/src/services/searchService.ts`
+- `server/src/services/noteService.ts`
+- `server/src/services/searchText.ts`
+- `server/src/services/tokenizer.ts`
+- `server/src/services/backgroundTaskService.ts`
+- `server/src/db.ts`
+- `server/src/config.ts`
+- `server/src/index.ts`
+- `server/src/mcp/mcp-bridge.mjs`
+- `server/src/mcp/start.ts`
+- `web/src/App.tsx`
+- `web/src/pages/BoardPage.tsx`
+- `web/src/pages/NotesPage.tsx`
+- `web/src/components/TaskDetailWorkspace/index.tsx`
+- `web/src/components/RichEditor/index.tsx`
+- `web/src/lib/highlight.ts`
+- `web/src/lib/searchJump.ts`
+- `publish.js`
+- `tests/data-integrity.test.ts`
+- `tests/notes.test.ts`
+- `tests/search-done-detail.test.ts`
+
+### 外部资料
+
+- SQLite FTS5：<https://www.sqlite.org/fts5.html>
+- sqlite-vec Node：<https://alexgarcia.xyz/sqlite-vec/js.html>
+- sqlite-vec v0.1.9：<https://github.com/asg017/sqlite-vec/releases/tag/v0.1.9>
+- sqlite-vec KNN / manual vector table：<https://alexgarcia.xyz/sqlite-vec/features/knn.html>
+- Ollama OpenAI compatibility：<https://docs.ollama.com/api/openai-compatibility>
+- BGE small zh model card：<https://huggingface.co/BAAI/bge-small-zh-v1.5>
+- RRF 原始论文：Cormack, Clarke, Büttcher, SIGIR 2009,
+  *Reciprocal Rank Fusion Outperforms Condorcet and Individual Rank Learning Methods*。

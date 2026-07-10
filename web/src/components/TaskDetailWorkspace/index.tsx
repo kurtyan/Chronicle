@@ -12,6 +12,7 @@ import { Copy, AlertTriangle, FilePlus2, FileText } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogFooter, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { NotePickerDialog } from '@/components/NotePickerDialog'
 import { consumeSearchJumpIntent, hasSearchJumpIntent } from '@/lib/searchJump'
+import { highlightText } from '@/lib/highlight'
 
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
@@ -23,9 +24,10 @@ interface TaskDetailWorkspaceProps {
   highlightEntryId?: string
   showTrackingStatus?: boolean
   keepCompletedTaskVisible?: boolean
+  findTokens?: string[]
 }
 
-export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true, keepCompletedTaskVisible = false }: TaskDetailWorkspaceProps) {
+export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true, keepCompletedTaskVisible = false, findTokens }: TaskDetailWorkspaceProps) {
   const { t } = useI18n()
   const navigate = useNavigate()
   const {
@@ -556,8 +558,11 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
               autoFocus
             />
           ) : (
-            <h1 className="text-xl font-bold cursor-pointer hover:text-muted-foreground transition flex-1" onClick={handleTitleEdit}>
-              {selectedTask.title}
+            <h1
+              className="text-xl font-bold cursor-pointer hover:text-muted-foreground transition flex-1"
+              onClick={handleTitleEdit}
+            >
+              {highlightText(selectedTask.title, findTokens ?? [])}
             </h1>
           )}
           <div className="flex items-center gap-1 shrink-0 mt-1">
@@ -628,7 +633,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
               taskId={activeTaskId}
               onUpdate={async (entryId, content) => { await updateEntry(activeTaskId, entryId, content) }}
               onUnpin={async (entryId) => { await unpinEntry(activeTaskId, entryId) }}
-                  highlightTokens={(searchMode ? searchTokens : jumpHighlightEntryId === pinnedEntry.id ? jumpHighlightTokens : undefined)}
+                  highlightTokens={(searchMode ? searchTokens : jumpHighlightEntryId === pinnedEntry.id ? jumpHighlightTokens : findTokens)}
                   highlightActive={jumpHighlightEntryId === pinnedEntry.id}
                 />
               </div>
@@ -683,7 +688,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
                   onPin={(content) => appendToPinned(selectedTask.id, content)}
                   onAddToNote={handleAddContentToNote}
                   editing={editingEntryId === entry.id}
-                  highlightTokens={searchMode ? searchTokens : jumpHighlightEntryId === entry.id ? jumpHighlightTokens : undefined}
+                  highlightTokens={searchMode ? searchTokens : jumpHighlightEntryId === entry.id ? jumpHighlightTokens : findTokens}
                   highlightPlan={entry.id === highlightEntryId || jumpHighlightEntryId === entry.id}
                   taskId={selectedTask.id}
                   onFirstMeaningfulEdit={handleFirstMeaningfulEdit}

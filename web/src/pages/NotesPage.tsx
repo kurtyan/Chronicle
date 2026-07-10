@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Archive, ArchiveRestore, FilePlus2, FileText, ListTodo, Pin, PinOff, Search } from 'lucide-react'
 import { RichEditor } from '@/components/RichEditor'
+import { FindBar } from '@/components/FindBar'
 import { registerShortcut } from '@/shortcuts/registry'
 import { useNoteStore } from '@/stores/noteStore'
 import { useTaskStore } from '@/stores/taskStore'
@@ -15,9 +16,10 @@ const NOTES_LIST_PERCENT_KEY = 'chronicle_notes_list_pct'
 const NOTES_LIST_MIN_WIDTH = 180
 const NOTES_DETAIL_MIN_WIDTH = 320
 
-function isEditing(): boolean {
+function isEditing(allowFindBarInput = false): boolean {
   const active = document.activeElement as HTMLElement | null
   if (!active) return false
+  if (allowFindBarInput && active.closest('[data-find-bar="true"]')) return false
   return active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable || Boolean(active.closest('[data-rich-editor="true"]'))
 }
 
@@ -43,6 +45,9 @@ export function NotesPage() {
   const [jumpHighlightTitle, setJumpHighlightTitle] = useState(false)
   const [jumpScrollKey, setJumpScrollKey] = useState(0)
   const [jumpSignal, setJumpSignal] = useState(0)
+  const [showFindBar, setShowFindBar] = useState(false)
+  const [findTokens, setFindTokens] = useState<string[]>([])
+  const [findCurrentMatchIndex, setFindCurrentMatchIndex] = useState(-1)
   const [localSaveStatus, setLocalSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [notesListWidth, setNotesListWidth] = useState(() => {
     const saved = localStorage.getItem(NOTES_LIST_PERCENT_KEY)
@@ -62,6 +67,7 @@ export function NotesPage() {
   const draftTagsRef = useRef('')
   const flushSaveRef = useRef<() => Promise<void>>(async () => {})
   const noteSwitchRef = useRef<Promise<void>>(Promise.resolve())
+  const localRevisionRef = useRef(0)
 
   useEffect(() => {
     draftTitleRef.current = draftTitle
@@ -79,7 +85,7 @@ export function NotesPage() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadNotes({ includeArchived, query: query.trim() || undefined })
-    }, 250)
+    }, 180)
     return () => window.clearTimeout(timer)
   }, [includeArchived, loadNotes, query])
 
@@ -93,6 +99,17 @@ export function NotesPage() {
     window.addEventListener('chronicle:search-jump', handler)
     return () => window.removeEventListener('chronicle:search-jump', handler)
   }, [])
+
+  const toggleFindBar = useCallback(() => {
+    setShowFindBar((open) => !open)
+  }, [])
+
+  useEffect(() => {
+    if (!showFindBar) {
+      setFindTokens([])
+      setFindCurrentMatchIndex(-1)
+    }
+  }, [showFindBar])
 
   useEffect(() => {
     const id = new URLSearchParams(location.search).get('id')
@@ -113,6 +130,7 @@ export function NotesPage() {
       latestDraftRef.current = { title: '', contentHtml: '', tags: [] }
       return
     }
+    if (note.id === draftNoteIdRef.current) return
     activeNoteIdRef.current = note.id
     draftNoteIdRef.current = note.id
     const stored = localStorage.getItem(`chronicle:note_draft:${note.id}`)
@@ -140,7 +158,7 @@ export function NotesPage() {
 
   useEffect(() => {
     applyNoteDraft(activeNote)
-  }, [activeNote?.id, jumpSignal])
+  }, [activeNote?.id])
 
   useEffect(() => {
     if (!activeNote) return
@@ -164,7 +182,7 @@ export function NotesPage() {
       window.cancelAnimationFrame(frame)
       window.clearTimeout(clearTimer)
     }
-  }, [activeNote?.id])
+  }, [activeNote?.id, jumpSignal])
 
   useEffect(() => {
     return () => {
@@ -246,6 +264,7 @@ export function NotesPage() {
   function scheduleSave(next: { title?: string; contentHtml?: string; tags?: string[] }) {
     const noteId = draftNoteIdRef.current
     if (!noteId) return
+    localRevisionRef.current += 1
     latestDraftRef.current = {
       title: next.title ?? latestDraftRef.current.title,
       contentHtml: next.contentHtml ?? latestDraftRef.current.contentHtml,
@@ -272,14 +291,26 @@ export function NotesPage() {
     }
     latestDraftRef.current = liveDraft
     localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify(liveDraft))
-    const saved = useNoteStore.getState().activeNote?.id === noteId
-      ? await updateActiveNote(liveDraft)
-      : await api.updateNote(noteId, liveDraft)
-    if (saved) {
-      localStorage.removeItem(`chronicle:note_draft:${saved.id}`)
-      setLocalSaveStatus('saved')
-    } else {
-      setLocalSaveStatus('error')
+    const revAtFlush = localRevisionRef.current
+    try {
+      const saved = useNoteStore.getState().activeNote?.id === noteId
+        ? await updateActiveNote(liveDraft)
+        : await api.updateNote(noteId, liveDraft)
+      if (localRevisionRef.current === revAtFlush) {
+        if (saved) {
+          localStorage.removeItem(`chronicle:note_draft:${saved.id}`)
+          setLocalSaveStatus('saved')
+        } else {
+          setLocalSaveStatus('error')
+        }
+      }
+    } catch {
+      if (localRevisionRef.current === revAtFlush) {
+        setLocalSaveStatus('error')
+      }
+    }
+    if (localRevisionRef.current !== revAtFlush && draftNoteIdRef.current === noteId) {
+      await flushSave()
     }
   }
 
@@ -287,20 +318,20 @@ export function NotesPage() {
     flushSaveRef.current = flushSave
   })
 
-  async function handleCreateNote() {
+  const handleCreateNote = useCallback(async () => {
     const run = noteSwitchRef.current.then(async () => {
-      await flushSave()
+      await flushSaveRef.current()
       const note = await createNote({ title: 'Untitled note' })
       navigate(`/notes?id=${encodeURIComponent(note.id)}`)
       applyNoteDraft(note)
     })
     noteSwitchRef.current = run.catch(() => {})
     await run
-  }
+  }, [applyNoteDraft, createNote, navigate])
 
-  async function handleSelectNote(id: string) {
+  const handleSelectNote = useCallback(async (id: string) => {
     const run = noteSwitchRef.current.then(async () => {
-      await flushSave()
+      await flushSaveRef.current()
       navigate(`/notes?id=${encodeURIComponent(id)}`)
       await setActiveNote(id)
       const next = useNoteStore.getState().activeNote
@@ -308,14 +339,18 @@ export function NotesPage() {
     })
     noteSwitchRef.current = run.catch(() => {})
     await run
-  }
+  }, [applyNoteDraft, navigate, setActiveNote])
 
-  async function handleArchive() {
+  const handleArchive = useCallback(async () => {
     if (!activeNote) return
-    await flushSave()
+    await flushSaveRef.current()
     if (activeNote.archived) await unarchiveActiveNote()
     else await archiveActiveNote()
     await loadNotes({ includeArchived, query: query.trim() || undefined })
+  }, [activeNote, archiveActiveNote, includeArchived, loadNotes, query, unarchiveActiveNote])
+
+  function handleArchiveWrapper() {
+    void handleArchive()
   }
 
   useEffect(() => {
@@ -345,19 +380,19 @@ export function NotesPage() {
         handler: () => { void flushSave() },
       }),
       registerShortcut({
-        id: 'notes-focus-editor',
-        combo: 'ArrowRight',
-        label: 'Focus note editor',
+        id: 'notes-find',
+        combo: 'mod+f',
+        label: 'Find in note',
         scope: 'page',
         context: () => location.pathname === '/notes' && Boolean(activeNote) && !isEditing(),
-        handler: focusEditor,
+        handler: () => { toggleFindBar() },
       }),
       registerShortcut({
         id: 'notes-list-up',
         combo: 'ArrowUp',
         label: 'Previous note',
         scope: 'page',
-        context: () => location.pathname === '/notes' && !isEditing(),
+        context: () => location.pathname === '/notes' && !isEditing(true),
         handler: () => {
           const index = visibleNotes.findIndex((note) => note.id === activeNote?.id)
           const next = visibleNotes[Math.max(0, index - 1)]
@@ -369,7 +404,7 @@ export function NotesPage() {
         combo: 'ArrowDown',
         label: 'Next note',
         scope: 'page',
-        context: () => location.pathname === '/notes' && !isEditing(),
+        context: () => location.pathname === '/notes' && !isEditing(true),
         handler: () => {
           const index = visibleNotes.findIndex((note) => note.id === activeNote?.id)
           const next = visibleNotes[Math.min(visibleNotes.length - 1, index + 1)]
@@ -378,7 +413,7 @@ export function NotesPage() {
       }),
     ]
     return () => unregisters.forEach((unregister) => unregister())
-  }, [activeNote, activeNote?.id, focusEditor, location.pathname, visibleNotes])
+  }, [activeNote, activeNote?.id, handleCreateNote, handleSelectNote, location.pathname, toggleFindBar, visibleNotes])
 
   useEffect(() => {
     if (location.pathname !== '/notes') return
@@ -481,13 +516,21 @@ export function NotesPage() {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
-        {!activeNote ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            Select or create a note.
-          </div>
-        ) : (
-          <>
-            <div data-testid="workspace-info-bar" className="flex h-10 shrink-0 items-center justify-between border-b bg-card px-[30px] text-xs text-muted-foreground">
+            {!activeNote ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Select or create a note.
+              </div>
+            ) : (
+              <>
+                <FindBar
+                  key={activeNote.id}
+                  open={showFindBar}
+                  onClose={() => { setShowFindBar(false); setFindTokens([]); setFindCurrentMatchIndex(-1) }}
+                  containerRef={notesContainerRef}
+                  onTokensChange={setFindTokens}
+                  onCurrentMatchChange={setFindCurrentMatchIndex}
+                />
+                <div data-testid="workspace-info-bar" className="flex h-10 shrink-0 items-center justify-between border-b bg-card px-[30px] text-xs text-muted-foreground">
               <div className="flex min-w-0 items-center gap-2">
                 <span className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-normal">Note</span>
                 {activeNote.archived && <span className="rounded border border-border px-1.5 py-0.5 text-[10px]">Archived</span>}
@@ -505,7 +548,7 @@ export function NotesPage() {
                 </button>
                 <button
                   className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => void handleArchive()}
+                  onClick={() => void handleArchiveWrapper()}
                   title={activeNote.archived ? 'Unarchive' : 'Archive'}
                 >
                   {activeNote.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
@@ -518,6 +561,7 @@ export function NotesPage() {
                 value={draftTitle}
                 onChange={(event) => {
                   setDraftTitle(event.target.value)
+                  draftTitleRef.current = event.target.value
                   scheduleSave({ title: event.target.value })
                 }}
                 onKeyDown={handleTitleKeyDown}
@@ -556,12 +600,13 @@ export function NotesPage() {
                     scheduleSave({ contentHtml: normalized, tags: parsedTags })
                   }}
                   placeholder="Write a long-term note..."
-	                  minHeight="calc(100vh - 210px)"
-	                  taskId={activeNote.id}
-	                  taskMentionTasks={tasks}
-	                  searchTokens={jumpHighlightTokens}
-	                  searchScrollKey={jumpScrollKey}
-	                />
+                  minHeight="calc(100vh - 210px)"
+                  taskId={activeNote.id}
+                  taskMentionTasks={tasks}
+                  searchTokens={jumpHighlightTokens.length ? jumpHighlightTokens : findTokens}
+                  searchCurrentMatchIndex={jumpHighlightTokens.length ? -1 : findCurrentMatchIndex}
+                  searchScrollKey={jumpScrollKey}
+                />
               </div>
             </section>
           </>

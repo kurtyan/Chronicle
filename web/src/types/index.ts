@@ -140,6 +140,11 @@ export interface GlobalSearchResponse {
   }
   tokens: string[]
   total: number
+  counts?: {
+    tasks: number
+    taskEntries: number
+    notes: number
+  }
 }
 
 export const priorityColors: Record<Priority, string> = {

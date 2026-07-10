@@ -1,5 +1,5 @@
 import { getDb, getMetaValue, setMetaValue } from '../db'
-import { indexTask, removeTaskFromIndex, indexEntry, removeEntryFromIndex } from './searchService'
+import { upsertTaskSearchDocument, upsertTaskEntrySearchDocument, removeTaskSearchDocuments, removeSearchDocument, sourceForEntryType } from './searchIndexService'
 
 const AGENT_CONVERSATIONS_KEY = 'agent_conversations'
 const AGENT_CONVERSATIONS_BACKFILL_VERSION_KEY = 'agent_conversations_backfill_version'
@@ -268,10 +268,10 @@ export function createTask(data: {
       'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
       [entryId, id, data.body.trim(), 'body', now]
     )
-    indexEntry(id, entryId, data.body.trim(), 'body')
+    upsertTaskEntrySearchDocument(id, entryId, sourceForEntryType('body'), data.body.trim(), now)
   }
 
-  indexTask(id, data.title)
+  upsertTaskSearchDocument(id, data.title, data.tags ?? [])
 
   return getTaskById(id)!
 }
@@ -319,7 +319,8 @@ export function updateTask(id: string, data: {
   params.push(id)
   run(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, params)
   if (data.title !== undefined) {
-    indexTask(id, data.title)
+    const current = getTaskById(id)
+    upsertTaskSearchDocument(id, data.title, data.tags ?? current?.tags ?? [])
   }
   return getTaskById(id)
 }
@@ -344,7 +345,7 @@ export function deleteTask(id: string): boolean {
     db.prepare('DELETE FROM work_sessions WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM task_extra_info WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM note_links WHERE target_id = ?').run(id)
-    removeTaskFromIndex(id)
+    removeTaskSearchDocuments(id)
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
   })
 
@@ -389,7 +390,7 @@ export function createTaskEntry(taskId: string, content: string, type: 'body' | 
   )
   run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, taskId])
 
-  indexEntry(taskId, id, content, type)
+  upsertTaskEntrySearchDocument(taskId, id, sourceForEntryType(type), content, now)
 
   return { id, taskId, content, type, createdAt: now }
 }
@@ -421,7 +422,7 @@ export function createTaskEntries(taskIds: string[], content: string, type: 'bod
     for (const entry of entries) {
       insertEntry.run(entry.id, entry.taskId, entry.content, entry.type, entry.createdAt)
       updateTask.run(now, entry.taskId)
-      indexEntry(entry.taskId, entry.id, entry.content, entry.type)
+      upsertTaskEntrySearchDocument(entry.taskId, entry.id, sourceForEntryType(entry.type), entry.content, now)
     }
   })
 
@@ -444,7 +445,7 @@ export function updateTaskEntry(taskId: string, entryId: string, content: string
   run(`UPDATE task_entries SET ${updates.join(', ')} WHERE id = ?`, params)
   run('UPDATE tasks SET updated_at = ? WHERE id = ?', [Date.now(), taskId])
   const nextType = type ?? (existing.type === 'body' ? 'body' : existing.type === 'pinned' ? 'pinned' : 'log')
-  indexEntry(taskId, entryId, content, nextType)
+  upsertTaskEntrySearchDocument(taskId, entryId, sourceForEntryType(nextType), content)
   const updated = queryOne(
     `SELECT *
      FROM task_entries
@@ -467,7 +468,7 @@ export function appendToPinnedEntry(taskId: string, content: string): TaskEntry 
     const newContent = `${existing.content.trim()}${separator}${content.trim()}`
     run('UPDATE task_entries SET content = ? WHERE id = ?', [newContent, existing.id])
     run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, taskId])
-    indexEntry(taskId, existing.id, newContent, 'pinned')
+    upsertTaskEntrySearchDocument(taskId, existing.id, sourceForEntryType('pinned'), newContent)
     const updated = queryOne('SELECT * FROM task_entries WHERE id = ?', [existing.id])
     return updated ? rowToTaskEntry(updated) : existing
   }
@@ -498,7 +499,7 @@ export function deleteTaskEntry(taskId: string, entryId: string): boolean {
     db.prepare('UPDATE day_script_progress_syncs SET last_entry_id = NULL WHERE last_entry_id = ?').run(entryId)
     db.prepare('DELETE FROM task_entries WHERE id = ? AND task_id = ?').run(entryId, taskId)
     db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(Date.now(), taskId)
-    removeEntryFromIndex(entryId)
+    removeSearchDocument(`entry:${entryId}`)
   })
 
   transaction()
