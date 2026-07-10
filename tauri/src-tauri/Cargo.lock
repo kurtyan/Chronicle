@@ -452,7 +452,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chronicle-tauri"
-version = "2.2.3-20260707172758"
+version = "2.2.4-20260709164015"
 dependencies = [
  "chrono",
  "core-foundation 0.10.1",

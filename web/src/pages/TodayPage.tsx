@@ -57,6 +57,12 @@ function visibleActionsForItem(item: WorkOverviewItem): NextStepAction[] {
   return item.actions.filter((action) => !action.hiddenSignal)
 }
 
+function planActionForItem(item: WorkOverviewItem): NextStepAction {
+  return visibleActionsForItem(item).find((action) => action.canPlan && Boolean(action.taskId))
+    ?? item.actions.find((action) => action.canPlan && Boolean(action.taskId))
+    ?? item.primaryAction
+}
+
 type WorkOverviewOrderState = {
   date: string
   next: number
@@ -275,12 +281,30 @@ function OverallNextStepsBoard({
 }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(OVERALL_NEXT_STEPS_COLLAPSED_KEY) === '1')
   const [openSignalMenu, setOpenSignalMenu] = useState<string | null>(null)
+  const [cursorIndex, setCursorIndex] = useState(0)
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([])
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const lastGRef = useRef(0)
 
   const toggle = () => {
     const next = !collapsed
     setCollapsed(next)
     localStorage.setItem(OVERALL_NEXT_STEPS_COLLAPSED_KEY, next ? '1' : '0')
   }
+
+  const clampedCursor = Math.min(cursorIndex, items.length - 1)
+  const moveCursor = useCallback((delta: number) => {
+    setCursorIndex((current) => {
+      const next = Math.max(0, Math.min(items.length - 1, current + delta))
+      window.requestAnimationFrame(() => rowRefs.current[next]?.scrollIntoView({ block: 'nearest' }))
+      return next
+    })
+  }, [items.length])
+  const setCursorTo = useCallback((index: number) => {
+    const next = Math.max(0, Math.min(items.length - 1, index))
+    setCursorIndex(next)
+    window.requestAnimationFrame(() => rowRefs.current[next]?.scrollIntoView({ block: 'nearest' }))
+  }, [items.length])
 
   if (items.length === 0) return null
 
@@ -361,13 +385,109 @@ function OverallNextStepsBoard({
         </div>
       </div>
       {(maximized || !collapsed) && (
-        <div className={maximized ? 'mt-4 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1' : 'mt-2 max-h-64 space-y-1.5 overflow-y-auto pr-1'}>
-          {items.map((item) => (
+        <div
+          ref={listRef}
+          data-testid="overall-next-steps-list"
+          tabIndex={0}
+          title="j/k 移动光标 · i 加入 Focus · o/Enter 打开 task · gg 回顶 · G 到底 · Ctrl+u/d 翻页 · x 隐藏信号 · q 关闭"
+          className={`${maximized ? 'mt-4 min-h-0 flex-1' : 'mt-2 max-h-64'} space-y-1.5 overflow-y-auto pr-1 outline-none focus-visible:ring-1 focus-visible:ring-primary/30`}
+          onKeyDown={(event) => {
+            const target = event.target as HTMLElement | null
+            if (target) {
+              const tag = target.tagName
+              if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
+            }
+            const key = event.key
+            if (event.ctrlKey && (key === 'u' || key === 'd')) {
+              event.preventDefault()
+              event.stopPropagation()
+              const container = listRef.current
+              if (!container) return
+              const rowHeight = rowRefs.current[0]?.offsetHeight ?? 60
+              const pageSize = Math.max(1, Math.floor(container.clientHeight / rowHeight))
+              const direction = key === 'd' ? 1 : -1
+              container.scrollBy({ top: direction * container.clientHeight * 0.9 })
+              moveCursor(direction * pageSize)
+              return
+            }
+            if (event.metaKey || event.ctrlKey || event.altKey) return
+            if (key === 'j') {
+              event.preventDefault()
+              event.stopPropagation()
+              moveCursor(1)
+              return
+            }
+            if (key === 'k') {
+              event.preventDefault()
+              event.stopPropagation()
+              moveCursor(-1)
+              return
+            }
+            if (key === 'i') {
+              const item = items[clampedCursor]
+              if (!item) return
+              event.preventDefault()
+              event.stopPropagation()
+              if (item.canPlan && !item.inFocus) onPlan(planActionForItem(item))
+              return
+            }
+            if (key === 'o' || key === 'Enter') {
+              const item = items[clampedCursor]
+              if (!item || !item.taskId) return
+              event.preventDefault()
+              event.stopPropagation()
+              onOpen(item.primaryAction)
+              return
+            }
+            if (key === 'g') {
+              event.preventDefault()
+              event.stopPropagation()
+              const now = Date.now()
+              if (now - lastGRef.current < 400) {
+                lastGRef.current = 0
+                setCursorTo(0)
+              } else {
+                lastGRef.current = now
+              }
+              return
+            }
+            if (key === 'G') {
+              event.preventDefault()
+              event.stopPropagation()
+              setCursorTo(items.length - 1)
+              return
+            }
+            if (key === 'x') {
+              const item = items[clampedCursor]
+              if (!item) return
+              const action = item.primaryAction
+              if (action.canHideSignal && isHidableSignalSource(action.sourceType)) {
+                event.preventDefault()
+                event.stopPropagation()
+                onHideSignal(action)
+              }
+              return
+            }
+            if (key === 'q') {
+              if (maximized && onCloseMaximized) {
+                event.preventDefault()
+                event.stopPropagation()
+                onCloseMaximized()
+              }
+              return
+            }
+          }}
+        >
+          {items.map((item, index) => {
+            const selected = index === clampedCursor
+            return (
             <div
               key={item.id}
               data-next-step-action-id={item.primaryAction.id}
               data-next-step-source={item.primaryAction.sourceType}
-              className={`rounded-md border border-border/70 bg-background/80 px-2.5 py-2 ${item.taskId ? 'cursor-pointer hover:bg-muted/50' : ''}`}
+              data-next-step-cursor={selected ? 'true' : undefined}
+              ref={(node) => { rowRefs.current[index] = node }}
+              className={`rounded-md border border-border/70 bg-background/80 px-2.5 py-2 ${item.taskId ? 'cursor-pointer hover:bg-muted/50' : ''} ${selected ? 'ring-2 ring-primary/40 bg-muted/40' : ''}`}
               onClick={() => {
                 if (item.taskId) onOpen(item.primaryAction)
               }}
@@ -440,7 +560,7 @@ function OverallNextStepsBoard({
                       disabled={item.inFocus}
                       onClick={(event) => {
                         event.stopPropagation()
-                        onPlan(item.primaryAction)
+                        onPlan(planActionForItem(item))
                       }}
                       title={item.inFocus ? 'Already in Focus' : 'Plan in Focus'}
                     >
@@ -451,7 +571,8 @@ function OverallNextStepsBoard({
                 </div>
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>
@@ -880,7 +1001,7 @@ export function TodayPage() {
           state: action.state,
           lastActivityAt: action.lastActivityAt,
           inFocus: action.inFocus,
-          canPlan: !action.hiddenSignal && action.canPlan,
+          canPlan: Boolean(action.taskId) && action.canPlan,
         })
         continue
       }
@@ -895,7 +1016,7 @@ export function TodayPage() {
       existing.state = existing.primaryAction.state
       existing.lastActivityAt = Math.max(...existing.actions.map((item) => item.lastActivityAt ?? 0)) || null
       existing.inFocus = existing.actions.some((item) => !item.hiddenSignal && item.inFocus)
-      existing.canPlan = existing.actions.some((item) => !item.hiddenSignal && item.canPlan)
+      existing.canPlan = existing.actions.some((item) => Boolean(item.taskId) && item.canPlan)
     }
 
     const sortedItems = [...items.values()].sort((a, b) =>
@@ -958,7 +1079,7 @@ export function TodayPage() {
       content: [
         { type: 'text', text: prefix },
         { type: 'text', text: `@${action.taskTitle}`, marks: [{ type: 'link', attrs: linkAttrs }] },
-        { type: 'text', text: `: ${action.text}` },
+        { type: 'text', text: action.hiddenSignal ? '' : `: ${action.text}` },
       ],
     }
     const document = script.document && script.document.type === 'doc'
