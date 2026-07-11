@@ -1,6 +1,6 @@
 # Chronicle
 
-Chronicle is a local-first work journal for managing tasks, daily plans, notes, and work history. It runs as a local Hono + SQLite server with a React UI, a Tauri desktop shell, and MCP tools for agents.
+Chronicle is a local-first work journal for managing tasks, daily plans, notes, and work history. It runs only on the local machine with a Hono + SQLite server, a React UI, and a Tauri desktop shell.
 
 The current app has five main surfaces:
 
@@ -18,7 +18,7 @@ React + Vite UI
   tauri/               Tauri desktop shell using the same UI source
 
 Hono server
-  server/src/index.ts  HTTP API, SSE stream, static UI serving, MCP endpoint
+  server/src/index.ts  loopback HTTP API, SSE stream, static UI serving
   server/src/db.ts     SQLite schema and migrations
   server/src/services  Task, note, search, day-script, LLM, backup services
 
@@ -148,10 +148,6 @@ Example `~/.chronicle/config.json`:
     "database": "",
     "logPath": ""
   },
-  "mcp": {
-    "enabled": true,
-    "port": 9981
-  },
   "lauri": {
     "serverHost": "localhost",
     "serverPort": 9983
@@ -179,7 +175,8 @@ Environment variables override selected fields and are used heavily by `dev.sh`:
 | Variable | Purpose |
 | --- | --- |
 | `CHRONICLE_SERVER_PORT` | Server port override |
-| `CHRONICLE_MCP_PORT` | MCP HTTP port override |
+| `CHRONICLE_MCP_PORT` | Legacy MCP HTTP port override; only used with explicit opt-in |
+| `CHRONICLE_ENABLE_LEGACY_MCP=1` | Temporarily enable deprecated loopback-only MCP compatibility |
 | `CHRONICLE_DB_PATH` | SQLite database path override |
 | `CHRONICLE_CONFIG_DIR` | Chronicle config/home directory override |
 | `CHRONICLE_CONFIG_PATH` | Config JSON path override |
@@ -255,9 +252,9 @@ Automation, settings, and diagnostics:
 - `GET /api/version`
 - `GET /api/events` for server-sent events
 
-## MCP Tools
+## Legacy MCP compatibility
 
-The server exposes Chronicle tools through the MCP HTTP endpoint and the packaged `chronicle-mcp` bridge.
+MCP is deprecated, disabled by default, and only binds to `127.0.0.1` when `CHRONICLE_ENABLE_LEGACY_MCP=1` is set. It will be removed in the next release; new product automation should use built-in LLM scenarios instead.
 
 Available tools:
 

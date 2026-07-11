@@ -138,6 +138,23 @@ test.describe('Notes', () => {
     expect(missingTaskNotes.status()).toBe(404)
   })
 
+  test('rejects stale full-note saves without overwriting an appended update', async ({ page }) => {
+    const note = await createNote(page, `Revision-${Date.now()}`, '<p>Original</p>')
+    const append = await page.request.post(`/api/notes/${note.id}/append`, {
+      data: { contentHtml: '<p>Agent append</p>' },
+    })
+    expect(append.ok()).toBeTruthy()
+
+    const staleSave = await page.request.put(`/api/notes/${note.id}`, {
+      data: { title: note.title, contentHtml: '<p>Stale overwrite</p>', tags: note.tags, expectedRevision: note.revision },
+    })
+    expect(staleSave.status()).toBe(409)
+
+    const current = await (await page.request.get(`/api/notes/${note.id}`)).json()
+    expect(current.contentHtml).toContain('Agent append')
+    expect(current.contentHtml).not.toContain('Stale overwrite')
+  })
+
   test('deleting a task removes stale note links', async ({ page }) => {
     const unique = Date.now()
     const task = await createTask(page, `DeleteLinkedTask-${unique}`)

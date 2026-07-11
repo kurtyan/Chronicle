@@ -41,7 +41,9 @@ const defaultConfig: ChronicleConfig = {
     database: '',
   },
   mcp: {
-    enabled: true,
+    // MCP is a legacy compatibility surface. It must be explicitly enabled
+    // for this deprecation release and will be removed in the next release.
+    enabled: false,
     port: 9981,
   },
   lauri: {
@@ -77,6 +79,7 @@ export function getConfig(): ChronicleConfig {
   // Environment variables override config file (for dev isolation)
   const envPort = process.env.CHRONICLE_SERVER_PORT
   const envMcpPort = process.env.CHRONICLE_MCP_PORT
+  const legacyMcpEnabled = process.env.CHRONICLE_ENABLE_LEGACY_MCP === '1'
   const envLlmBaseUrl = process.env.CHRONICLE_LLM_BASE_URL
   const envLlmModel = process.env.CHRONICLE_LLM_MODEL
   const envLlmApiKey = process.env.CHRONICLE_LLM_API_KEY
@@ -98,13 +101,15 @@ export function getConfig(): ChronicleConfig {
 
   return {
     server: {
-      host: fileConfig.server?.host ?? defaultConfig.server.host,
+      // Chronicle is local-only. Never expose the personal work journal on LAN
+      // because of a stale or hand-edited config file.
+      host: defaultConfig.server.host,
       port: serverPort,
       database: fileConfig.server?.database ?? defaultConfig.server.database,
       logPath: fileConfig.server?.logPath,
     },
     mcp: {
-      enabled: fileConfig.mcp?.enabled ?? defaultConfig.mcp.enabled,
+      enabled: legacyMcpEnabled,
       port: mcpPort,
     },
     lauri: {

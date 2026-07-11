@@ -1,8 +1,9 @@
 # Chronicle 搜索增强：调查结论与实施计划
 
-> **状态**：调查完成，方案已决策，待按阶段实施<br>
+> **状态**：Phase 0 已完成；Phase 1 已实现统一关键词索引和主要搜索交互，验收与收尾仍有未完成项；Phase 2 未开始<br>
 > **调查日期**：2026-07-10<br>
-> **代码基线**：`main@70cd9e8`（Chronicle 2.2.5）<br>
+> **状态更新**：2026-07-11，`f3d16f9`（Chronicle 2.3.0）<br>
+> **调查代码基线**：`main@70cd9e8`（Chronicle 2.2.5）<br>
 > **目标读者**：接手实现的 agent / 开发者<br>
 > **前置阅读**：`README.md`、`AGENTS.md`
 
@@ -18,14 +19,14 @@ commit 时只需展开对应 Phase 的数据模型、接口和验收小节。调
 `dd8fec0 Improve search indexing and result navigation` 完成，另一部分的技术设计与当前
 架构不兼容。
 
-正确推进顺序：
+当前推进状态：
 
-1. 先修复当前 Notes 新建/自动保存竞态，使现有搜索相关回归稳定全绿。
-2. 建立统一 `search_documents + search_fts`，删除搜索请求中的全表扫描和混合 rank。
-3. 在统一搜索核心之上补齐 Global / Board / Notes 的高亮、键盘导航、计数和精确跳转。
-4. Phase 1 验收通过后，再接 Provider embedding、可靠后台索引和 RRF 混合搜索。
-5. 首版语义搜索只实现 OpenAI-compatible Provider，覆盖任务标题、task entries 和 notes；
-   不实现内置 Transformers.js 模型。
+1. [x] 修复 Notes 新建/自动保存竞态，并补充稳定性回归。
+2. [x] 建立统一 `search_documents + search_fts`，替换搜索请求中的全表扫描和混合 rank。
+3. [x] 在统一搜索核心上补齐 Global / Board / Notes 的主要高亮、键盘导航、计数和精确跳转。
+4. [ ] 完成 Phase 1 剩余迁移/基准验收后，再接 Provider embedding、可靠后台索引和 RRF 混合搜索。
+5. [ ] 首版语义搜索只实现 OpenAI-compatible Provider，覆盖任务标题、task entries 和 notes；
+    不实现内置 Transformers.js 模型。
 
 开始实现前必须知道的五件事：
 
@@ -49,6 +50,38 @@ commit 时只需展开对应 Phase 的数据模型、接口和验收小节。调
 - `web/src/lib/searchJump.ts`
 - `tests/data-integrity.test.ts`
 - `tests/notes.test.ts`
+
+### 实施状态（2026-07-11）
+
+已完成：
+
+- Notes draft 初始化和保存竞态修复；创建后立即编辑、快速改标题和切换前 flush 的回归已覆盖。
+- 统一 `search_documents + search_fts` schema、增量写入、事务性 rebuild、启动版本化重建和 legacy FTS 清理。
+- nodejieba 中文/技术 token 索引、字段加权 BM25、exact/prefix 查询、原文 snippet、task/entry/note document hit。
+- Global Search 的状态恢复、结果高亮、section counts、ArrowUp/Down 焦点导航、AbortController 和精确 jump。
+- Board 180ms 即时搜索、entry snippet、click/Enter 统一 jump、Escape 退出，以及 Cmd+F 内容查找。
+- Notes 180ms 搜索和 Cmd+F；ProseMirror 由 decoration plugin 管理当前命中，避免直接变更 editor DOM 导致卡死。
+- stdio/HTTP MCP 的 `search_notes`/`search_all` 对齐；HTTP `search_notes` 支持 `includeArchived`。
+- 搜索 rebuild 原子性、schema 迁移失效索引版本、API limit 校验、Board candidate 去重和 FindBar/XSS 回归修复。
+
+仍未完成：
+
+- 4 万 documents benchmark、P95 记录，以及全部历史 FTS schema 启动迁移 fixture。
+- `counts/total/matchCount` 的独立完整 FTS COUNT/GROUP 统计和完整 Phase 1 验收。
+- Phase 2 的 Provider embedding、sqlite-vec、durable worker、hybrid RRF 与语义 UI。
+
+已执行验证：
+
+```bash
+./scripts/with-node.sh npm --prefix server run build
+./scripts/with-node.sh npm --prefix web run build
+./scripts/with-node.sh npx playwright test \
+  tests/search-findbar.test.ts \
+  tests/search-relevance.test.ts \
+  tests/search-done-detail.test.ts
+```
+
+以上搜索定向套件为 **25 passed**；`notes`、`pinned-content`、`data-integrity` 组合套件为 **30 passed**。
 
 ---
 
@@ -98,7 +131,7 @@ UI 已显示 `saved`，但保存的是被重复初始化后的标题。它必须
 
 ---
 
-## 2. 当前真实架构
+## 2. 调查时的真实架构（`main@70cd9e8`，已由后续 Phase 1 实现部分替换）
 
 ### 2.1 后端搜索
 
@@ -201,7 +234,7 @@ Tauri 只从配置读取 Node server URL，并不在 Rust/Tauri 进程内打开 
 
 ---
 
-## 4. 经代码确认仍存在的问题
+## 4. 调查时经代码确认的问题（当前实现状态见上方“实施状态”与第 9 节）
 
 ### P0：必须在 Phase 1 解决
 
@@ -314,9 +347,12 @@ Tauri 只从配置读取 Node server URL，并不在 Rust/Tauri 进程内打开 
 
 ---
 
-## 8. Phase 0：先获得可信基线
+## 8. Phase 0：先获得可信基线 [已完成]
 
 ### 8.1 修复 Notes draft 初始化竞态
+
+**状态：已完成（`f3d16f9`）**。`NotesPage`/`noteStore` 已按 note ID 与 local revision 管理 draft 和保存；
+创建、快速改标题、切换与 autosave 的回归已加入 `tests/notes.test.ts`。
 
 目标：`saved` 只在当前用户可见 draft 的相同 revision 已持久化后出现。
 
@@ -336,6 +372,9 @@ Tauri 只从配置读取 Node server URL，并不在 Rust/Tauri 进程内打开 
 
 ### 8.2 锁定相关性 fixture 和 benchmark 规格
 
+**状态：部分完成。** `tests/search-relevance.test.ts` 已覆盖排序、task 多 entry hit、中文、技术 token、HTML
+和 archived scope；4 万 documents benchmark 尚未实现或记录。
+
 Phase 0 先锁定以下数据和 expected ordering；可执行的 `tests/search-relevance.test.ts` 与 benchmark
 在统一索引完成的 Commit B 一起提交，避免 Commit A 引入注定失败的测试。fixture 固定创建互相竞争的
 task / entry / note 数据，验证：
@@ -350,7 +389,29 @@ Phase 1 验收运行并记录结果。
 
 ---
 
-## 9. Phase 1：统一关键词索引和搜索体验
+## 9. Phase 1：统一关键词索引和搜索体验 [部分完成]
+
+### 已完成清单
+
+- [x] 9.1 统一 `search_documents + search_fts` 数据模型和共享 indexer。
+- [x] 9.2 `search_index_version=1` 启动重建、schema 变更失效和统一 rebuild endpoint。
+- [x] 9.3 nodejieba/技术 token、短 ASCII token、exact/prefix FTS query builder。
+- [x] 9.4 字段加权 BM25、确定性候选排序、原文 snippet、Global document hits 和 Board task 聚合。
+- [x] 9.6 Global Search 高亮、counts、键盘导航、焦点恢复、请求取消和 jump。
+- [x] 9.7 Board 即时搜索、snippet、click/Enter jump 与 Escape 退出；任务详情 Cmd+F。
+- [x] 9.8 Notes 180ms 搜索与 ProseMirror-safe Cmd+F 高亮/导航。
+- [x] 9.9 stdio/HTTP MCP `search_notes`、`search_all` 和 archived 参数对齐。
+- [x] 审查后补充：FTS rebuild 全事务、迁移后索引失效、API limit clamp、Board 候选去重、FindBar
+      same-count rerender 恢复、title 高亮 XSS 修复。
+
+### 未完成清单
+
+- [ ] 9.2 的所有历史 schema 启动迁移 fixture。
+- [ ] 9.4/9.5 的独立完整 `counts/total/matchCount` FTS COUNT/GROUP 统计；当前 counts/total 仍基于
+      已召回候选集。
+- [ ] 9.5 的 `retrievalMode`、`semanticStatus` 等 Phase 2 additive 字段。
+- [ ] 9.7 所要求的“退出 Board 搜索恢复原 task 并把焦点还给触发点”完整体验。
+- [ ] 9.10 的 4 万 documents P95 benchmark 和完整 Phase 1 验收记录。
 
 ### 9.1 数据模型
 
@@ -986,32 +1047,33 @@ Settings：
 
 严格按以下顺序提交，避免一个超大不可审查 change：
 
-1. **PR/Commit A — Baseline stability**
-   - 修 Notes draft/save 竞态。
-   - 新增只针对该竞态的稳定性回归。
+1. **PR/Commit A — Baseline stability [已完成，已合入 `f3d16f9`]**
+   - [x] 修 Notes draft/save 竞态。
+   - [x] 新增只针对该竞态的稳定性回归。
 
-2. **PR/Commit B — Unified keyword index**
-   - search_documents/search_fts schema、迁移、事务性 indexer。
-   - tokenizer/query builder、候选排序、snippet、多 hit。
-   - 新增 relevance fixtures/tests 和 benchmark；不能在新索引实现前提交注定失败的排序断言。
+2. **PR/Commit B — Unified keyword index [已完成，已合入 `f3d16f9`]**
+   - [x] search_documents/search_fts schema、迁移、事务性 indexer。
+   - [x] tokenizer/query builder、候选排序、snippet、多 hit。
+   - [x] 新增 relevance fixtures/tests。
+   - [ ] 4 万 documents benchmark。
 
-3. **PR/Commit C — Search UX and MCP parity**
-   - Global keyboard/highlight/counts。
-   - Board instant search/snippet/jump。
-   - Notes debounce 一致性。
-   - stdio/HTTP MCP parity。
-   - 完成 Phase 1 build/test/benchmark。
+3. **PR/Commit C — Search UX and MCP parity [主要完成，已合入 `f3d16f9`]**
+   - [x] Global keyboard/highlight/counts。
+   - [x] Board instant search/snippet/jump。
+   - [x] Notes debounce 一致性。
+   - [x] stdio/HTTP MCP parity。
+   - [ ] 完成 Phase 1 benchmark 与完整验收记录。
 
-4. **PR/Commit D — Semantic infrastructure**
+4. **PR/Commit D — Semantic infrastructure [未开始]**
    - config、sqlite-vec load/package、profiles/cache/chunks/jobs。
    - Provider embedding service、测试连接、durable worker。
 
-5. **PR/Commit E — Hybrid retrieval and semantic UX**
+5. **PR/Commit E — Hybrid retrieval and semantic UX [未开始]**
    - vector search、RRF、fallback。
    - Settings progress、semantic result/jump。
    - Phase 2 quality、failure 和 packaging 验收。
 
-6. **PR/Commit F — Documentation closeout**
+6. **PR/Commit F — Documentation closeout [进行中]**
    - 把本文状态更新为实际完成状态。
    - 记录最终模型、benchmark、Recall@5 和验证命令结果。
    - 未完成项明确移动到 future work，不保留模糊“可能做”。

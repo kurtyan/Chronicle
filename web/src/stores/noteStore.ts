@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Note, Task } from '@/types'
+import type { Note, Task, UpdateNoteRequest } from '@/types'
 import * as api from '@/services/api'
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
@@ -15,7 +15,7 @@ interface NoteState {
   loadNotes: (options?: { includeArchived?: boolean; query?: string }) => Promise<Note[]>
   setActiveNote: (id: string | null) => Promise<void>
   createNote: (data?: { title?: string; contentHtml?: string; tags?: string[]; linkedTaskIds?: string[] }) => Promise<Note>
-  updateActiveNote: (data: Partial<Pick<Note, 'title' | 'contentHtml' | 'tags' | 'pinned' | 'archived'>>) => Promise<Note | null>
+  updateActiveNote: (data: UpdateNoteRequest) => Promise<Note | null>
   archiveActiveNote: () => Promise<void>
   unarchiveActiveNote: () => Promise<void>
   loadLinkedTasks: (noteId: string) => Promise<Task[]>

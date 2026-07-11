@@ -199,7 +199,7 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
       inputSchema: {
         taskId: z.string().describe('The task ID.'),
         status: z
-          .string()
+          .enum(['PENDING', 'DOING', 'DONE', 'DROPPED'])
           .describe('New status: PENDING, DOING, DONE, or DROPPED.'),
         conversationId: z
           .string()

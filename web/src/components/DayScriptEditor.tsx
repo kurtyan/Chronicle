@@ -51,6 +51,11 @@ const DayScriptParagraph = Paragraph.extend({
         parseHTML: (element) => element.getAttribute('data-day-script-source'),
         renderHTML: (attributes) => attributes.source ? { 'data-day-script-source': attributes.source } : {},
       },
+      blockId: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-day-script-block-id'),
+        renderHTML: (attributes) => attributes.blockId ? { 'data-day-script-block-id': attributes.blockId } : {},
+      },
       originScriptDate: {
         default: null,
         parseHTML: (element) => element.getAttribute('data-day-script-origin-date'),

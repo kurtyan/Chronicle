@@ -16,6 +16,7 @@ import { highlightText } from '@/lib/highlight'
 
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
+  if (/<(?:img|video|audio|iframe|object|embed)\b/i.test(html)) return false
   const text = html.replace(/<[^>]*>/g, '').trim()
   return text.length === 0
 }
@@ -122,11 +123,14 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
       setEditingEntryId(null)
     }
     if (keepCompletedTaskVisible) {
+      if (currentSession?.taskId === activeTaskId) {
+        await doAfk()
+      }
       await updateTask(activeTaskId, { status: 'DONE' })
     } else {
       await markDone(activeTaskId)
     }
-  }, [activeTaskId, clearLogContentDraft, isDraftActive, keepCompletedTaskVisible, logContent, markDone, submitEntry, updateTask])
+  }, [activeTaskId, clearLogContentDraft, currentSession, doAfk, isDraftActive, keepCompletedTaskVisible, logContent, markDone, submitEntry, updateTask])
 
   const handleContinueTask = async () => {
     if (!activeTaskId || isDraftActive) return
@@ -181,12 +185,24 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     if (e.key === 'Escape') setEditingTitle(false)
   }
 
+  const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`
+
+  const resumeCommand = (conversation: AgentConversation) =>
+    `cd -- "$HOME/IdeaProjects" && ${conversation.agent} -r ${shellQuote(conversation.conversationId)}`
+
   const runAgentConversation = async (conversation: AgentConversation) => {
-    const cmd = `cd ~/IdeaProjects && ${conversation.command}`
+    if (!conversation.launchable) {
+      alert('This historical Agent conversation ID is not safe to launch.')
+      return
+    }
+    const cmd = resumeCommand(conversation)
     if (isTauriEnv) {
       try {
         const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('run_terminal_command', { command: cmd })
+        await invoke('run_agent_conversation', {
+          agent: conversation.agent,
+          conversationId: conversation.conversationId,
+        })
         return
       } catch { /* fallback */ }
     }
@@ -575,9 +591,9 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
             </button>
             <div className="relative">
               <button
-                className={`transition p-1 hover:bg-muted rounded text-xs font-medium ${agentConversations.length === 0 ? 'opacity-30 cursor-default' : 'opacity-70 hover:opacity-100'}`}
+                className={`transition p-1 hover:bg-muted rounded text-xs font-medium ${agentConversations.some((conversation) => conversation.launchable) ? 'opacity-70 hover:opacity-100' : 'opacity-30 cursor-default'}`}
                 onClick={(e) => { e.stopPropagation(); handleAgentClick() }}
-                disabled={agentConversations.length === 0}
+                disabled={!agentConversations.some((conversation) => conversation.launchable)}
                 title={t('workspace.agent')}
                 data-testid="task-agent-button"
               >
@@ -588,7 +604,8 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
                   {agentConversations.map((conversation) => (
                     <button
                       key={`${conversation.agent}:${conversation.conversationId}`}
-                      className="block w-full px-3 py-2 text-left text-xs hover:bg-muted"
+                      className={`block w-full px-3 py-2 text-left text-xs ${conversation.launchable ? 'hover:bg-muted' : 'cursor-not-allowed opacity-40'}`}
+                      disabled={!conversation.launchable}
                       onClick={(e) => {
                         e.stopPropagation()
                         setAgentMenuOpen(false)

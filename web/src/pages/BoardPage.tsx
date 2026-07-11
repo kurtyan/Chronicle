@@ -14,6 +14,7 @@ import { highlightText } from '@/lib/highlight'
 import { setSearchJumpIntent } from '@/lib/searchJump'
 import { registerShortcut } from '@/shortcuts/registry'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 const DRAFT_ID = '__draft__'
 const BOARD_TASK_LIST_PERCENT_KEY = 'chronicle_tasklist_pct'
@@ -23,6 +24,7 @@ const BOARD_DETAIL_MIN_WIDTH = 320
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
+  if (/<(?:img|video|audio|iframe|object|embed)\b/i.test(html)) return false
   // Remove HTML tags and check for remaining text
   const text = html.replace(/<[^>]*>/g, '').trim()
   // Also check for &nbsp; and other common empty HTML entities
@@ -610,7 +612,15 @@ export function BoardPage() {
   }
 
   async function handleCancelDraft() {
-    if (!isHtmlEmpty(draftBody)) {
+    const hasDraftChanges = Boolean(
+      draftTitle.trim()
+      || !isHtmlEmpty(draftBody)
+      || draftTags.trim()
+      || draftDueDate
+      || draftType !== 'TODO'
+      || draftPriority !== 'MEDIUM'
+    )
+    if (hasDraftChanges) {
       setShowCancelConfirm(true)
       return
     }
@@ -623,12 +633,13 @@ export function BoardPage() {
     cancelDraft()
     await setActiveTask(null)
 
-    // Restore previous task (just browse, no auto take over)
+    // Restore the previous task as a new tracked work session.
     if (prevId) {
       const currentTasks = useTaskStore.getState().tasks
       const taskExists = currentTasks.find(t => t.id === prevId)
       if (taskExists) {
         await setActiveTask(prevId)
+        await takeOver(prevId)
       }
     }
     useTaskStore.setState({ previousActiveTaskId: null })
@@ -1310,6 +1321,18 @@ export function BoardPage() {
           await setActiveTask(task.id)
         }}
       />
+      <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard new task?</DialogTitle>
+          </DialogHeader>
+          <DialogBody>Your draft has unsaved details. They will be discarded.</DialogBody>
+          <DialogFooter>
+            <button className="rounded-md border px-3 py-2 text-sm hover:bg-muted" onClick={() => setShowCancelConfirm(false)}>Keep editing</button>
+            <button className="rounded-md bg-destructive px-3 py-2 text-sm text-destructive-foreground" onClick={() => void doCancelDraft()}>Discard draft</button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

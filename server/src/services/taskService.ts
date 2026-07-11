@@ -4,25 +4,40 @@ import { upsertTaskSearchDocument, upsertTaskEntrySearchDocument, removeTaskSear
 const AGENT_CONVERSATIONS_KEY = 'agent_conversations'
 const AGENT_CONVERSATIONS_BACKFILL_VERSION_KEY = 'agent_conversations_backfill_version'
 const CURRENT_AGENT_CONVERSATIONS_BACKFILL_VERSION = '1'
+const TASK_ID_SEQUENCE_KEY = 'task_id_sequence'
 
 export type AgentConversationAgent = 'devin' | 'claude'
 
 export interface AgentConversation {
   agent: AgentConversationAgent
   conversationId: string
-  command: string
+  launchable: boolean
   createdAt: number
   sourceEntryId?: string
 }
 
-function generateTaskId(): string {
+const AGENT_CONVERSATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/
+
+export function isLaunchableAgentConversation(agent: unknown, conversationId: unknown): agent is AgentConversationAgent {
+  return (agent === 'claude' || agent === 'devin')
+    && typeof conversationId === 'string'
+    && AGENT_CONVERSATION_ID_RE.test(conversationId)
+}
+
+function currentTaskSequence(): number {
   const row = getDb().prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as maxId FROM tasks').get() as { maxId: number | null }
-  const next = (row.maxId ?? 0) + 1
+  const persisted = Number(getMetaValue(TASK_ID_SEQUENCE_KEY) ?? 0)
+  return Math.max(Number.isFinite(persisted) ? persisted : 0, row.maxId ?? 0)
+}
+
+export function allocateTaskId(): string {
+  const next = currentTaskSequence() + 1
+  setMetaValue(TASK_ID_SEQUENCE_KEY, String(next))
   return `T${String(next).padStart(10, '0')}`
 }
 
 export function getNextTaskId(): string {
-  return generateTaskId()
+  return `T${String(currentTaskSequence() + 1).padStart(10, '0')}`
 }
 
 export interface Task {
@@ -85,7 +100,7 @@ export function extractAgentConversationsFromContent(content: string, options: {
   while ((match = pattern.exec(text)) !== null) {
     const agent = match[1].toLowerCase() === 'devin' ? 'devin' : 'claude'
     const conversationId = match[2].trim()
-    if (!conversationId) continue
+    if (!conversationId || !isLaunchableAgentConversation(agent, conversationId)) continue
 
     const key = `${agent}:${conversationId}`
     if (seen.has(key)) continue
@@ -94,7 +109,7 @@ export function extractAgentConversationsFromContent(content: string, options: {
     conversations.push({
       agent,
       conversationId,
-      command: `${agent} -r ${conversationId}`,
+      launchable: true,
       createdAt,
       ...(options.sourceEntryId ? { sourceEntryId: options.sourceEntryId } : {}),
     })
@@ -111,7 +126,7 @@ function normalizeAgentConversation(value: any): AgentConversation | null {
   return {
     agent,
     conversationId,
-    command: `${agent} -r ${conversationId}`,
+    launchable: isLaunchableAgentConversation(agent, conversationId),
     createdAt: Number.isFinite(value?.createdAt) ? Number(value.createdAt) : 0,
     ...(typeof value?.sourceEntryId === 'string' && value.sourceEntryId ? { sourceEntryId: value.sourceEntryId } : {}),
   }
@@ -240,7 +255,7 @@ export function createTask(data: {
   body?: string
 }): Task {
   const now = Date.now()
-  const id = generateTaskId()
+  const id = allocateTaskId()
   const status = data.status ?? 'PENDING'
 
   run(
@@ -304,7 +319,7 @@ export function updateTask(id: string, data: {
       updates.push('started_at = ?')
       params.push(Date.now())
     }
-    if (data.status === 'DOING' && existing.status === 'DONE') {
+    if (data.status !== 'DONE' && existing.status === 'DONE') {
       updates.push('completed_at = ?')
       params.push(null)
     }
@@ -318,9 +333,13 @@ export function updateTask(id: string, data: {
 
   params.push(id)
   run(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, params)
-  if (data.title !== undefined) {
+  if (data.status === 'DONE' && existing.status !== 'DONE') {
+    // A completed task cannot remain the active time-tracking session.
+    run('UPDATE work_sessions SET ended_at = ? WHERE task_id = ? AND ended_at IS NULL', [Date.now(), id])
+  }
+  if (data.title !== undefined || data.tags !== undefined) {
     const current = getTaskById(id)
-    upsertTaskSearchDocument(id, data.title, data.tags ?? current?.tags ?? [])
+    if (current) upsertTaskSearchDocument(id, current.title, current.tags)
   }
   return getTaskById(id)
 }
@@ -344,6 +363,7 @@ export function deleteTask(id: string): boolean {
     db.prepare('DELETE FROM task_entries WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM work_sessions WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM task_extra_info WHERE task_id = ?').run(id)
+    db.prepare('DELETE FROM work_overview_hidden_signals WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM note_links WHERE target_id = ?').run(id)
     removeTaskSearchDocuments(id)
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
@@ -559,14 +579,16 @@ export function startWorkSession(taskId: string, startedAt = Date.now()): WorkSe
   const task = getTaskById(taskId)
   if (!task) throw new Error('Task not found')
 
-  // Close any existing open session
-  run('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [Date.now()])
-
   const id = crypto.randomUUID()
-  run(
-    'INSERT INTO work_sessions (id, task_id, started_at, ended_at) VALUES (?, ?, ?, NULL)',
-    [id, taskId, startedAt]
-  )
+  getDb().transaction(() => {
+    // Closing and opening must be one transaction: a concurrent read must
+    // never observe two current tasks or an unintended untracked gap.
+    run('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [Date.now()])
+    run(
+      'INSERT INTO work_sessions (id, task_id, started_at, ended_at) VALUES (?, ?, ?, NULL)',
+      [id, taskId, startedAt]
+    )
+  })()
   return { id, taskId, startedAt, endedAt: null }
 }
 
@@ -594,14 +616,17 @@ export function dropTask(id: string, reason: string): Task | null {
   run('UPDATE work_sessions SET ended_at = ? WHERE task_id = ? AND ended_at IS NULL', [Date.now(), id])
 
   // Update task status to DROPPED
-  run('UPDATE tasks SET status = ? WHERE id = ?', ['DROPPED', id])
+  const now = Date.now()
+  run('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?', ['DROPPED', now, id])
 
   // Insert a drop entry
   const entryId = crypto.randomUUID()
   run(
     'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
-    [entryId, id, reason, 'log', Date.now()]
+    [entryId, id, reason, 'log', now]
   )
+
+  upsertTaskEntrySearchDocument(id, entryId, sourceForEntryType('log'), reason, now)
 
   return getTaskById(id)
 }
@@ -690,7 +715,7 @@ export function getTaskAgentConversations(taskId: string): AgentConversation[] {
     ? [{
         agent: 'claude' as const,
         conversationId: legacyClaudeId,
-        command: `claude -r ${legacyClaudeId}`,
+        launchable: isLaunchableAgentConversation('claude', legacyClaudeId),
         createdAt: 0,
       }]
     : []

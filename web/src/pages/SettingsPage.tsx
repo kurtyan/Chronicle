@@ -1165,7 +1165,7 @@ function ImportExportSettingsSection({
           {importing ? t('settings.importing') : t('settings.import')}
           <input
             type="file"
-            accept=".db"
+            accept=".zip,.db"
             onChange={onImport}
             className="hidden"
             disabled={importing}
@@ -1173,7 +1173,7 @@ function ImportExportSettingsSection({
         </label>
       </div>
       <p className="mt-3 text-xs text-muted-foreground">
-        Import replaces the current database after creating a pre-import backup.
+        Export creates a complete backup bundle (database and attachments). Import accepts that bundle or a legacy .db file; legacy imports leave existing attachments unchanged.
       </p>
     </SectionPanel>
   )
@@ -1570,18 +1570,18 @@ export function SettingsPage() {
 
       try {
         const filePath = await save({
-          title: 'Export Database',
-          defaultPath: 'tasks.db',
-          filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+          title: 'Export Chronicle Backup',
+          defaultPath: 'chronicle-backup.zip',
+          filters: [{ name: 'Chronicle Backup', extensions: ['zip'] }],
         })
         if (!filePath) { setExporting(false); return }
         await writeFile(filePath, new Uint8Array(buffer))
       } catch {
-        const blob = new Blob([buffer], { type: 'application/octet-stream' })
+        const blob = new Blob([buffer], { type: 'application/zip' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = 'tasks.db'
+        a.download = 'chronicle-backup.zip'
         document.body.appendChild(a)
         a.click()
         document.body.removeChild(a)
@@ -1598,12 +1598,14 @@ export function SettingsPage() {
 
   const SQLITE_MAGIC = new Uint8Array([0x53, 0x51, 0x4C, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6F, 0x72, 0x6D, 0x61, 0x74, 0x20, 0x33, 0x00])
 
-  function isValidSqlite(file: File): Promise<boolean> {
+  function isValidImportFile(file: File): Promise<boolean> {
     return new Promise((resolve) => {
       const reader = new FileReader()
       reader.onload = (e) => {
         const arr = new Uint8Array(e.target?.result as ArrayBuffer)
-        resolve(arr.length >= 16 && arr.slice(0, 16).every((b, i) => b === SQLITE_MAGIC[i]))
+        const isSqlite = arr.length >= 16 && arr.slice(0, 16).every((b, i) => b === SQLITE_MAGIC[i])
+        const isZip = arr.length >= 4 && arr[0] === 0x50 && arr[1] === 0x4b && arr[2] === 0x03 && arr[3] === 0x04
+        resolve(isSqlite || isZip)
       }
       reader.onerror = () => resolve(false)
       reader.readAsArrayBuffer(file.slice(0, 16))
@@ -1615,7 +1617,7 @@ export function SettingsPage() {
     if (!file) return
     e.target.value = ''
 
-    const isValid = await isValidSqlite(file)
+    const isValid = await isValidImportFile(file)
     if (!isValid) {
       setMessage({ type: 'error', text: t('settings.importInvalidFormat') })
       return

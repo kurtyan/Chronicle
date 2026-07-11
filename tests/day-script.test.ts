@@ -1426,6 +1426,59 @@ test.describe('Day Script progress sync', () => {
     expect(JSON.stringify(fetchedScript.document)).toContain('✅')
   })
 
+  test('an invalid recovery draft never deletes existing derived focus blocks', async ({ page }) => {
+    const task = await createTask(page, `DayScript-Recovery-${Date.now()}`)
+    const date = uniqueScriptDate(34)
+    const valid = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([{ text: `10:00-10:30 @${task.title}`, taskId: task.id }, { text: 'Durable progress' }]),
+      },
+    })
+    expect(valid.ok()).toBeTruthy()
+    const saved = await valid.json()
+    expect(saved.script.blocks).toHaveLength(1)
+    const originalBlockId = saved.script.blocks[0].id
+
+    const invalid = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: saved.script.revision,
+        document: doc([{ text: `10:00-25:00 @${task.title}`, taskId: task.id }]),
+      },
+    })
+    expect(invalid.ok()).toBeTruthy()
+    const recovery = await invalid.json()
+    expect(recovery.validationErrors).toContainEqual({ lineIndex: 0, message: 'Malformed time header.' })
+    expect(recovery.script.blocks.map((block: { id: string }) => block.id)).toEqual([originalBlockId])
+  })
+
+  test('saved block identity survives a focus-line title edit', async ({ page }) => {
+    const task = await createTask(page, `DayScript-StableId-${Date.now()}`)
+    const date = uniqueScriptDate(35)
+    const first = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([{ text: `10:00-10:30 @${task.title} initial label`, taskId: task.id }]),
+      },
+    })
+    expect(first.ok()).toBeTruthy()
+    const initial = await first.json()
+    const originalBlockId = initial.script.blocks[0].id
+    const editedDocument = JSON.parse(JSON.stringify(initial.script.document))
+    editedDocument.content[0].content.push({ type: 'text', text: ' revised label' })
+
+    const second = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: initial.script.revision,
+        document: editedDocument,
+      },
+    })
+    expect(second.ok()).toBeTruthy()
+    const stable = await second.json()
+    expect(stable.script.blocks[0].id).toBe(originalBlockId)
+    expect(stable.script.document.content[0].attrs.blockId).toBe(originalBlockId)
+  })
+
   test('incomplete new task draft on an empty focus area still saves', async ({ page }) => {
     const date = uniqueScriptDate(32)
 
@@ -1441,19 +1494,14 @@ test.describe('Day Script progress sync', () => {
     const saved = await save.json()
     expect(saved.validationErrors).toContainEqual({ lineIndex: 0, message: 'New task line needs a title.' })
     expect(saved.script.revision).toBe(1)
-    expect(saved.script.blocks).toHaveLength(1)
-    expect(saved.script.blocks[0]).toMatchObject({
-      headerText: 'new task',
-      taskIds: [],
-      completed: false,
-    })
+    expect(saved.script.blocks).toHaveLength(0)
     expect(JSON.stringify(saved.script.document)).toContain('new task')
 
     const fetched = await page.request.get(`/api/day-scripts/${date}`)
     expect(fetched.ok()).toBeTruthy()
     const fetchedScript = await fetched.json()
     expect(fetchedScript.revision).toBe(1)
-    expect(fetchedScript.blocks).toHaveLength(1)
+    expect(fetchedScript.blocks).toHaveLength(0)
     expect(JSON.stringify(fetchedScript.document)).toContain('new task')
   })
 

@@ -3,6 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { getLlmSettings, saveLlmSettings } from '../server/src/services/llmService'
+import { getConfig } from '../server/src/config'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -49,5 +50,20 @@ test.describe('Config persistence', () => {
     saveLlmSettings({ timeoutMs: 300000 })
 
     expect(getLlmSettings().timeoutMs).toBe(300000)
+  })
+
+  test('forces loopback and requires explicit legacy MCP opt-in', () => {
+    fs.writeFileSync(configPath, JSON.stringify({
+      server: { host: '0.0.0.0', port: 4555 },
+      mcp: { enabled: true, port: 4556 },
+    }))
+
+    delete process.env.CHRONICLE_ENABLE_LEGACY_MCP
+    expect(getConfig().server.host).toBe('127.0.0.1')
+    expect(getConfig().mcp.enabled).toBeFalsy()
+
+    process.env.CHRONICLE_ENABLE_LEGACY_MCP = '1'
+    expect(getConfig().mcp.enabled).toBeTruthy()
+    delete process.env.CHRONICLE_ENABLE_LEGACY_MCP
   })
 })

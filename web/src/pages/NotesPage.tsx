@@ -63,6 +63,7 @@ export function NotesPage() {
   const latestDraftRef = useRef({ title: '', contentHtml: '', tags: [] as string[] })
   const activeNoteIdRef = useRef<string | null>(null)
   const draftNoteIdRef = useRef<string | null>(null)
+  const draftServerRevisionRef = useRef(0)
   const draftTitleRef = useRef('')
   const draftTagsRef = useRef('')
   const flushSaveRef = useRef<() => Promise<void>>(async () => {})
@@ -128,13 +129,14 @@ export function NotesPage() {
       draftTitleRef.current = ''
       draftTagsRef.current = ''
       latestDraftRef.current = { title: '', contentHtml: '', tags: [] }
+      draftServerRevisionRef.current = 0
       return
     }
     if (note.id === draftNoteIdRef.current) return
     activeNoteIdRef.current = note.id
     draftNoteIdRef.current = note.id
     const stored = localStorage.getItem(`chronicle:note_draft:${note.id}`)
-    let restored: { title?: string; contentHtml?: string; tags?: string[] } | null = null
+    let restored: { title?: string; contentHtml?: string; tags?: string[]; baseRevision?: number } | null = null
     if (stored) {
       try {
         restored = JSON.parse(stored) as { title?: string; contentHtml?: string; tags?: string[] }
@@ -153,6 +155,7 @@ export function NotesPage() {
     draftTitleRef.current = next.title
     draftTagsRef.current = next.tags.join(', ')
     latestDraftRef.current = next
+    draftServerRevisionRef.current = restored?.baseRevision ?? note.revision
     setLocalSaveStatus(restored ? 'error' : 'idle')
   }, [])
 
@@ -271,7 +274,7 @@ export function NotesPage() {
       tags: next.tags ?? latestDraftRef.current.tags,
     }
     setLocalSaveStatus('saving')
-    localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify(latestDraftRef.current))
+    localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify({ ...latestDraftRef.current, baseRevision: draftServerRevisionRef.current }))
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
     saveTimerRef.current = window.setTimeout(() => { void flushSave() }, 800)
   }
@@ -290,14 +293,15 @@ export function NotesPage() {
       tags: draftTagsRef.current.split(',').map((tag) => tag.trim()).filter(Boolean),
     }
     latestDraftRef.current = liveDraft
-    localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify(liveDraft))
+    localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify({ ...liveDraft, baseRevision: draftServerRevisionRef.current }))
     const revAtFlush = localRevisionRef.current
     try {
       const saved = useNoteStore.getState().activeNote?.id === noteId
-        ? await updateActiveNote(liveDraft)
-        : await api.updateNote(noteId, liveDraft)
+        ? await updateActiveNote({ ...liveDraft, expectedRevision: draftServerRevisionRef.current })
+        : await api.updateNote(noteId, { ...liveDraft, expectedRevision: draftServerRevisionRef.current })
       if (localRevisionRef.current === revAtFlush) {
         if (saved) {
+          draftServerRevisionRef.current = saved.revision
           localStorage.removeItem(`chronicle:note_draft:${saved.id}`)
           setLocalSaveStatus('saved')
         } else {

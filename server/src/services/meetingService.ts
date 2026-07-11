@@ -1,7 +1,7 @@
 import { getDb } from '../db'
 import { upsertTaskSearchDocument, upsertTaskEntrySearchDocument, sourceForEntryType } from './searchIndexService'
 import { ensureMeetingTag, linkLlmCallLogToTask } from './llmService'
-import { getTaskById, type Task } from './taskService'
+import { allocateTaskId, getTaskById, type Task } from './taskService'
 
 export interface CreateMeetingRequest {
   title: string
@@ -14,12 +14,6 @@ export interface CreateMeetingRequest {
   llmCallLogId?: string
 }
 
-function generateTaskId(): string {
-  const row = getDb().prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as maxId FROM tasks').get() as { maxId: number | null }
-  const next = (row.maxId ?? 0) + 1
-  return `T${String(next).padStart(10, '0')}`
-}
-
 export function createMeeting(data: CreateMeetingRequest): Task {
   if (!data.title?.trim()) throw new Error('title is required')
   if (!Number.isFinite(data.startedAt) || !Number.isFinite(data.endedAt)) throw new Error('startedAt and endedAt are required')
@@ -27,7 +21,7 @@ export function createMeeting(data: CreateMeetingRequest): Task {
 
   const db = getDb()
   const now = Date.now()
-  const taskId = generateTaskId()
+  const taskId = allocateTaskId()
   const entryId = crypto.randomUUID()
   const tags = ensureMeetingTag(data.tags)
   const participants = uniqueClean(data.participants)

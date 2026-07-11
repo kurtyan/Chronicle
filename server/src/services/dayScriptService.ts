@@ -108,6 +108,7 @@ interface ParsedLine {
 }
 
 interface ParsedBlock {
+  blockId: string | null
   sortOrder: number
   startTime: string
   endTime: string
@@ -140,6 +141,7 @@ interface ExistingSync {
   taskId: string
   syncedProgress: string
   syncedProgressHtml: string
+  lastEntryId: string | null
 }
 
 type ActivityMap = Map<string, DayScriptFocusActivity>
@@ -865,6 +867,10 @@ function findMatchingWorkSessionId(taskId: string, actualStartedAt: number, actu
 
 function createExecutionRecord(scriptDate: string, block: DayScriptBlock, taskId: string, entryId: string, activityMap: ActivityMap, completedAt: number): DayScriptExecutionRecord | null {
   if (!block.startTime || !block.endTime) return null
+  if (queryOne(
+    'SELECT id FROM day_script_execution_records WHERE progress_entry_id = ? LIMIT 1',
+    [entryId]
+  )) return null
   const blockKey = buildActivityKey(block, taskId)
   const activity = activityMap.get(activityMapKey(blockKey, taskId))
   if (!activity || !Number.isFinite(activity.firstEditedAt) || activity.firstEditedAt <= 0) return null
@@ -944,6 +950,12 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
     const header = parseTimeHeader(visible)
     const newTaskHeader = visible.match(NEW_TASK_HEADER_RE)
 
+    if (!header && !newTaskHeader && TIME_LIKE_RE.test(visible)) {
+      validationErrors.push({ lineIndex, message: 'Malformed time header.' })
+      current = null
+      return
+    }
+
     if (header || line.taskIds.length > 0 || newTaskHeader) {
       if (line.taskIds.length > 1) {
         validationErrors.push({ lineIndex, message: 'Focus line can reference only one task.' })
@@ -981,6 +993,7 @@ function parseDocument(document: JsonNode): { blocks: ParsedBlock[]; validationE
       const headerRemainder = extractHeaderRemainder(bodyText, taskIds[0])
       const source = sourceFromLine(line, bodyText)
       current = {
+        blockId: nullableString(line.attrs?.blockId),
         sortOrder: blocks.length,
         startTime,
         endTime,
@@ -1123,7 +1136,10 @@ function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBl
   const unusedExisting = [...existingBlocks]
 
   return parsedBlocks.map((block, index) => {
-    const sameShapeIndex = unusedExisting.findIndex((candidate) =>
+    const explicitIdIndex = block.blockId
+      ? unusedExisting.findIndex((candidate) => candidate.id === block.blockId)
+      : -1
+    const sameShapeIndex = explicitIdIndex >= 0 ? explicitIdIndex : unusedExisting.findIndex((candidate) =>
       candidate.startTime === block.startTime
       && candidate.endTime === block.endTime
       && candidate.headerText === block.headerText
@@ -1153,9 +1169,33 @@ function assignBlockIds(parsedBlocks: ParsedBlock[], existingBlocks: DayScriptBl
   })
 }
 
+function withAssignedBlockIds(document: JsonNode, blocks: RichDayScriptBlock[]): JsonNode {
+  const cloned = cloneNode(document)
+  let blockIndex = 0
+
+  const visit = (node: JsonNode) => {
+    const type = node.type ?? ''
+    if (type === 'paragraph' || type === 'heading' || type === 'blockquote' || type === 'listItem') {
+      const line = collectInlineText(node.content ?? [])
+      const visible = line.text.trimEnd()
+      const header = parseTimeHeader(visible)
+      const newTaskHeader = visible.match(NEW_TASK_HEADER_RE)
+      if (!header && line.taskIds.length === 0 && !newTaskHeader) return
+      const block = blocks[blockIndex]
+      blockIndex += 1
+      if (block) node.attrs = { ...(node.attrs ?? {}), blockId: block.id }
+      return
+    }
+    for (const child of node.content ?? []) visit(child)
+  }
+
+  for (const child of cloned.content ?? []) visit(child)
+  return cloned
+}
+
 function getExistingSyncs(scriptDate: string): ExistingSync[] {
   return queryAll(
-    `SELECT s.block_id, s.task_id, s.synced_progress, s.synced_progress_html
+    `SELECT s.block_id, s.task_id, s.synced_progress, s.synced_progress_html, s.last_entry_id
      FROM day_script_progress_syncs s
      JOIN day_script_blocks b ON b.id = s.block_id
      WHERE b.script_date = ?`,
@@ -1163,8 +1203,9 @@ function getExistingSyncs(scriptDate: string): ExistingSync[] {
   ).map((row) => ({
     blockId: row.block_id,
     taskId: row.task_id,
-    syncedProgress: row.synced_progress,
-    syncedProgressHtml: row.synced_progress_html ?? '',
+      syncedProgress: row.synced_progress,
+      syncedProgressHtml: row.synced_progress_html ?? '',
+      lastEntryId: row.last_entry_id ?? null,
   }))
 }
 
@@ -1260,7 +1301,13 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
       continue
     }
 
-    if (existing.syncedProgress === progress && existing.syncedProgressHtml === progressHtml) continue
+    if (existing.syncedProgress === progress && existing.syncedProgressHtml === progressHtml) {
+      if (block.completed && existing.lastEntryId) {
+        const executionRecord = createExecutionRecord(scriptDate, block, taskId, existing.lastEntryId, activityMap, completedAt)
+        if (executionRecord) executionRecords.push(executionRecord)
+      }
+      continue
+    }
 
     const canAppendDelta = progress.startsWith(existing.syncedProgress)
       && (!existing.syncedProgressHtml || progressHtml.startsWith(existing.syncedProgressHtml))
@@ -1389,7 +1436,6 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   if (validationErrors.length > 0) {
     const now = Date.now()
     const nextRevision = (existing?.revision ?? 0) + 1
-    const nextBlocks = assignBlockIds(parsedDraft.blocks, existing?.blocks ?? [])
     const transaction = getDb().transaction(() => {
       if (existing) {
         run(
@@ -1402,7 +1448,9 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
           [scriptDate, JSON.stringify(normalizedDocument), nextRevision, now, now]
         )
       }
-      upsertBlocks(scriptDate, nextBlocks, now)
+      // Keep recovery drafts durable, but never reconcile derived blocks while
+      // the document is invalid. Reconciliation can delete existing sync and
+      // execution history for a temporarily malformed focus line.
     })
     transaction()
     const savedScript = getExistingScript(scriptDate)
@@ -1430,6 +1478,7 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   const transaction = getDb().transaction(() => {
     const parsed = parseDocument(rewrittenDocument)
     nextBlocks = assignBlockIds(parsed.blocks, existing?.blocks ?? [])
+    rewrittenDocument = withAssignedBlockIds(rewrittenDocument, nextBlocks)
 
     if (existing) {
       run(
@@ -1508,6 +1557,7 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
     }
 
     if (documentChanged) {
+      document = withAssignedBlockIds(document, richBlocks)
       run(
         'UPDATE day_scripts SET document_json = ?, revision = ?, updated_at = ? WHERE script_date = ?',
         [JSON.stringify(document), existing.revision + 1, now, scriptDate]

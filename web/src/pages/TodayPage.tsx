@@ -591,7 +591,7 @@ export function TodayPage() {
   const [loadingScript, setLoadingScript] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'unsaved' | 'saving' | 'error'>('saved')
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'unsaved' | 'saving' | 'invalid' | 'error'>('saved')
   const [scriptDirty, setScriptDirty] = useState(false)
   const [conflicts, setConflicts] = useState<ProgressSyncConflict[]>([])
   const [dailySummaryOpen, setDailySummaryOpen] = useState(false)
@@ -1088,7 +1088,7 @@ export function TodayPage() {
     const content = Array.isArray(document.content) ? [...document.content] : []
     const nextContent = [...content, nextNode]
     const nextDocument = { ...document, content: nextContent }
-    setScript({ ...script, document: nextDocument })
+    applyDocumentChange(nextDocument)
     setInsertedNextStepIds((ids) => new Set(ids).add(action.id))
   }
 
@@ -1126,13 +1126,13 @@ export function TodayPage() {
         const changedDuringSave = editVersionRef.current !== documentEditVersion
           || Boolean(liveDocument && scriptDirtyRef.current && latestSnapshot !== documentSnapshot)
         const savedCurrentSnapshot = !changedDuringSave
-        if (result.validationErrors.length > 0) {
-          const validationMessage = recordDayScriptValidationError(`PUT /api/day-scripts/${date}`, result.validationErrors)
-          if (savedCurrentSnapshot) {
-            setScript(result.script)
-            setScriptDirty(false)
-            setSaveError(null)
-            setSaveStatus('saved')
+          if (result.validationErrors.length > 0) {
+            const validationMessage = recordDayScriptValidationError(`PUT /api/day-scripts/${date}`, result.validationErrors)
+            if (savedCurrentSnapshot) {
+              setScript(result.script)
+              setScriptDirty(false)
+              setSaveError(validationMessage)
+              setSaveStatus('invalid')
           } else {
             setScript((prev) => prev ? {
               ...prev,
@@ -1141,7 +1141,7 @@ export function TodayPage() {
               blocks: result.script.blocks,
               updatedAt: result.script.updatedAt,
             } : prev)
-            setSaveStatus('unsaved')
+            setSaveStatus('invalid')
           }
           return { ok: true, current: savedCurrentSnapshot, valid: false, validationMessage }
         }
@@ -1203,6 +1203,17 @@ export function TodayPage() {
       void saveDraft()
     }, 10000)
   }, [clearAutosaveTimer, saveDraft])
+
+  const applyDocumentChange = useCallback((document: Record<string, any>) => {
+    setSaveError(null)
+    setSaveStatus('unsaved')
+    setScriptDirty(true)
+    scriptDirtyRef.current = true
+    editVersionRef.current += 1
+    scriptRef.current = scriptRef.current ? { ...scriptRef.current, document } : scriptRef.current
+    setScript((prev) => prev ? { ...prev, document } : prev)
+    scheduleAutosave()
+  }, [scheduleAutosave])
 
   async function handleSave() {
     await saveDraft()
@@ -1385,7 +1396,7 @@ export function TodayPage() {
 
   function applyPlanToday() {
     if (!script || !planDraftDoc) return
-    setScript({ ...script, document: appendDocument(script.document, planDraftDoc) })
+    applyDocumentChange(appendDocument(script.document, planDraftDoc))
     setPlanDraft(null)
     setPlanDraftDoc(null)
   }
@@ -1490,7 +1501,7 @@ export function TodayPage() {
                 )}
                 {!saveError && saveStatus !== 'saved' && (
                   <div className="absolute right-3 top-3 z-20 rounded-lg border border-border bg-background/90 px-3 py-2 text-xs text-muted-foreground shadow">
-                    {saveStatus === 'saving' ? 'Saving draft...' : saveStatus === 'unsaved' ? 'Unsaved draft' : 'Save failed'}
+                    {saveStatus === 'saving' ? 'Saving draft...' : saveStatus === 'unsaved' ? 'Unsaved draft' : saveStatus === 'invalid' ? 'Draft saved with validation errors' : 'Save failed'}
                   </div>
                 )}
                 <OverallNextStepsBoard
@@ -1506,16 +1517,7 @@ export function TodayPage() {
                   tasks={pendingTasks}
                   scriptDate={displayDate}
                   todayScriptDate={todayScriptDate}
-                  onChange={(document) => {
-                    setSaveError(null)
-                    setSaveStatus('unsaved')
-                    setScriptDirty(true)
-                    scriptDirtyRef.current = true
-                    editVersionRef.current += 1
-                    scriptRef.current = scriptRef.current ? { ...scriptRef.current, document } : scriptRef.current
-                    setScript((prev) => prev ? { ...prev, document } : prev)
-                    scheduleAutosave()
-                  }}
+                  onChange={applyDocumentChange}
                   onSave={handleSave}
                   onSubmitProgress={handleSubmitProgress}
                   onNavigateTask={(taskId) => setActiveTask(taskId)}

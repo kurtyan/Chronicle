@@ -257,8 +257,10 @@ export function useSSE() {
           setError(null)
           globalError = null
           retryRef.current = 0
-          // Reload pins on first connect — server may not have been ready during initial load
+          // The shell owns connection recovery, so restore session state even
+          // when the user opens Notes/Settings directly instead of Board.
           loadPinnedIds()
+          loadCurrentSession()
         },
         (errMsg) => {
           if (destroyed) return

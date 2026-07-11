@@ -1,5 +1,5 @@
 import crypto from 'crypto'
-import { getDb } from '../db'
+import { getDb, getMetaValue, setMetaValue } from '../db'
 import { tokenize } from './tokenizer'
 import { htmlToPlainText } from './searchText'
 import { getTaskById, getTaskEntries, getPinnedEntry, type Task, type TaskEntry } from './taskService'
@@ -13,6 +13,7 @@ export interface Note {
   tags: string[]
   pinned: boolean
   archived: boolean
+  revision: number
   createdAt: number
   updatedAt: number
 }
@@ -28,6 +29,7 @@ export interface NoteLink {
 }
 
 export type { NoteSearchResult }
+const NOTE_ID_SEQUENCE_KEY = 'note_id_sequence'
 
 function escapeHtml(text: string): string {
   return text
@@ -46,6 +48,7 @@ function rowToNote(row: any): Note {
     tags: JSON.parse(row.tags || '[]'),
     pinned: Boolean(row.pinned),
     archived: Boolean(row.archived),
+    revision: Number(row.revision ?? 1),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -65,7 +68,10 @@ function rowToNoteLink(row: any): NoteLink {
 
 function generateNoteId(): string {
   const row = getDb().prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as maxId FROM notes').get() as { maxId: number | null }
-  return `N${String((row.maxId || 0) + 1).padStart(10, '0')}`
+  const persisted = Number(getMetaValue(NOTE_ID_SEQUENCE_KEY) ?? 0)
+  const next = Math.max(Number.isFinite(persisted) ? persisted : 0, row.maxId ?? 0) + 1
+  setMetaValue(NOTE_ID_SEQUENCE_KEY, String(next))
+  return `N${String(next).padStart(10, '0')}`
 }
 
 function indexNote(note: Note): void {
@@ -121,8 +127,8 @@ export function createNote(data: { title: string; contentHtml?: string; tags?: s
   const db = getDb()
   const tx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO notes(id, title, content_html, tags, pinned, archived, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 0, 0, ?, ?)
+      INSERT INTO notes(id, title, content_html, tags, pinned, archived, revision, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, 0, 1, ?, ?)
     `).run(id, title, contentHtml, JSON.stringify(data.tags ?? []), now, now)
     const note = getNoteById(id)!
     indexNote(note)
@@ -135,7 +141,7 @@ export function createNote(data: { title: string; contentHtml?: string; tags?: s
   return getNoteById(id)!
 }
 
-export function updateNote(id: string, data: { title?: string; contentHtml?: string; tags?: string[]; pinned?: boolean; archived?: boolean }): Note | null {
+export function updateNote(id: string, data: { title?: string; contentHtml?: string; tags?: string[]; pinned?: boolean; archived?: boolean; expectedRevision?: number }): Note | null {
   const existing = getNoteById(id)
   if (!existing) return null
 
@@ -162,9 +168,14 @@ export function updateNote(id: string, data: { title?: string; contentHtml?: str
     params.push(data.archived ? 1 : 0)
   }
   if (updates.length === 0) return existing
-  updates.push('updated_at = ?')
-  params.push(Date.now(), id)
-  getDb().prepare(`UPDATE notes SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+  updates.push('updated_at = ?', 'revision = revision + 1')
+  const expectedRevision = data.expectedRevision ?? existing.revision
+  params.push(Date.now(), id, expectedRevision)
+  const result = getDb().prepare(`UPDATE notes SET ${updates.join(', ')} WHERE id = ? AND revision = ?`).run(...params)
+  if (result.changes === 0) {
+    if (!getNoteById(id)) return null
+    throw new Error('NOTE_REVISION_CONFLICT')
+  }
   const note = getNoteById(id)!
   indexNote(note)
   syncTaskMentionLinks(note)

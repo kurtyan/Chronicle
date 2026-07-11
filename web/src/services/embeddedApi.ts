@@ -58,6 +58,7 @@ function noteRowToNote(row: any): Note {
     tags: row.tags ? JSON.parse(row.tags) : [],
     pinned: Boolean(row.pinned),
     archived: Boolean(row.archived),
+    revision: Number(row.revision ?? 1),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -180,10 +181,15 @@ export class EmbeddedApiProvider implements ApiInterface {
           tags TEXT,
           pinned INTEGER NOT NULL DEFAULT 0,
           archived INTEGER NOT NULL DEFAULT 0,
+          revision INTEGER NOT NULL DEFAULT 1,
           created_at INTEGER NOT NULL,
           updated_at INTEGER NOT NULL
         )
       `)
+      try {
+        this.db.run('ALTER TABLE notes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1')
+        await this.persist()
+      } catch { /* Existing embedded database already has the column. */ }
       this.db.run(`
         CREATE TABLE IF NOT EXISTS note_links (
           id TEXT PRIMARY KEY,
@@ -894,7 +900,7 @@ export class EmbeddedApiProvider implements ApiInterface {
     const now = Date.now()
     const id = this.getNextNoteId()
     await this.runAndPersist(
-      'INSERT INTO notes (id, title, content_html, tags, pinned, archived, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?)',
+      'INSERT INTO notes (id, title, content_html, tags, pinned, archived, revision, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0, 1, ?, ?)',
       [id, req.title?.trim() || 'Untitled note', req.contentHtml || '<p></p>', JSON.stringify(req.tags ?? []), now, now]
     )
     for (const taskId of req.linkedTaskIds ?? []) {
@@ -917,7 +923,7 @@ export class EmbeddedApiProvider implements ApiInterface {
     if (req.pinned !== undefined) { updates.push('pinned = ?'); params.push(req.pinned ? 1 : 0) }
     if (req.archived !== undefined) { updates.push('archived = ?'); params.push(req.archived ? 1 : 0) }
     if (updates.length === 0) return existing
-    updates.push('updated_at = ?')
+    updates.push('updated_at = ?', 'revision = revision + 1')
     params.push(Date.now(), id)
     await this.runAndPersist(`UPDATE notes SET ${updates.join(', ')} WHERE id = ?`, params)
     const note = await this.getNoteById(id)

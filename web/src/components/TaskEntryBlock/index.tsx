@@ -10,6 +10,7 @@ import { FileText, ZoomIn, ZoomOut, X, Trash2, Pin } from 'lucide-react'
 // Check if HTML content is effectively empty (no visible text)
 function isHtmlEmpty(html: string): boolean {
   if (!html) return true
+  if (/<(?:img|video|audio|iframe|object|embed)\b/i.test(html)) return false
   const text = html.replace(/<[^>]*>/g, '').trim()
   const decoded = text.replace(/&nbsp;/g, '').replace(/\s+/g, '')
   return decoded.length === 0

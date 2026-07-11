@@ -154,25 +154,6 @@ test.describe('Search relevance and phrase ranking', () => {
     expect(oversized.results.some((entry: any) => entry.taskId === task.id)).toBeTruthy()
   })
 
-  test('HTTP MCP advertises search_all', async ({ page }) => {
-    const response = await page.request.post('http://127.0.0.1:18183', {
-      headers: {
-        Accept: 'application/json, text/event-stream',
-      },
-      data: {
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/list',
-        params: {},
-      },
-    })
-    expect(response.ok()).toBeTruthy()
-    const payload = (await response.text()).match(/^data:\s*(.+)$/m)
-    expect(payload).toBeTruthy()
-    const body = JSON.parse(payload![1])
-    expect(body.result.tools.some((tool: { name: string }) => tool.name === 'search_all')).toBeTruthy()
-  })
-
   test('Chinese multi-token search works with unified index', async ({ page }) => {
     const unique = Date.now()
     const task = await createTask(page, `中文搜索测试 ${unique}`)

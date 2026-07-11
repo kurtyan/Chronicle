@@ -55,10 +55,27 @@ function findPublicDir(): string {
 }
 const publicDir = findPublicDir()
 
+const config = getConfig()
 const app = new Hono()
 const service = new AppService()
 
 type PublicTaskEntryType = 'body' | 'log'
+const PUBLIC_TASK_TYPES = new Set(['TODO', 'TOREAD', 'DAILY_IMPROVE'])
+const PUBLIC_TASK_PRIORITIES = new Set(['HIGH', 'MEDIUM', 'LOW'])
+const PUBLIC_TASK_STATUSES = new Set(['PENDING', 'DOING', 'DONE', 'DROPPED', 'ON_HOLD'])
+
+function validateTaskPayload(body: any, create = false): string | null {
+  if (!body || typeof body !== 'object') return 'Task payload must be an object'
+  if (create && (typeof body.title !== 'string' || !body.title.trim())) return 'title is required'
+  if (body.title !== undefined && typeof body.title !== 'string') return 'title must be a string'
+  if (body.type !== undefined && !PUBLIC_TASK_TYPES.has(body.type)) return 'Invalid task type'
+  if (body.priority !== undefined && !PUBLIC_TASK_PRIORITIES.has(body.priority)) return 'Invalid task priority'
+  if (body.status !== undefined && !PUBLIC_TASK_STATUSES.has(body.status)) return 'Invalid task status'
+  if (body.tags !== undefined && !isStringArray(body.tags)) return 'tags must be an array of strings'
+  if (body.dueDate !== undefined && body.dueDate !== null && !Number.isFinite(body.dueDate)) return 'dueDate must be a timestamp'
+  if (body.body !== undefined && typeof body.body !== 'string') return 'body must be a string'
+  return null
+}
 
 function parsePublicTaskEntryType(value: unknown): PublicTaskEntryType | null {
   if (value === undefined || value === null) return 'log'
@@ -78,7 +95,31 @@ function backgroundPreview(value: string): string {
     .slice(0, 120)
 }
 
-app.use('/*', cors())
+function isAllowedOrigin(origin: string | undefined): boolean {
+  // The packaged app uses a Tauri origin. In development, Vite runs on a
+  // separate, dynamically selected loopback port (for example 18090 while the
+  // API is 18080), so comparing against only the API port rejects every write.
+  if (!origin || origin === 'tauri://localhost' || origin === 'http://tauri.localhost') return true
+  try {
+    const url = new URL(origin)
+    return url.protocol === 'http:'
+      && (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]')
+  } catch {
+    return false
+  }
+}
+
+app.use('/*', async (c, next) => {
+  const origin = c.req.header('Origin')
+  if (!isAllowedOrigin(origin)) return c.json({ error: 'Origin is not allowed' }, 403)
+  await next()
+})
+
+app.use('/*', cors({
+  origin: (origin) => isAllowedOrigin(origin) ? origin : undefined,
+  allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'X-Client-Id', 'X-Claude-Conversation-Id'],
+}))
 
 import { backfillAgentConversationsFromTaskLogs, getTaskById as getTaskByIdSync, setTaskExtraInfo } from './services/taskService'
 
@@ -209,6 +250,8 @@ app.get('/api/tasks/pinned', async (c) => {
 
 app.post('/api/tasks', async (c) => {
   const body = await c.req.json()
+  const error = validateTaskPayload(body, true)
+  if (error) return c.json({ error }, 400)
   const task = await service.createTask(body)
   const conversationId = c.req.header('X-Claude-Conversation-Id')
   if (conversationId) {
@@ -227,6 +270,8 @@ app.get('/api/tasks/:id', async (c) => {
 
 app.put('/api/tasks/:id', async (c) => {
   const body = await c.req.json()
+  const error = validateTaskPayload(body)
+  if (error) return c.json({ error }, 400)
   const task = await service.updateTask(c.req.param('id'), body)
   if (!task) return c.json({ error: 'Not found' }, 404)
   saveConversationId(c, c.req.param('id'))
@@ -629,15 +674,22 @@ app.put('/api/notes/:id', async (c) => {
   if (body.tags !== undefined && !isStringArray(body.tags)) return c.json({ error: 'tags must be an array of strings' }, 400)
   if (body.pinned !== undefined && typeof body.pinned !== 'boolean') return c.json({ error: 'pinned must be a boolean' }, 400)
   if (body.archived !== undefined && typeof body.archived !== 'boolean') return c.json({ error: 'archived must be a boolean' }, 400)
-  const note = await service.updateNote(c.req.param('id'), {
-    title: body.title,
-    contentHtml: body.contentHtml,
-    tags: body.tags,
-    pinned: body.pinned,
-    archived: body.archived,
-  })
-  if (!note) return c.json({ error: 'Note not found' }, 404)
-  return c.json(note)
+  if (!Number.isInteger(body.expectedRevision) || body.expectedRevision < 1) return c.json({ error: 'expectedRevision is required' }, 400)
+  try {
+    const note = await service.updateNote(c.req.param('id'), {
+      title: body.title,
+      contentHtml: body.contentHtml,
+      tags: body.tags,
+      pinned: body.pinned,
+      archived: body.archived,
+      expectedRevision: body.expectedRevision,
+    })
+    if (!note) return c.json({ error: 'Note not found' }, 404)
+    return c.json(note)
+  } catch (err: any) {
+    if (err?.message === 'NOTE_REVISION_CONFLICT') return c.json({ error: 'Note was changed elsewhere', code: 'NOTE_REVISION_CONFLICT' }, 409)
+    throw err
+  }
 })
 
 app.post('/api/notes/:id/archive', async (c) => {
@@ -986,10 +1038,9 @@ app.post('/api/background-tasks/cleanup', async (c) => {
 
 // --- Settings API ---
 app.get('/api/settings/export', async (c) => {
-  const { data, path: dbPath } = exportDatabase()
-  const fileName = dbPath.split('/').pop() ?? 'tasks.db'
+  const { data, fileName } = await exportDatabase()
   c.header('Content-Disposition', `attachment; filename="${fileName}"`)
-  c.header('Content-Type', 'application/octet-stream')
+  c.header('Content-Type', 'application/zip')
   return c.body(new Uint8Array(data))
 })
 
@@ -1083,8 +1134,9 @@ app.get('/api/settings/launchd/plist', async (c) => {
 
 // --- SSE Endpoint ---
 app.get('/api/events', async (c) => {
-  // Explicit CORS headers for SSE (streaming response bypasses global cors() middleware)
-  c.header('Access-Control-Allow-Origin', '*')
+  // Streaming responses need their own CORS response header.
+  const origin = c.req.header('Origin')
+  if (origin && isAllowedOrigin(origin)) c.header('Access-Control-Allow-Origin', origin)
   c.header('Content-Type', 'text/event-stream')
   c.header('Cache-Control', 'no-cache')
   c.header('Connection', 'keep-alive')
@@ -1110,7 +1162,6 @@ app.get('*', (c) => {
 })
 
 // --- Start ---
-const config = getConfig()
 const cliPort = (() => {
   const idx = process.argv.indexOf('--port')
   return idx >= 0 ? parseInt(process.argv[idx + 1], 10) : undefined
@@ -1157,8 +1208,9 @@ if (config.mcp.enabled) {
   const mcpHttpServer = createServer((req, res) => {
     handleMcpRequest(req, res, service)
   })
-  mcpHttpServer.listen(config.mcp.port, () => {
-    getLogger().info(`Chronicle ${getVersion()} — MCP server running at http://localhost:${config.mcp.port}`)
+  mcpHttpServer.listen(config.mcp.port, '127.0.0.1', () => {
+    getLogger().warn('Chronicle MCP is deprecated and enabled only for this run. It will be removed in the next release.')
+    getLogger().info(`Chronicle ${getVersion()} — MCP server running at http://127.0.0.1:${config.mcp.port}`)
   })
   mcpHttpServer.on('error', (err) => {
     getLogger().error('MCP HTTP server error:', err)

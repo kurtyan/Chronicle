@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test'
+import fs from 'fs'
+import path from 'path'
 
 async function createTask(page: import('@playwright/test').Page, title: string) {
   const res = await page.request.post('/api/tasks', {
@@ -9,6 +11,73 @@ async function createTask(page: import('@playwright/test').Page, title: string) 
 }
 
 test.describe('Task entry data integrity', () => {
+  test('rejects HTTP writes from an untrusted browser origin', async ({ page }) => {
+    const response = await page.request.post('/api/tasks', {
+      headers: { Origin: 'https://evil.example' },
+      data: { title: 'must not be created', type: 'TODO', priority: 'LOW' },
+    })
+    expect(response.status()).toBe(403)
+  })
+
+  test('allows a local Vite origin on a different port to save a note', async ({ page }) => {
+    const origin = 'http://localhost:18090'
+    const created = await page.request.post('/api/notes', {
+      headers: { Origin: origin },
+      data: { title: `LocalOrigin-${Date.now()}`, contentHtml: '<p>draft</p>', tags: [] },
+    })
+    expect(created.status()).toBe(201)
+    expect(created.headers()['access-control-allow-origin']).toBe(origin)
+    const note = await created.json()
+
+    const updated = await page.request.put(`/api/notes/${note.id}`, {
+      headers: { Origin: origin },
+      data: {
+        title: note.title,
+        contentHtml: '<p>saved from Vite</p>',
+        tags: note.tags,
+        pinned: note.pinned,
+        archived: note.archived,
+        expectedRevision: note.revision,
+      },
+    })
+    expect(updated.status()).toBe(200)
+    expect(updated.headers()['access-control-allow-origin']).toBe(origin)
+  })
+
+  test('rejects invalid task domain values before they reach persistence', async ({ page }) => {
+    const create = await page.request.post('/api/tasks', {
+      data: { title: 'Invalid status', type: 'TODO', priority: 'LOW', status: 'BANANA' },
+    })
+    expect(create.status()).toBe(400)
+  })
+
+  test('does not reuse a deleted task id', async ({ page }) => {
+    const first = await createTask(page, `NoIdReuse-First-${Date.now()}`)
+    const deleted = await page.request.delete(`/api/tasks/${first.id}`)
+    expect(deleted.status()).toBe(204)
+    const second = await createTask(page, `NoIdReuse-Second-${Date.now()}`)
+    expect(second.id).not.toBe(first.id)
+  })
+
+  test('exports and restores a complete ZIP backup including recent writes and attachments', async ({ page }) => {
+    const task = await createTask(page, `ExportSnapshot-${Date.now()}`)
+    const attachmentPath = `/private/tmp/chronicle-playwright-data/attachments/${task.id}/evidence.txt`
+    fs.mkdirSync(path.dirname(attachmentPath), { recursive: true })
+    fs.writeFileSync(attachmentPath, 'backup attachment')
+    const exported = await page.request.get('/api/settings/export')
+    expect(exported.ok()).toBeTruthy()
+    const bundle = await exported.body()
+    expect(Buffer.from(bundle).subarray(0, 4).toString('ascii')).toBe('PK\x03\x04')
+
+    fs.rmSync(path.dirname(attachmentPath), { recursive: true, force: true })
+    const imported = await page.request.post('/api/settings/import', { multipart: { file: { name: 'chronicle-backup.zip', mimeType: 'application/zip', buffer: bundle } } })
+    expect(imported.ok()).toBeTruthy()
+
+    const restoredTask = await page.request.get(`/api/tasks/${task.id}`)
+    expect(restoredTask.ok()).toBeTruthy()
+    expect(fs.readFileSync(attachmentPath, 'utf8')).toBe('backup attachment')
+  })
+
   test('entry delete requires matching task id', async ({ page }) => {
     const taskA = await createTask(page, `Integrity-A-${Date.now()}`)
     const taskB = await createTask(page, `Integrity-B-${Date.now()}`)

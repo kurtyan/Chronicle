@@ -38,8 +38,8 @@ test.describe('Agent conversations', () => {
     expect(conversationsRes.ok()).toBeTruthy()
     const conversations = await conversationsRes.json()
     expect(conversations).toEqual([
-      expect.objectContaining({ agent: 'devin', conversationId: 'dev-123', command: 'devin -r dev-123' }),
-      expect.objectContaining({ agent: 'claude', conversationId: 'claude-456', command: 'claude -r claude-456' }),
+      expect.objectContaining({ agent: 'devin', conversationId: 'dev-123', launchable: true }),
+      expect.objectContaining({ agent: 'claude', conversationId: 'claude-456', launchable: true }),
     ])
   })
 
@@ -61,11 +61,11 @@ test.describe('Agent conversations', () => {
     const secondConversations = await (await page.request.get(`/api/tasks/${second.id}/agent-conversations`)).json()
 
     expect(firstConversations).toEqual([
-      expect.objectContaining({ agent: 'claude', conversationId: 'legacy-111', command: 'claude -r legacy-111' }),
-      expect.objectContaining({ agent: 'claude', conversationId: 'shared-777', command: 'claude -r shared-777' }),
+      expect.objectContaining({ agent: 'claude', conversationId: 'legacy-111', launchable: true }),
+      expect.objectContaining({ agent: 'claude', conversationId: 'shared-777', launchable: true }),
     ])
     expect(secondConversations).toEqual([
-      expect.objectContaining({ agent: 'claude', conversationId: 'shared-777', command: 'claude -r shared-777' }),
+      expect.objectContaining({ agent: 'claude', conversationId: 'shared-777', launchable: true }),
     ])
   })
 
@@ -75,8 +75,8 @@ test.describe('Agent conversations', () => {
       ;(window as any).__terminalCommands = []
       ;(window as any).__TAURI_INTERNALS__ = {
         invoke: async (cmd: string, args: any) => {
-          if (cmd === 'run_terminal_command') {
-            ;(window as any).__terminalCommands.push(args.command)
+          if (cmd === 'run_agent_conversation') {
+            ;(window as any).__terminalCommands.push(args)
             return null
           }
           if (cmd === 'get_server_url') return ''
@@ -104,7 +104,18 @@ test.describe('Agent conversations', () => {
     await page.getByTestId('task-agent-menu').getByText('claude-ui-2').click()
 
     await expect.poll(() => page.evaluate(() => (window as any).__terminalCommands)).toEqual([
-      'cd ~/IdeaProjects && claude -r claude-ui-2',
+      { agent: 'claude', conversationId: 'claude-ui-2' },
     ])
+  })
+
+  test('does not extract unsafe conversation IDs from task logs', async ({ page }) => {
+    const task = await createTask(page, `AgentUnsafe-${Date.now()}`)
+    const response = await page.request.post(`/api/tasks/${task.id}/logs`, {
+      data: { content: '<p>claude -r x;touch${IFS}/tmp/chronicle-pwn</p>', type: 'log' },
+    })
+    expect(response.ok()).toBeTruthy()
+
+    const conversations = await (await page.request.get(`/api/tasks/${task.id}/agent-conversations`)).json()
+    expect(conversations).toEqual([])
   })
 })

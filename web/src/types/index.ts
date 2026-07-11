@@ -64,7 +64,7 @@ export interface WorkOverviewHiddenSignal {
 export interface AgentConversation {
   agent: 'devin' | 'claude'
   conversationId: string
-  command: string
+  launchable: boolean
   createdAt: number
   sourceEntryId?: string
 }
@@ -99,6 +99,7 @@ export interface Note {
   tags: string[]
   pinned: boolean
   archived: boolean
+  revision: number
   createdAt: number
   updatedAt: number
 }
@@ -116,6 +117,7 @@ export interface UpdateNoteRequest {
   tags?: string[]
   pinned?: boolean
   archived?: boolean
+  expectedRevision?: number
 }
 
 export interface NoteSearchResult {

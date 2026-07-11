@@ -1080,9 +1080,15 @@ function useAutoAfk() {
           pendingAutoAfkRef.current = currentSession?.taskId
             ? { taskId: currentSession.taskId, reason, triggeredAt }
             : null
-          // End the session (calls server API + clears local state) then show dialog
-          await useTaskStore.getState().doAfk()
-          setAfkDialog({ open: true, reason, triggeredAt, resolvedAt: null, autoResumed: false })
+          try {
+            // End the session (calls server API + clears local state) then show dialog.
+            await useTaskStore.getState().doAfk()
+            setAfkDialog({ open: true, reason, triggeredAt, resolvedAt: null, autoResumed: false })
+          } catch (error) {
+            pendingAutoAfkRef.current = null
+            afkInProgressRef.current = false
+            console.error('[Auto-AFK] failed to end active session:', error)
+          }
         })
         const unlistenResume = await listen('auto-afk-resume-detected', async (event) => {
           const payload = event.payload as { reason?: unknown; returnedAt?: unknown }
@@ -1098,6 +1104,8 @@ function useAutoAfk() {
           }
           try {
             const session = await useTaskStore.getState().resumeFromAfk(pending.taskId, returnedAt)
+            pendingAutoAfkRef.current = null
+            afkInProgressRef.current = false
             const task = useTaskStore.getState().tasks.find((item) => item.id === session.taskId)
             setAfkDialog((prev) => prev.open
               ? { ...prev, resolvedAt: returnedAt, autoResumed: true }
@@ -1123,7 +1131,6 @@ function useAutoAfk() {
 
   const onClose = useCallback(() => {
     afkInProgressRef.current = false
-    pendingAutoAfkRef.current = null
     setAfkDialog(prev => ({ ...prev, open: false }))
   }, [])
 
@@ -1150,6 +1157,16 @@ function Layout() {
   const setSearchModeRef = useRef(setSearchMode)
   const setGlobalSearchOpenRef = useRef(setGlobalSearchOpen)
   const globalSearchOpenRef = useRef(globalSearchOpen)
+
+  useEffect(() => {
+    const endActiveSession = () => {
+      if (!useTaskStore.getState().currentSession) return
+      const url = apiBase ? `${apiBase}/api/afk` : '/api/afk'
+      navigator.sendBeacon(url)
+    }
+    window.addEventListener('pagehide', endActiveSession)
+    return () => window.removeEventListener('pagehide', endActiveSession)
+  }, [])
 
   // Keep refs updated
   useEffect(() => {

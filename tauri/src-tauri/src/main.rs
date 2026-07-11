@@ -112,7 +112,6 @@ impl Default for AutoAfkConfig {
 static LAST_AUTO_AFK_EMIT: AtomicU64 = AtomicU64::new(0);
 static LAST_AUTO_AFK_RESUME_EMIT: AtomicU64 = AtomicU64::new(0);
 static AUTO_AFK_RESUME_MODE: AtomicU64 = AtomicU64::new(0); // 0 none, 1 idle, 2 screen-lock
-const AUTO_AFK_RESUME_IDLE_THRESHOLD_SECONDS: u64 = 5;
 
 fn unix_millis() -> u64 {
     std::time::SystemTime::now()
@@ -300,10 +299,35 @@ fn reveal_file_in_finder(path: String) -> Result<(), String> {
     Ok(())
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn is_valid_agent_conversation_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 256
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b':' | b'/' | b'-'))
+}
+
 #[tauri::command]
-fn run_terminal_command(command: String) -> Result<(), String> {
+fn run_agent_conversation(agent: String, conversation_id: String) -> Result<(), String> {
     use std::process::Command;
-    // Open Terminal.app and run the command
+    if agent != "claude" && agent != "devin" {
+        return Err("Unsupported agent".to_string());
+    }
+    if !is_valid_agent_conversation_id(&conversation_id) {
+        return Err("Invalid Agent conversation ID".to_string());
+    }
+
+    let command = format!(
+        "cd -- \"$HOME/IdeaProjects\" && {} -r {}",
+        agent,
+        shell_quote(&conversation_id),
+    );
+    // Terminal requires a shell string, but it is generated exclusively from
+    // validated structured arguments rather than user-provided shell source.
     let output = Command::new("osascript")
         .args(&["-e", &format!(
             r#"tell application "Terminal"
@@ -485,7 +509,11 @@ fn setup_idle_checker(app: &tauri::AppHandle, config: &AutoAfkConfig) {
                     let idle_secs = idle_duration.as_secs();
                     let _ = write_client_log(format!("[Auto-AFK] idle check: idle={}s, threshold={}s, timeout={}", idle_secs, config.idle_timeout_seconds, idle_secs >= config.idle_timeout_seconds));
                     let resume_mode = AUTO_AFK_RESUME_MODE.load(Ordering::Relaxed);
-                    if resume_mode != 0 && idle_secs <= AUTO_AFK_RESUME_IDLE_THRESHOLD_SECONDS {
+                    // Once auto-AFK has been triggered, any idle duration
+                    // below the configured AFK threshold means the user has
+                    // returned. A 5-second window was routinely missed by
+                    // the 30-second polling cadence.
+                    if resume_mode != 0 && idle_secs < config.idle_timeout_seconds {
                         let reason = if resume_mode == 2 { "screen-unlock-return" } else { "idle-return" };
                         emit_auto_afk_resume(&app_handle, reason);
                     } else if config.idle_enabled && idle_duration >= Duration::from_secs(config.idle_timeout_seconds) {
@@ -520,7 +548,7 @@ fn main() {
             set_auto_afk_config,
             get_ui_language,
             set_ui_language,
-            run_terminal_command,
+            run_agent_conversation,
             copy_attachment_file,
             save_editor_image,
             resolve_attachment_path,

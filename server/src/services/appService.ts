@@ -40,7 +40,7 @@ export class AppService {
     return createNote(data)
   }
 
-  async updateNote(id: string, data: { title?: string; contentHtml?: string; tags?: string[]; pinned?: boolean; archived?: boolean }): Promise<Note | null> {
+  async updateNote(id: string, data: { title?: string; contentHtml?: string; tags?: string[]; pinned?: boolean; archived?: boolean; expectedRevision?: number }): Promise<Note | null> {
     return updateNote(id, data)
   }
 
