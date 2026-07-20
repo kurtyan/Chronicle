@@ -263,13 +263,6 @@ export interface DayScriptFocusActivity {
   firstEditedAt: number
 }
 
-export interface DayScriptSubmitAnchor {
-  sortOrder: number
-  startTime: string
-  endTime: string
-  headerText: string
-}
-
 export interface DayScriptExecutionRecord {
   id: string
   scriptDate: string

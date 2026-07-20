@@ -74,13 +74,6 @@ export interface DayScriptFocusActivity {
   firstEditedAt: number
 }
 
-export interface DayScriptSubmitAnchor {
-  sortOrder: number
-  startTime: string
-  endTime: string
-  headerText: string
-}
-
 export interface DayScriptExecutionRecord {
   id: string
   scriptDate: string
@@ -396,41 +389,24 @@ function rewritePlannedTimeHeaders(document: JsonNode, replacements: Map<number,
   return cloned
 }
 
-function normalizeAnchorText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim()
-}
-
-function isSubmitAnchorBlock(block: RichDayScriptBlock, anchor?: DayScriptSubmitAnchor): boolean {
-  if (!anchor || !Number.isInteger(anchor.sortOrder)) return false
-  if (block.sortOrder !== anchor.sortOrder) return false
-  if (!anchor.startTime && !anchor.endTime && !anchor.headerText) return true
-  return block.startTime === anchor.startTime
-    || block.endTime === anchor.endTime
-    || normalizeAnchorText(block.headerText) === normalizeAnchorText(anchor.headerText)
-}
-
 function blockHasExistingSync(block: RichDayScriptBlock, syncMap: Map<string, ExistingSync>): boolean {
   return block.taskIds.some((taskId) => syncMap.has(`${block.id}:${taskId}`))
 }
 
-function rescheduleUnworkedPlannedFocus(document: JsonNode, blocks: RichDayScriptBlock[], scriptDate: string, now: number, syncMap: Map<string, ExistingSync>, submitAnchor?: DayScriptSubmitAnchor): { document: JsonNode; changed: boolean } {
+function rescheduleSelectedPlannedFocus(document: JsonNode, blocks: RichDayScriptBlock[], now: number, syncMap: Map<string, ExistingSync>, sortOrders: Set<number>): { document: JsonNode; changed: boolean } {
   const candidates = blocks
     .map((block, index) => ({ block, index }))
     .filter(({ block }) => {
+      if (!sortOrders.has(block.sortOrder)) return false
       if (!block.startTime || !block.endTime) return false
       if (plannedDurationMinutes(block.startTime, block.endTime) === null) return false
-      if (isSubmitAnchorBlock(block, submitAnchor)) return false
       if (block.completed || block.appendOnSubmit) return false
       if (blockHasExistingSync(block, syncMap)) return false
       return true
     })
 
-  const first = candidates[0]
-  if (!first) return { document, changed: false }
-
-  const firstStartAt = plannedRangeTimestamps(scriptDate, first.block.startTime, first.block.endTime).startAt
-  let nextStartAt = Math.max(firstStartAt, ceilTimestampToFiveMinutes(now))
-  if (nextStartAt <= firstStartAt) return { document, changed: false }
+  if (candidates.length === 0) return { document, changed: false }
+  let nextStartAt = ceilTimestampToFiveMinutes(now)
 
   const replacements = new Map<number, { startTime: string; endTime: string }>()
   for (const { block, index } of candidates) {
@@ -438,10 +414,13 @@ function rescheduleUnworkedPlannedFocus(document: JsonNode, blocks: RichDayScrip
     if (duration === null) continue
     const nextStart = new Date(nextStartAt)
     const startMinutes = nextStart.getHours() * 60 + nextStart.getMinutes()
-    replacements.set(index, {
+    const replacement = {
       startTime: formatMinutesAsTime(startMinutes),
       endTime: formatMinutesAsTime(startMinutes + duration),
-    })
+    }
+    if (block.startTime !== replacement.startTime || block.endTime !== replacement.endTime) {
+      replacements.set(index, replacement)
+    }
     nextStartAt += duration * 60_000
   }
 
@@ -1507,7 +1486,7 @@ export function saveDayScript(scriptDate: string, document: JsonNode, expectedRe
   }
 }
 
-export function submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[], submitAnchor?: DayScriptSubmitAnchor): SubmitDayScriptProgressResult {
+export function submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[]): SubmitDayScriptProgressResult {
   const existing = getExistingScript(scriptDate)
   if (!existing) return { script: getDayScript(scriptDate), createdTasks: [], createdLogs: [], executionRecords: [], validationErrors: [], conflicts: [] }
 
@@ -1545,17 +1524,6 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
       syncMap.set(`${sync.blockId}:${sync.taskId}`, sync)
     }
 
-    const rescheduleResult = rescheduleUnworkedPlannedFocus(document, richBlocks, scriptDate, now, syncMap, submitAnchor)
-    if (rescheduleResult.changed) {
-      document = rescheduleResult.document
-      documentChanged = true
-      const rescheduledParsed = parseDocument(document)
-      if (rescheduledParsed.validationErrors.length > 0) {
-        throw new Error('UNEXPECTED_DAY_SCRIPT_VALIDATION_AFTER_RESCHEDULE')
-      }
-      richBlocks = assignBlockIds(rescheduledParsed.blocks, existing.blocks)
-    }
-
     if (documentChanged) {
       document = withAssignedBlockIds(document, richBlocks)
       run(
@@ -1589,6 +1557,43 @@ export function submitDayScriptProgress(scriptDate: string, focusActivities?: Da
 
   transaction()
   return { script: getDayScript(scriptDate), createdTasks, createdLogs, executionRecords, validationErrors: [], conflicts }
+}
+
+export function rescheduleDayScriptFocus(scriptDate: string, expectedRevision: number, sortOrders: number[]): { script: DayScriptDocument; changed: boolean } {
+  const existing = getExistingScript(scriptDate)
+  if (!existing || existing.revision !== expectedRevision) throw new Error('REVISION_CONFLICT')
+
+  const parsed = parseDocument(existing.document)
+  if (parsed.validationErrors.length > 0) return { script: existing, changed: false }
+
+  const requestedSortOrders = new Set(sortOrders.filter(Number.isInteger))
+  if (requestedSortOrders.size === 0) return { script: existing, changed: false }
+
+  const now = Date.now()
+  let nextDocument = existing.document
+  let changed = false
+  const transaction = getDb().transaction(() => {
+    const richBlocks = assignBlockIds(parsed.blocks, existing.blocks)
+    const syncMap = new Map<string, ExistingSync>()
+    for (const sync of getExistingSyncs(scriptDate)) syncMap.set(`${sync.blockId}:${sync.taskId}`, sync)
+
+    const result = rescheduleSelectedPlannedFocus(existing.document, richBlocks, now, syncMap, requestedSortOrders)
+    if (!result.changed) return
+
+    const rescheduled = parseDocument(result.document)
+    if (rescheduled.validationErrors.length > 0) throw new Error('UNEXPECTED_DAY_SCRIPT_VALIDATION_AFTER_RESCHEDULE')
+    const rescheduledBlocks = assignBlockIds(rescheduled.blocks, existing.blocks)
+    nextDocument = withAssignedBlockIds(result.document, rescheduledBlocks)
+    run(
+      'UPDATE day_scripts SET document_json = ?, revision = ?, updated_at = ? WHERE script_date = ?',
+      [JSON.stringify(nextDocument), existing.revision + 1, now, scriptDate]
+    )
+    upsertBlocks(scriptDate, rescheduledBlocks, now)
+    changed = true
+  })
+
+  transaction()
+  return { script: changed ? getDayScript(scriptDate) : existing, changed }
 }
 
 export function getDayScriptExecutionRecords(scriptDate: string, filters?: { taskId?: string; start?: number; end?: number }): DayScriptExecutionRecord[] {

@@ -889,20 +889,7 @@ app.post('/api/day-scripts/:date/submit-progress', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}))
     const focusActivities = Array.isArray(body.focusActivity) ? body.focusActivity : undefined
-    const rawAnchor = body.submitAnchor
-    const submitAnchor = rawAnchor && typeof rawAnchor === 'object'
-      && Number.isInteger(rawAnchor.sortOrder)
-      && typeof rawAnchor.startTime === 'string'
-      && typeof rawAnchor.endTime === 'string'
-      && typeof rawAnchor.headerText === 'string'
-      ? {
-        sortOrder: rawAnchor.sortOrder,
-        startTime: rawAnchor.startTime,
-        endTime: rawAnchor.endTime,
-        headerText: rawAnchor.headerText,
-      }
-      : undefined
-    const result = await service.submitDayScriptProgress(c.req.param('date'), focusActivities, submitAnchor)
+    const result = await service.submitDayScriptProgress(c.req.param('date'), focusActivities)
     for (const task of result.createdTasks) {
       broadcastEvent('task_created', { id: task.id }, c.get('clientId'))
     }
@@ -915,6 +902,19 @@ app.post('/api/day-scripts/:date/submit-progress', async (c) => {
     return c.json(result)
   } catch (err: any) {
     return c.json({ error: err?.message || 'Submit progress failed' }, 400)
+  }
+})
+
+app.post('/api/day-scripts/:date/reschedule-focus', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    const expectedRevision = Number(body.expectedRevision)
+    const sortOrders = Array.isArray(body.sortOrders) ? body.sortOrders : []
+    if (!Number.isInteger(expectedRevision)) return c.json({ error: 'expectedRevision is required' }, 400)
+    return c.json(await service.rescheduleDayScriptFocus(c.req.param('date'), expectedRevision, sortOrders))
+  } catch (err: any) {
+    if (err?.message === 'REVISION_CONFLICT') return c.json({ error: 'Revision conflict' }, 409)
+    return c.json({ error: err?.message || 'Reschedule failed' }, 400)
   }
 })
 

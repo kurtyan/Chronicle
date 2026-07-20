@@ -4,13 +4,15 @@ import { Bot, CalendarPlus, ChevronLeft, ChevronRight, Loader2, Maximize2, Plus,
 import { useTaskStore } from '@/stores/taskStore'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { DayScriptEditor } from '@/components/DayScriptEditor'
-import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, fetchTodos, fetchWorkOverviewHiddenSignals, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, hideWorkOverviewSignal, saveDayScript, submitDayScriptProgress } from '@/services/api'
-import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, DayScriptSubmitAnchor, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext, WorkOverviewHidableSignalSourceType, WorkOverviewHiddenSignal } from '@/types'
+import { FindBar } from '@/components/FindBar'
+import { buildPlanTodayDraft, confirmDayScriptProgressSync, fetchDailySummaryCache, fetchStartOfDayOffset, fetchTodos, fetchWorkOverviewHiddenSignals, generateDailySummaryInBackground, getCarryOverDayScriptBlocks, getDayScript, hideWorkOverviewSignal, rescheduleDayScriptFocus, saveDayScript, submitDayScriptProgress } from '@/services/api'
+import type { DailySummaryResult, DayScriptBlock, DayScriptBlockSource, DayScriptDocument, DayScriptFocusActivity, PlanTodayDraftResult, ProgressSyncConflict, Task, TaskProgressContext, WorkOverviewHidableSignalSourceType, WorkOverviewHiddenSignal } from '@/types'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { buildDayScriptActivityKey, findActiveBlock } from '@/lib/dayScript'
 import { dailySummarySourceKey, useBackgroundTaskStore } from '@/stores/backgroundTaskStore'
 import { recordAppError } from '@/stores/appErrorStore'
 import { MarkdownView } from '@/components/MarkdownView'
+import { registerShortcut } from '@/shortcuts/registry'
 
 const TODAY_LEFT_PANE_PERCENT_KEY = 'chronicle_today_left_pane_percent'
 const TODAY_LEFT_PANE_MIN_PERCENT = 12
@@ -211,6 +213,15 @@ function actionTextForTask(text: string, taskTitle: string): string {
   return colonIndex >= 0 ? trimmed.slice(colonIndex + 1).trim() : trimmed
 }
 
+function carryOverInsertionText(text: string, taskTitle: string): string {
+  const escapedTitle = taskTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text
+    .replace(new RegExp(`(?:\\bcarry[- ]over\\s+)?@${escapedTitle}\\s*:?\\s*`, 'gi'), '')
+    .replace(/^(?:carry[- ]over\s*)+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function areSimilarActions(leftText: string, rightText: string): boolean {
   const left = normalizeActionText(leftText)
   const right = normalizeActionText(rightText)
@@ -293,18 +304,18 @@ function OverallNextStepsBoard({
   }
 
   const clampedCursor = Math.min(cursorIndex, items.length - 1)
-  const moveCursor = useCallback((delta: number) => {
-    setCursorIndex((current) => {
-      const next = Math.max(0, Math.min(items.length - 1, current + delta))
-      window.requestAnimationFrame(() => rowRefs.current[next]?.scrollIntoView({ block: 'nearest' }))
-      return next
-    })
-  }, [items.length])
-  const setCursorTo = useCallback((index: number) => {
+  const moveCursor = useCallback((delta: number, openTask = false) => {
+    const next = Math.max(0, Math.min(items.length - 1, clampedCursor + delta))
+    setCursorIndex(next)
+    window.requestAnimationFrame(() => rowRefs.current[next]?.scrollIntoView({ block: 'nearest' }))
+    if (openTask && items[next]?.taskId) onOpen(items[next].primaryAction)
+  }, [clampedCursor, items, onOpen])
+  const setCursorTo = useCallback((index: number, openTask = false) => {
     const next = Math.max(0, Math.min(items.length - 1, index))
     setCursorIndex(next)
     window.requestAnimationFrame(() => rowRefs.current[next]?.scrollIntoView({ block: 'nearest' }))
-  }, [items.length])
+    if (openTask && items[next]?.taskId) onOpen(items[next].primaryAction)
+  }, [items, onOpen])
 
   if (items.length === 0) return null
 
@@ -407,20 +418,20 @@ function OverallNextStepsBoard({
               const pageSize = Math.max(1, Math.floor(container.clientHeight / rowHeight))
               const direction = key === 'd' ? 1 : -1
               container.scrollBy({ top: direction * container.clientHeight * 0.9 })
-              moveCursor(direction * pageSize)
+              moveCursor(direction * pageSize, true)
               return
             }
             if (event.metaKey || event.ctrlKey || event.altKey) return
             if (key === 'j') {
               event.preventDefault()
               event.stopPropagation()
-              moveCursor(1)
+              moveCursor(1, true)
               return
             }
             if (key === 'k') {
               event.preventDefault()
               event.stopPropagation()
-              moveCursor(-1)
+              moveCursor(-1, true)
               return
             }
             if (key === 'i') {
@@ -445,7 +456,7 @@ function OverallNextStepsBoard({
               const now = Date.now()
               if (now - lastGRef.current < 400) {
                 lastGRef.current = 0
-                setCursorTo(0)
+                setCursorTo(0, true)
               } else {
                 lastGRef.current = now
               }
@@ -454,7 +465,7 @@ function OverallNextStepsBoard({
             if (key === 'G') {
               event.preventDefault()
               event.stopPropagation()
-              setCursorTo(items.length - 1)
+              setCursorTo(items.length - 1, true)
               return
             }
             if (key === 'x') {
@@ -608,6 +619,8 @@ export function TodayPage() {
   const [hiddenOverviewSignals, setHiddenOverviewSignals] = useState<WorkOverviewHiddenSignal[]>([])
   const [workOverviewTasks, setWorkOverviewTasks] = useState<Task[]>([])
   const [nextStepsMaximized, setNextStepsMaximized] = useState(false)
+  const [showFindBar, setShowFindBar] = useState(false)
+  const [findTokens, setFindTokens] = useState<string[]>([])
   const backgroundTasks = useBackgroundTaskStore((s) => s.tasks)
   const loadBackgroundTasks = useBackgroundTaskStore((s) => s.loadTasks)
   const setBackgroundPanelOpen = useBackgroundTaskStore((s) => s.setPanelOpen)
@@ -654,6 +667,7 @@ export function TodayPage() {
   const scriptDirtyRef = useRef(false)
   const editVersionRef = useRef(0)
   const workOverviewOrderRef = useRef<WorkOverviewOrderState>({ date: displayDate, next: 0, items: new Map() })
+  const taskDetailContainerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     scriptRef.current = script
@@ -666,6 +680,17 @@ export function TodayPage() {
   useEffect(() => {
     scriptDirtyRef.current = scriptDirty
   }, [scriptDirty])
+
+  useEffect(() => {
+    return registerShortcut({
+      id: 'today-find-in-task',
+      combo: 'mod+f',
+      label: 'Find in task detail',
+      scope: 'page',
+      context: () => Boolean(useTaskStore.getState().activeTaskId && useTaskStore.getState().selectedTask),
+      handler: () => setShowFindBar((open) => !open),
+    })
+  }, [])
 
   const clearAutosaveTimer = useCallback(() => {
     if (autosaveTimerRef.current === null) return
@@ -1068,6 +1093,9 @@ export function TodayPage() {
       : action.sourceType === 'carry_over'
         ? 'Carry over '
         : 'Next step '
+    const actionText = action.sourceType === 'carry_over'
+      ? carryOverInsertionText(action.text, action.taskTitle)
+      : action.text
     const nextNode = {
       type: 'paragraph',
       attrs: {
@@ -1079,7 +1107,7 @@ export function TodayPage() {
       content: [
         { type: 'text', text: prefix },
         { type: 'text', text: `@${action.taskTitle}`, marks: [{ type: 'link', attrs: linkAttrs }] },
-        { type: 'text', text: action.hiddenSignal ? '' : `: ${action.text}` },
+        { type: 'text', text: action.hiddenSignal || !actionText ? '' : `: ${actionText}` },
       ],
     }
     const document = script.document && script.document.type === 'doc'
@@ -1147,10 +1175,19 @@ export function TodayPage() {
         }
 
         if (savedCurrentSnapshot) {
+          scriptRef.current = result.script
           setScript(result.script)
           setScriptDirty(false)
           setSaveStatus('saved')
         } else {
+          const nextScript = scriptRef.current ? {
+            ...scriptRef.current,
+            ...(latestDocument ? { document: latestDocument } : {}),
+            revision: result.script.revision,
+            blocks: result.script.blocks,
+            updatedAt: result.script.updatedAt,
+          } : null
+          scriptRef.current = nextScript
           setScript((prev) => prev ? {
             ...prev,
             ...(latestDocument ? { document: latestDocument } : {}),
@@ -1219,7 +1256,7 @@ export function TodayPage() {
     await saveDraft()
   }
 
-  async function handleSubmitProgress(getCurrentDocument?: () => Record<string, any>, submitAnchor?: DayScriptSubmitAnchor) {
+  async function handleSubmitProgress(getCurrentDocument?: () => Record<string, any>) {
     const saved = await saveDraft(getCurrentDocument)
     if (!saved.ok) return
     if (!saved.current) {
@@ -1235,13 +1272,14 @@ export function TodayPage() {
     try {
       setSaveError(null)
       const focusActivity = [...focusActivityRef.current.values()]
-      const result = await submitDayScriptProgress(displayDateRef.current, { focusActivity, submitAnchor })
+      const result = await submitDayScriptProgress(displayDateRef.current, { focusActivity })
       if (result.validationErrors.length > 0) {
         const message = recordDayScriptValidationError(`POST /api/day-scripts/${displayDateRef.current}/submit-progress`, result.validationErrors)
         setSaveError(message)
         setSaveStatus('error')
         return
       }
+      scriptRef.current = result.script
       setScript(result.script)
       setScriptDirty(false)
       setSaveStatus('saved')
@@ -1282,6 +1320,34 @@ export function TodayPage() {
         })
       }
       setSaveError(message)
+    }
+  }
+
+  async function handleRescheduleFocus(getCurrentDocument: () => Record<string, any>, sortOrders: number[]) {
+    const saved = await saveDraft(getCurrentDocument)
+    if (!saved.ok || !saved.current) {
+      setSaveError('Focus changed while saving. Select the lines and try again after the latest draft is saved.')
+      return
+    }
+    if (!saved.valid) {
+      setSaveError(saved.validationMessage ?? 'Invalid Focus content.')
+      return
+    }
+    const current = scriptRef.current
+    if (!current) return
+    try {
+      setSaveError(null)
+      const result = await rescheduleDayScriptFocus(displayDateRef.current, {
+        expectedRevision: current.revision,
+        sortOrders,
+      })
+      scriptRef.current = result.script
+      setScript(result.script)
+      setScriptDirty(false)
+      setSaveStatus('saved')
+    } catch (error: any) {
+      const status = error?.response?.status
+      setSaveError(status === 409 ? 'Focus changed elsewhere. Reload this date before rescheduling.' : (error?.response?.data?.error || error?.message || 'Failed to reschedule Focus lines.'))
     }
   }
 
@@ -1520,6 +1586,7 @@ export function TodayPage() {
                   onChange={applyDocumentChange}
                   onSave={handleSave}
                   onSubmitProgress={handleSubmitProgress}
+                  onRescheduleFocus={handleRescheduleFocus}
                   onNavigateTask={(taskId) => setActiveTask(taskId)}
                   onEditingTask={({ taskId, blockKey }) => {
                     const key = activityMapKey(blockKey, taskId)
@@ -1570,9 +1637,15 @@ export function TodayPage() {
           <div className="absolute left-1/2 top-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border transition-colors group-hover:bg-primary group-focus:bg-primary" />
         </div>
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <section ref={taskDetailContainerRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <FindBar
+            open={showFindBar}
+            onClose={() => { setShowFindBar(false); setFindTokens([]) }}
+            containerRef={taskDetailContainerRef}
+            onTokensChange={setFindTokens}
+          />
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <TaskDetailWorkspace showTrackingStatus keepCompletedTaskVisible />
+            <TaskDetailWorkspace showTrackingStatus keepCompletedTaskVisible findTokens={findTokens} />
           </div>
         </section>
       </div>

@@ -10,8 +10,8 @@ import {
   type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent, type AgentConversation,
 } from './taskService'
 import {
-  getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
-  type DayScriptBlock, type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptSubmitAnchor, type DayScriptExecutionRecord,
+  getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress, rescheduleDayScriptFocus, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
+  type DayScriptBlock, type DayScriptDocument, type SaveDayScriptResult, type SubmitDayScriptProgressResult, type DayScriptFocusActivity, type DayScriptExecutionRecord,
 } from './dayScriptService'
 import {
   getTaskContexts, refreshTaskContexts,
@@ -444,8 +444,12 @@ export class AppService {
     return saveDayScript(scriptDate, document, expectedRevision, focusActivities)
   }
 
-  async submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[], submitAnchor?: DayScriptSubmitAnchor): Promise<SubmitDayScriptProgressResult> {
-    return submitDayScriptProgress(scriptDate, focusActivities, submitAnchor)
+  async submitDayScriptProgress(scriptDate: string, focusActivities?: DayScriptFocusActivity[]): Promise<SubmitDayScriptProgressResult> {
+    return submitDayScriptProgress(scriptDate, focusActivities)
+  }
+
+  async rescheduleDayScriptFocus(scriptDate: string, expectedRevision: number, sortOrders: number[]): Promise<{ script: DayScriptDocument; changed: boolean }> {
+    return rescheduleDayScriptFocus(scriptDate, expectedRevision, sortOrders)
   }
 
   async confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Promise<Array<{ taskId: string; entryId: string; blockId: string }>> {

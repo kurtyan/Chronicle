@@ -109,9 +109,13 @@ test.describe('Work overview keyboard navigation', () => {
 
       await page.keyboard.press('j')
       await expect(cursor).toHaveAttribute('data-next-step-action-id', await rows.nth(1).getAttribute('data-next-step-action-id') ?? '')
+      const secondTaskTitle = await rows.nth(1).locator('[title]').first().getAttribute('title')
+      await expect(page.getByRole('heading', { name: secondTaskTitle ?? '' })).toBeVisible()
 
       await page.keyboard.press('k')
       await expect(cursor).toHaveAttribute('data-next-step-action-id', await rows.nth(0).getAttribute('data-next-step-action-id') ?? '')
+      const firstTaskTitle = await rows.nth(0).locator('[title]').first().getAttribute('title')
+      await expect(page.getByRole('heading', { name: firstTaskTitle ?? '' })).toBeVisible()
 
       const firstNameCell = rows.nth(0).locator('[title]').first()
       const firstName = await firstNameCell.getAttribute('title')

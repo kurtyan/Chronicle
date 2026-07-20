@@ -92,17 +92,20 @@ async function deleteEntry(page: Page, taskId: string, entryId: string) {
   expect(res.ok()).toBeTruthy()
 }
 
-type SubmitAnchor = { sortOrder: number; startTime: string; endTime: string; headerText: string }
-
-async function submitProgress(page: Page, date: string, focusActivity?: Array<{ blockKey: string; taskId: string; firstEditedAt: number }>, submitAnchor?: SubmitAnchor) {
+async function submitProgress(page: Page, date: string, focusActivity?: Array<{ blockKey: string; taskId: string; firstEditedAt: number }>) {
   const res = await page.request.post(`/api/day-scripts/${date}/submit-progress`, {
     data: {
       ...(focusActivity ? { focusActivity } : {}),
-      ...(submitAnchor ? { submitAnchor } : {}),
     },
   })
   expect(res.ok()).toBeTruthy()
   return res.json()
+}
+
+async function rescheduleFocus(page: Page, date: string, expectedRevision: number, sortOrders: number[]) {
+  return page.request.post(`/api/day-scripts/${date}/reschedule-focus`, {
+    data: { expectedRevision, sortOrders },
+  })
 }
 
 async function getDayScriptRevision(page: Page, date: string): Promise<number> {
@@ -116,7 +119,7 @@ test.describe('Day Script progress sync', () => {
     await page.request.post('/api/afk').catch(() => {})
   })
 
-  test('submit progress delays unworked planned focus lines after the current progress block', async ({ page }) => {
+  test('submit progress keeps planned focus times unchanged', async ({ page }) => {
     const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
     expect(offsetRes.ok()).toBeTruthy()
     const originalOffset = (await offsetRes.json()).offset
@@ -150,23 +153,18 @@ test.describe('Day Script progress sync', () => {
       expect(save.ok()).toBeTruthy()
       const saved = await save.json()
 
-      const submitted = await submitProgress(page, date, undefined, {
-        sortOrder: 0,
-        startTime: formatTime(firstStart),
-        endTime: formatTime(firstEnd),
-        headerText: `@${currentTask.title}`,
-      })
-      expect(submitted.script.revision).toBe(saved.script.revision + 1)
+      const submitted = await submitProgress(page, date)
+      expect(submitted.script.revision).toBe(saved.script.revision)
       const lines = extractParagraphTexts(submitted.script.document)
       expect(lines[0]).toContain(`${formatTime(firstStart)}-${formatTime(firstEnd)}`)
-      expect(lines[2]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 20))}`)
-      expect(lines[3]).toContain(`${formatTime(addMinutes(target, 20))}-${formatTime(addMinutes(target, 30))}`)
+      expect(lines[2]).toContain(`${formatTime(secondStart)}-${formatTime(secondEnd)}`)
+      expect(lines[3]).toContain(`${formatTime(thirdStart)}-${formatTime(thirdEnd)}`)
     } finally {
       await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
     }
   })
 
-  test('submit progress delays from the first timed focus line when no block has actual progress', async ({ page }) => {
+  test('submit progress does not rewrite planned times without a completion', async ({ page }) => {
     const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
     expect(offsetRes.ok()).toBeTruthy()
     const originalOffset = (await offsetRes.json()).offset
@@ -198,7 +196,7 @@ test.describe('Day Script progress sync', () => {
 
       const submitted = await submitProgress(page, date)
       const lines = extractParagraphTexts(submitted.script.document)
-      expect(lines[0]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 10))}`)
+      expect(lines[0]).toContain(`${formatTime(firstStart)}-${formatTime(firstEnd)}`)
       expect(lines[3]).toContain(`${formatTime(secondStart)}-${formatTime(secondEnd)}`)
       expect(submitted.createdLogs).toHaveLength(0)
     } finally {
@@ -206,7 +204,7 @@ test.describe('Day Script progress sync', () => {
     }
   })
 
-  test('submit progress reschedules unmarked planned focus lines before and after an out-of-order anchor', async ({ page }) => {
+  test('submit progress never reschedules other focus lines', async ({ page }) => {
     const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
     expect(offsetRes.ok()).toBeTruthy()
     const originalOffset = (await offsetRes.json()).offset
@@ -246,17 +244,12 @@ test.describe('Day Script progress sync', () => {
       })
       expect(save.ok()).toBeTruthy()
 
-      const submitted = await submitProgress(page, date, undefined, {
-        sortOrder: 1,
-        startTime: formatTime(currentStart),
-        endTime: formatTime(currentEnd),
-        headerText: `@${currentTask.title}`,
-      })
+      const submitted = await submitProgress(page, date)
       const lines = extractParagraphTexts(submitted.script.document)
-      expect(lines[0]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 10))}`)
+      expect(lines[0]).toContain(`${formatTime(skippedStart)}-${formatTime(skippedEnd)}`)
       expect(lines[1]).toBe('Planning note for skipped item')
       expect(lines[2]).toContain(`${formatTime(currentStart)}-${formatTime(currentEnd)}`)
-      expect(lines[4]).toContain(`${formatTime(addMinutes(target, 10))}-${formatTime(addMinutes(target, 30))}`)
+      expect(lines[4]).toContain(`${formatTime(nextStart)}-${formatTime(nextEnd)}`)
       expect(lines[5]).toBe('Planning note for next item')
       expect(lines[6]).toContain(`${formatTime(dragonStart)}-${formatTime(dragonEnd)}`)
       expect(submitted.createdLogs.map((log: any) => log.taskId).sort()).toEqual([currentTask.id, dragonTask.id].sort())
@@ -265,7 +258,7 @@ test.describe('Day Script progress sync', () => {
     }
   })
 
-  test('submit progress keeps previously synced timed focus lines out of rescheduling', async ({ page }) => {
+  test('submit progress keeps previously synced planned times unchanged', async ({ page }) => {
     const offsetRes = await page.request.get('/api/settings/start-of-day-offset')
     expect(offsetRes.ok()).toBeTruthy()
     const originalOffset = (await offsetRes.json()).offset
@@ -311,10 +304,63 @@ test.describe('Day Script progress sync', () => {
       const submitted = await submitProgress(page, date)
       const lines = extractParagraphTexts(submitted.script.document)
       expect(lines[0]).toContain(`${formatTime(syncedStart)}-${formatTime(syncedEnd)}`)
-      expect(lines[2]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 15))}`)
+      expect(lines[2]).toContain(`${formatTime(plannedStart)}-${formatTime(plannedEnd)}`)
     } finally {
       await page.request.put('/api/settings/start-of-day-offset', { data: { offset: originalOffset } })
     }
+  })
+
+  test('reschedule focus changes only selected valid lines and protects completed, dragon, and synced lines', async ({ page }) => {
+    const selectedTask = await createTask(page, `DayScript-RescheduleSelected-${Date.now()}`)
+    const completedTask = await createTask(page, `DayScript-RescheduleCompleted-${Date.now()}`)
+    const dragonTask = await createTask(page, `DayScript-RescheduleDragon-${Date.now()}`)
+    const laterTask = await createTask(page, `DayScript-RescheduleLater-${Date.now()}`)
+    const date = todayDate()
+    const target = ceilToFiveMinutes(new Date())
+    const selectedStart = addMinutes(target, -60)
+    const selectedEnd = addMinutes(selectedStart, 10)
+    const completedStart = addMinutes(target, -45)
+    const completedEnd = addMinutes(completedStart, 10)
+    const dragonStart = addMinutes(target, -30)
+    const dragonEnd = addMinutes(dragonStart, 10)
+    const laterStart = addMinutes(target, -15)
+    const laterEnd = addMinutes(laterStart, 15)
+
+    const saved = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: await getDayScriptRevision(page, date),
+        document: doc([
+          { text: `${formatTime(selectedStart)}-${formatTime(selectedEnd)} @${selectedTask.title}`, taskId: selectedTask.id },
+          { text: `${formatTime(completedStart)}-${formatTime(completedEnd)} @${completedTask.title} ✅`, taskId: completedTask.id },
+          { text: 'already completed' },
+          { text: `${formatTime(dragonStart)}-${formatTime(dragonEnd)} @${dragonTask.title} 🐲`, taskId: dragonTask.id },
+          { text: 'append-only record' },
+          { text: `${formatTime(laterStart)}-${formatTime(laterEnd)} @${laterTask.title}`, taskId: laterTask.id },
+        ]),
+      },
+    })
+    expect(saved.ok()).toBeTruthy()
+    const savedBody = await saved.json()
+    await submitProgress(page, date)
+
+    const rescheduled = await rescheduleFocus(page, date, savedBody.script.revision, [0, 1, 2, 3])
+    expect(rescheduled.ok()).toBeTruthy()
+    const result = await rescheduled.json()
+    expect(result.changed).toBe(true)
+    const lines = extractParagraphTexts(result.script.document)
+    expect(lines[0]).toContain(`${formatTime(target)}-${formatTime(addMinutes(target, 10))}`)
+    expect(lines[1]).toContain(`${formatTime(completedStart)}-${formatTime(completedEnd)}`)
+    expect(lines[3]).toContain(`${formatTime(dragonStart)}-${formatTime(dragonEnd)}`)
+    expect(lines[5]).toContain(`${formatTime(addMinutes(target, 10))}-${formatTime(addMinutes(target, 25))}`)
+
+    const unchanged = await rescheduleFocus(page, date, result.script.revision, [])
+    expect(unchanged.ok()).toBeTruthy()
+    expect(await unchanged.json()).toMatchObject({ changed: false, script: { revision: result.script.revision } })
+
+    const conflict = await rescheduleFocus(page, date, savedBody.script.revision, [0])
+    expect(conflict.status()).toBe(409)
+    const current = await page.request.get(`/api/day-scripts/${date}`)
+    expect((await current.json()).revision).toBe(result.script.revision)
   })
 
   test('submit progress does not delay future planned focus lines or create a new revision', async ({ page }) => {

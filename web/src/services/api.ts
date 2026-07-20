@@ -1,5 +1,5 @@
 import type { ApiInterface } from './apiTypes'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptSubmitAnchor, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraft, AgentConversation, WorkSession, SearchResult, TaskExtraInfo, AfkEvent, LlmSettings, MeetingExtractionResult, CreateMeetingRequest, DayScriptBlock, DayScriptDocument, SaveDayScriptResult, SubmitDayScriptProgressResult, TaskProgressContext, TaskSummaryTestResult, DayScriptFocusActivity, DayScriptExecutionRecord, DailySummaryResult, DailySummaryCacheResult, PlanTodayDraftResult, BackgroundTask, BackgroundTaskStatus, WorkOverviewHiddenSignal, WorkOverviewHidableSignalSourceType, Note, CreateNoteRequest, UpdateNoteRequest, NoteSearchResult, GlobalSearchResponse } from '@/types'
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
@@ -228,8 +228,11 @@ export async function getCarryOverDayScriptBlocks(date: string): Promise<DayScri
 export async function saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult> {
   return (await getApi()).saveDayScript(date, body)
 }
-export async function submitDayScriptProgress(date: string, body?: { focusActivity?: DayScriptFocusActivity[]; submitAnchor?: DayScriptSubmitAnchor }): Promise<SubmitDayScriptProgressResult> {
+export async function submitDayScriptProgress(date: string, body?: { focusActivity?: DayScriptFocusActivity[] }): Promise<SubmitDayScriptProgressResult> {
   return (await getApi()).submitDayScriptProgress(date, body)
+}
+export async function rescheduleDayScriptFocus(date: string, body: { expectedRevision: number; sortOrders: number[] }): Promise<{ script: DayScriptDocument; changed: boolean }> {
+  return (await getApi()).rescheduleDayScriptFocus(date, body)
 }
 export async function confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
   return (await getApi()).confirmDayScriptProgressSync(date, items)

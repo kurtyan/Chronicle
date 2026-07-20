@@ -395,9 +395,9 @@ test.describe('Focus rich editor and meeting task mentions', () => {
         content: [{
           type: 'paragraph',
           content: [
-            { type: 'text', text: '09:00-09:30 ' },
+            { type: 'text', text: '09:00-09:30 Carry over ' },
             { type: 'text', text: `@${carryTask.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(carryTask.id)}`, taskId: carryTask.id } }] },
-            { type: 'text', text: ' yesterday carry work' },
+            { type: 'text', text: ': yesterday carry work' },
           ],
         }],
       })
@@ -450,6 +450,12 @@ test.describe('Focus rich editor and meeting task mentions', () => {
       await expect(page.getByRole('heading', { name: recommendedTask.title })).toBeVisible()
       await expect(page).toHaveURL(new RegExp(`task=${recommendedTask.id}`))
       await expect(recommendedAction.getByRole('button', { name: 'Start Work' })).toHaveCount(0)
+
+      const carryAction = page.locator('[data-next-step-action-id^="carry_over:"]').first()
+      await carryAction.getByRole('button', { name: 'Plan' }).click()
+      const editor = page.locator('.day-script-editor.ProseMirror')
+      await expect(editor.locator(`a[data-task-id="${carryTask.id}"]`)).toHaveCount(1)
+      await expect(editor).toContainText(`Carry over @${carryTask.title}: yesterday carry work`)
     } finally {
       await page.request.put('/api/settings/llm', { data: originalSettings })
       await mock.close()
@@ -689,6 +695,43 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await editor.getByText(taskB.title).click()
     await expect(page.getByRole('heading', { name: taskB.title })).toBeVisible()
     await expect(editor.locator('.day-script-line-header').filter({ hasText: taskB.title })).toBeVisible()
+  })
+
+  test('Cmd+Shift+R reschedules the selected Focus lines', async ({ page }) => {
+    const taskA = await createTask(page, `RescheduleShortcutA-${Date.now()}`)
+    const taskB = await createTask(page, `RescheduleShortcutB-${Date.now()}`)
+    const date = uniqueScriptDate(Date.now() % 20 + 100)
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '08:00-08:10 ' },
+            { type: 'text', text: `@${taskA.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskA.id)}`, taskId: taskA.id } }] },
+          ],
+        },
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '08:10-08:25 ' },
+            { type: 'text', text: `@${taskB.title}`, marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(taskB.id)}`, taskId: taskB.id } }] },
+          ],
+        },
+      ],
+    })
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    await editor.click()
+    await page.keyboard.press('Meta+a')
+    const rescheduled = page.waitForResponse((response) => response.url().includes(`/api/day-scripts/${date}/reschedule-focus`) && response.request().method() === 'POST')
+    await page.keyboard.press('Meta+Shift+r')
+    expect((await rescheduled).ok()).toBeTruthy()
+    await expect(editor).not.toContainText('08:00-08:10')
+    await expect(editor).not.toContainText('08:10-08:25')
   })
 
   test('focus editor maps nested list progress edits to the owning task', async ({ page }) => {

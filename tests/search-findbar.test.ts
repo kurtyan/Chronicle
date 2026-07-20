@@ -63,6 +63,33 @@ test.describe('GlobalSearchDialog and FindBar interaction', () => {
     await expect(page.locator('.search-highlight-current')).toHaveCount(1)
   })
 
+  test('Cmd+F finds task title and logs in the Today task detail', async ({ page }) => {
+    const task = await (await page.request.post('/api/tasks', {
+      data: { title: 'TodayFindBarToken', type: 'TODO', priority: 'MEDIUM' },
+    })).json()
+    await page.request.post(`/api/tasks/${task.id}/logs`, {
+      data: { content: '<p>TodayFindBarToken appears in this Focus task log.</p>', type: 'log' },
+    })
+
+    await page.goto(`/today?task=${encodeURIComponent(task.id)}&lang=en`)
+    await page.waitForLoadState('load')
+    await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
+
+    await page.keyboard.press('Meta+f')
+    const findBar = page.locator('[data-find-bar="true"]')
+    await expect(findBar).toBeVisible()
+    await findBar.locator('input').fill('TodayFindBarToken')
+    await expect(findBar.getByText('1/2')).toBeVisible()
+    await expect(page.locator('.search-highlight-current')).toHaveCount(1)
+
+    await page.keyboard.press('Enter')
+    await expect(findBar.getByText('2/2')).toBeVisible()
+    await page.keyboard.press('Shift+Enter')
+    await expect(findBar.getByText('1/2')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(findBar).toHaveCount(0)
+  })
+
   test('FindBar restores the current match when React replaces highlights at the same count', async ({ page }) => {
     const task = await (await page.request.post('/api/tasks', {
       data: { title: 'FindBarReplacementTarget', type: 'TODO', priority: 'MEDIUM' },
