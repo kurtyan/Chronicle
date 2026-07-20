@@ -5,7 +5,7 @@ import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraf
 import { recordAppError } from '@/stores/appErrorStore'
 
 // Server base URL:
-// - Tauri: reads server URL from config via native command (defaults to http://localhost:8080)
+// - Tauri: reads an IPv4-loopback server URL from the native command.
 // - Web served by the server: uses relative path, works on whatever port the server uses.
 // - Dev mode (Vite): relative path, proxied to localhost:8080 by Vite.
 // Tauri v2 with withGlobalTauri: true exposes window.__TAURI__
@@ -31,7 +31,7 @@ function getClient(): Promise<AxiosInstance> {
           return axios.create({ baseURL: '' })
         }
         const { invoke } = await import('@tauri-apps/api/core')
-        const serverUrl = await invoke('get_server_url').catch(() => 'http://localhost:8080') as string
+        const serverUrl = await invoke('get_server_url').catch(() => 'http://127.0.0.1:8080') as string
         apiBase = serverUrl
         return axios.create({ baseURL: serverUrl })
       }

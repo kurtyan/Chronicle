@@ -39,8 +39,6 @@ function createFetchSSE(
         const response = await fetch(url, {
           headers: {
             Accept: 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'X-Client-Id': clientId,
           },
           signal: controller.signal,
         })

@@ -47,7 +47,7 @@ const defaultConfig: ChronicleConfig = {
     port: 9981,
   },
   lauri: {
-    serverHost: 'localhost',
+    serverHost: '127.0.0.1',
     serverPort: 9983,
   },
   ui: {
@@ -113,7 +113,9 @@ export function getConfig(): ChronicleConfig {
       port: mcpPort,
     },
     lauri: {
-      serverHost: fileConfig.lauri?.serverHost ?? defaultConfig.lauri.serverHost,
+      // The desktop client and server are intentionally same-machine only.
+      // Keep this aligned with the server's IPv4-only loopback listener.
+      serverHost: defaultConfig.lauri.serverHost,
       serverPort: lauriServerPort,
     },
     ui: {

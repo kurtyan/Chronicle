@@ -29,11 +29,20 @@ fn chronicle_log_dir() -> Result<String, String> {
     Ok(format!("{}/logs", chronicle_config_dir()?))
 }
 
+fn loopback_server_url(port: u64) -> String {
+    // The Node server deliberately binds IPv4 loopback only. `localhost` can
+    // resolve to `::1` in WebKit, where no server is listening, and surface as
+    // an unhelpful Fetch "Load failed" error in the desktop app.
+    format!("http://127.0.0.1:{}", port)
+}
+
 #[tauri::command]
 fn get_server_url() -> Result<String, String> {
     // Dev environment can override via CHRONICLE_LAURI_SERVER_PORT
     if let Ok(port) = std::env::var("CHRONICLE_LAURI_SERVER_PORT") {
-        return Ok(format!("http://localhost:{}", port));
+        let port = port.parse::<u64>()
+            .map_err(|_| "CHRONICLE_LAURI_SERVER_PORT must be a valid port")?;
+        return Ok(loopback_server_url(port));
     }
 
     // Production: read from config file
@@ -42,9 +51,8 @@ fn get_server_url() -> Result<String, String> {
         .map_err(|e| format!("Failed to read config: {}", e))?;
     let config: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse config: {}", e))?;
-    let host = config["lauri"]["serverHost"].as_str().unwrap_or("localhost");
     let port = config["lauri"]["serverPort"].as_u64().unwrap_or(8080);
-    Ok(format!("http://{}:{}", host, port))
+    Ok(loopback_server_url(port))
 }
 
 #[tauri::command]
@@ -462,6 +470,11 @@ fn detect_screen_lock() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_server_url_uses_ipv4_loopback() {
+        assert_eq!(loopback_server_url(9983), "http://127.0.0.1:9983");
+    }
 
     #[test]
     fn try_cg_session_handles_null() {
