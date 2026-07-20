@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useTaskStore } from '@/stores/taskStore'
+import { DRAFT_TASK_ID, useTaskStore } from '@/stores/taskStore'
 import type { Task, TaskType, SearchResult } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
@@ -16,7 +16,7 @@ import { registerShortcut } from '@/shortcuts/registry'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-const DRAFT_ID = '__draft__'
+const DRAFT_ID = DRAFT_TASK_ID
 const BOARD_TASK_LIST_PERCENT_KEY = 'chronicle_tasklist_pct'
 const BOARD_TASK_LIST_MIN_WIDTH = 180
 const BOARD_DETAIL_MIN_WIDTH = 320

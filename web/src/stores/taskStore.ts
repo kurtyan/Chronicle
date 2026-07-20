@@ -2,6 +2,9 @@ import { create } from 'zustand'
 import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession, SearchResult, TaskProgressContext } from '@/types'
 import * as api from '@/services/api'
 
+// This is a UI-only selection marker, never an ID accepted by the API.
+export const DRAFT_TASK_ID = '__draft__'
+
 // All UI task mutations go through this store. Serialize writes per task so a
 // slower earlier response can never overwrite a later title/status update.
 const taskMutationQueues = new Map<string, Promise<unknown>>()
@@ -224,6 +227,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   setActiveTask: async (id) => {
+    if (id === DRAFT_TASK_ID) {
+      // A draft has no persisted task, entries, or pinned section to load.
+      // Keeping this boundary here protects every caller, including SSE
+      // refresh handlers, from querying /api/tasks/__draft__.
+      set({ activeTaskId: id, selectedTask: null, entries: [], pinnedEntry: null, entryLoading: false })
+      return
+    }
     set({ activeTaskId: id, entryLoading: true, pinnedEntry: null })
     try {
       const [task, entries, pinnedEntry] = id

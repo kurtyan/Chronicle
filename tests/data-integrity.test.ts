@@ -51,6 +51,26 @@ test.describe('Task entry data integrity', () => {
     expect(create.status()).toBe(400)
   })
 
+  test('never queries the UI-only draft task ID during local or SSE refreshes', async ({ page }) => {
+    let draftRequestCount = 0
+    await page.route('**/api/tasks/__draft__**', async (route) => {
+      draftRequestCount++
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Not found' }) })
+    })
+
+    await page.goto('/?lang=en')
+    await page.getByRole('button', { name: 'New' }).first().click()
+    await expect(page.getByPlaceholder('Task title...')).toBeVisible()
+
+    const title = `ExternalSseRefresh-${Date.now()}`
+    const created = await page.request.post('/api/tasks', {
+      data: { title, type: 'TODO', priority: 'MEDIUM' },
+    })
+    expect(created.ok()).toBeTruthy()
+    await expect(page.getByText(title)).toBeVisible()
+    expect(draftRequestCount).toBe(0)
+  })
+
   test('does not reuse a deleted task id', async ({ page }) => {
     const first = await createTask(page, `NoIdReuse-First-${Date.now()}`)
     const deleted = await page.request.delete(`/api/tasks/${first.id}`)
