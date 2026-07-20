@@ -58,6 +58,7 @@ const publicDir = findPublicDir()
 const config = getConfig()
 const app = new Hono()
 const service = new AppService()
+let databaseMaintenance = false
 
 type PublicTaskEntryType = 'body' | 'log'
 const PUBLIC_TASK_TYPES = new Set(['TODO', 'TOREAD', 'DAILY_IMPROVE'])
@@ -74,6 +75,7 @@ function validateTaskPayload(body: any, create = false): string | null {
   if (body.tags !== undefined && !isStringArray(body.tags)) return 'tags must be an array of strings'
   if (body.dueDate !== undefined && body.dueDate !== null && !Number.isFinite(body.dueDate)) return 'dueDate must be a timestamp'
   if (body.body !== undefined && typeof body.body !== 'string') return 'body must be a string'
+  if (body.reservedId !== undefined && (typeof body.reservedId !== 'string' || !/^T\d{10}$/.test(body.reservedId))) return 'Invalid task ID reservation'
   return null
 }
 
@@ -120,6 +122,16 @@ app.use('/*', cors({
   allowMethods: ['GET', 'HEAD', 'PUT', 'POST', 'DELETE', 'PATCH', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'X-Client-Id', 'X-Claude-Conversation-Id'],
 }))
+
+app.use('/*', async (c, next) => {
+  // Import replaces the live SQLite file and reinitializes the singleton
+  // connection. Reject concurrent API work instead of letting it race a closed
+  // connection or write to the database that is about to be replaced.
+  if (databaseMaintenance && c.req.path !== '/api/settings/import') {
+    return c.json({ error: 'Database maintenance in progress. Please retry shortly.' }, 503)
+  }
+  await next()
+})
 
 import { backfillAgentConversationsFromTaskLogs, getTaskById as getTaskByIdSync, setTaskExtraInfo } from './services/taskService'
 
@@ -239,8 +251,20 @@ app.get('/api/tasks/today', async (c) => {
   return c.json(await service.fetchTodayTasks())
 })
 
+function createTaskIdReservation(c: any) {
+  c.header('Cache-Control', 'no-store')
+  return c.json({ id: service.reserveTaskId() })
+}
+
+// POST makes the state-changing reservation explicit and avoids a browser or
+// intermediary treating an allocated ID as cacheable data.
+app.post('/api/tasks/reservations', async (c) => {
+  return createTaskIdReservation(c)
+})
+
+// Keep the previous local-only endpoint working for an already-open older UI.
 app.get('/api/tasks/next-id', async (c) => {
-  return c.json({ id: service.getNextTaskId() })
+  return createTaskIdReservation(c)
 })
 
 app.get('/api/tasks/pinned', async (c) => {
@@ -252,7 +276,14 @@ app.post('/api/tasks', async (c) => {
   const body = await c.req.json()
   const error = validateTaskPayload(body, true)
   if (error) return c.json({ error }, 400)
-  const task = await service.createTask(body)
+  let task
+  try {
+    task = await service.createTask(body)
+  } catch (err: any) {
+    const message = err?.message || 'Failed to create task'
+    if (/reservation/i.test(message)) return c.json({ error: message }, 409)
+    throw err
+  }
   const conversationId = c.req.header('X-Claude-Conversation-Id')
   if (conversationId) {
     setTaskExtraInfo(task.id, 'claude_conversation_id', conversationId)
@@ -1045,6 +1076,7 @@ app.get('/api/settings/export', async (c) => {
 })
 
 app.post('/api/settings/import', async (c) => {
+  if (databaseMaintenance) return c.json({ error: 'Database maintenance already in progress' }, 503)
   try {
     const formData = await c.req.formData()
     const file = formData.get('file')
@@ -1055,11 +1087,14 @@ app.post('/api/settings/import', async (c) => {
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
 
+    databaseMaintenance = true
     const result = await importDatabase(buffer)
     broadcastEvent('db_imported', {}, c.get('clientId'))
     return c.json(result)
   } catch (err: any) {
     return c.json({ error: err.message || 'Import failed' }, 400)
+  } finally {
+    databaseMaintenance = false
   }
 })
 

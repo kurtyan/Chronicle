@@ -173,6 +173,15 @@ export function useSSE() {
 
       const handlers: Record<string, (data: string) => void> = {
         heartbeat: () => {},
+        resync: () => {
+          // The server intentionally drops granular events for a slow client.
+          // Re-fetch authoritative state instead of replaying an unbounded queue.
+          console.log('[SSE] resync requested after backpressure')
+          loadTodos()
+          loadPinnedIds()
+          loadCurrentSession()
+          if (activeTaskIdRef.current) setActiveTask(activeTaskIdRef.current)
+        },
         task_created: () => {
           console.log('[SSE] task_created, calling loadTodos')
           loadTodos()

@@ -59,6 +59,32 @@ test.describe('Task entry data integrity', () => {
     expect(second.id).not.toBe(first.id)
   })
 
+  test('claims a durable draft task-id reservation instead of predicting the next id', async ({ page }) => {
+    const reservation = await page.request.post('/api/tasks/reservations')
+    expect(reservation.ok()).toBeTruthy()
+    const { id: reservedId } = await reservation.json()
+
+    const unrelated = await createTask(page, `Reservation-Unrelated-${Date.now()}`)
+    expect(unrelated.id).not.toBe(reservedId)
+
+    const claimed = await page.request.post('/api/tasks', {
+      data: {
+        title: `Reservation-Claimed-${Date.now()}`,
+        type: 'TODO',
+        priority: 'MEDIUM',
+        reservedId,
+        body: '<p>Attachment-bearing draft body</p>',
+      },
+    })
+    expect(claimed.status()).toBe(201)
+    expect((await claimed.json()).id).toBe(reservedId)
+
+    const reused = await page.request.post('/api/tasks', {
+      data: { title: 'Reservation must not be reused', type: 'TODO', priority: 'LOW', reservedId },
+    })
+    expect(reused.status()).toBe(409)
+  })
+
   test('exports and restores a complete ZIP backup including recent writes and attachments', async ({ page }) => {
     const task = await createTask(page, `ExportSnapshot-${Date.now()}`)
     const attachmentPath = `/private/tmp/chronicle-playwright-data/attachments/${task.id}/evidence.txt`

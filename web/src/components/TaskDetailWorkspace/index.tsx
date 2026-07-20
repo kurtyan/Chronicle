@@ -568,7 +568,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
             <input
               className="text-xl font-bold flex-1 bg-transparent border-b border-primary focus:outline-none"
               value={titleInput}
-              onChange={(e) => { setTitleInput(e.target.value); if (activeTaskId) updateTask(activeTaskId, { title: e.target.value.trim() }) }}
+              onChange={(e) => setTitleInput(e.target.value)}
               onBlur={handleTitleSave}
               onKeyDown={handleTitleKeyDown}
               autoFocus

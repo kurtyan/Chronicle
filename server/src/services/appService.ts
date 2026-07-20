@@ -5,7 +5,7 @@ import {
   startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
   setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
   extractAndAddAgentConversationsFromEntry, getTaskAgentConversations,
-  createAfkEvent, updateAfkEvent, getAfkEvents, getNextTaskId,
+  createAfkEvent, updateAfkEvent, getAfkEvents, reserveTaskId,
   getPinnedEntry, appendToPinnedEntry, unpinEntry,
   type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent, type AgentConversation,
 } from './taskService'
@@ -100,12 +100,13 @@ export class AppService {
     status?: string
     dueDate?: number
     body?: string
+    reservedId?: string
   }): Promise<Task> {
     return createTask(data)
   }
 
-  getNextTaskId(): string {
-    return getNextTaskId()
+  reserveTaskId(): string {
+    return reserveTaskId()
   }
 
   async updateTask(id: string, data: {

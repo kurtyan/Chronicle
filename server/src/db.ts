@@ -39,6 +39,15 @@ export function initDb() {
     )
   `)
 
+  // Rich editors can attach files before a task is submitted. Reserve that
+  // future task ID durably so attachments never rely on a predicted MAX(id).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS task_id_reservations (
+      id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL
+    )
+  `)
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS task_entries (
       id TEXT PRIMARY KEY,

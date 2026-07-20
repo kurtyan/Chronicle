@@ -91,8 +91,8 @@ export const httpApi: ApiInterface = {
     return data
   },
 
-  async getNextTaskId(): Promise<string> {
-    const { data } = await (await withClientId()).get<{ id: string }>('/api/tasks/next-id')
+  async reserveTaskId(): Promise<string> {
+    const { data } = await (await withClientId()).post<{ id: string }>('/api/tasks/reservations')
     return data.id
   },
 

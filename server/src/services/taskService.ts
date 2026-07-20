@@ -36,8 +36,19 @@ export function allocateTaskId(): string {
   return `T${String(next).padStart(10, '0')}`
 }
 
-export function getNextTaskId(): string {
-  return `T${String(currentTaskSequence() + 1).padStart(10, '0')}`
+export function reserveTaskId(): string {
+  return getDb().transaction(() => {
+    const id = allocateTaskId()
+    run('INSERT INTO task_id_reservations (id, created_at) VALUES (?, ?)', [id, Date.now()])
+    return id
+  })()
+}
+
+function claimReservedTaskId(id: string): string {
+  if (!/^T\d{10}$/.test(id)) throw new Error('Invalid task ID reservation')
+  const claimed = run('DELETE FROM task_id_reservations WHERE id = ?', [id])
+  if (claimed.changes !== 1) throw new Error('Task ID reservation is invalid or expired')
+  return id
 }
 
 export interface Task {
@@ -253,40 +264,43 @@ export function createTask(data: {
   status?: string
   dueDate?: number
   body?: string
+  reservedId?: string
 }): Task {
   const now = Date.now()
-  const id = allocateTaskId()
   const status = data.status ?? 'PENDING'
-
-  run(
-    `INSERT INTO tasks (id, title, type, priority, tags, status, created_at, updated_at, started_at, completed_at, due_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      id,
-      data.title,
-      data.type,
-      data.priority,
-      JSON.stringify(data.tags ?? []),
-      status,
-      now,
-      now,
-      status === 'DOING' ? now : null,
-      null,
-      data.dueDate ?? null,
-    ]
-  )
-
-  // Create body entry if provided
-  if (data.body && data.body.trim()) {
-    const entryId = crypto.randomUUID()
+  let id = ''
+  getDb().transaction(() => {
+    id = data.reservedId ? claimReservedTaskId(data.reservedId) : allocateTaskId()
     run(
-      'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
-      [entryId, id, data.body.trim(), 'body', now]
+      `INSERT INTO tasks (id, title, type, priority, tags, status, created_at, updated_at, started_at, completed_at, due_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        data.title,
+        data.type,
+        data.priority,
+        JSON.stringify(data.tags ?? []),
+        status,
+        now,
+        now,
+        status === 'DOING' ? now : null,
+        null,
+        data.dueDate ?? null,
+      ]
     )
-    upsertTaskEntrySearchDocument(id, entryId, sourceForEntryType('body'), data.body.trim(), now)
-  }
 
-  upsertTaskSearchDocument(id, data.title, data.tags ?? [])
+    // Search documents live in the same SQLite database, so commit them with
+    // the task instead of exposing a half-created task to search.
+    if (data.body && data.body.trim()) {
+      const entryId = crypto.randomUUID()
+      run(
+        'INSERT INTO task_entries (id, task_id, content, type, created_at) VALUES (?, ?, ?, ?, ?)',
+        [entryId, id, data.body.trim(), 'body', now]
+      )
+      upsertTaskEntrySearchDocument(id, entryId, sourceForEntryType('body'), data.body.trim(), now)
+    }
+    upsertTaskSearchDocument(id, data.title, data.tags ?? [])
+  })()
 
   return getTaskById(id)!
 }

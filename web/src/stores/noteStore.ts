@@ -10,6 +10,7 @@ interface NoteState {
   linkedTasks: Task[]
   loading: boolean
   saveStatus: SaveStatus
+  lastSaveConflict: boolean
   error: string | null
   includeArchived: boolean
   loadNotes: (options?: { includeArchived?: boolean; query?: string }) => Promise<Note[]>
@@ -27,6 +28,7 @@ export const useNoteStore = create<NoteState>((set, get) => ({
   linkedTasks: [],
   loading: false,
   saveStatus: 'idle',
+  lastSaveConflict: false,
   error: null,
   includeArchived: false,
 
@@ -75,11 +77,14 @@ export const useNoteStore = create<NoteState>((set, get) => ({
   updateActiveNote: async (data) => {
     const active = get().activeNote
     if (!active) return null
-    set({ saveStatus: 'saving' })
+    set({ saveStatus: 'saving', lastSaveConflict: false })
     try {
-      const note = await api.updateNote(active.id, data)
+      const note = await api.updateNote(active.id, {
+        ...data,
+        expectedRevision: data.expectedRevision ?? active.revision,
+      })
       if (!note) {
-        set({ saveStatus: 'error' })
+        set({ saveStatus: 'error', lastSaveConflict: false })
         return null
       }
       set((state) => ({
@@ -90,7 +95,11 @@ export const useNoteStore = create<NoteState>((set, get) => ({
       await get().loadLinkedTasks(note.id)
       return note
     } catch (error: any) {
-      set({ saveStatus: 'error', error: error?.message || 'Failed to save note' })
+      set({
+        saveStatus: 'error',
+        lastSaveConflict: error?.response?.status === 409 || error?.code === 'NOTE_REVISION_CONFLICT',
+        error: error?.message || 'Failed to save note',
+      })
       return null
     }
   },

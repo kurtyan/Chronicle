@@ -16,6 +16,8 @@ const NOTES_LIST_PERCENT_KEY = 'chronicle_notes_list_pct'
 const NOTES_LIST_MIN_WIDTH = 180
 const NOTES_DETAIL_MIN_WIDTH = 320
 
+type NoteDraftSnapshot = { title: string; contentHtml: string; tags: string[] }
+
 function isEditing(allowFindBarInput = false): boolean {
   const active = document.activeElement as HTMLElement | null
   if (!active) return false
@@ -49,6 +51,7 @@ export function NotesPage() {
   const [findTokens, setFindTokens] = useState<string[]>([])
   const [findCurrentMatchIndex, setFindCurrentMatchIndex] = useState(-1)
   const [localSaveStatus, setLocalSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveConflict, setSaveConflict] = useState<{ noteId: string; draft: NoteDraftSnapshot } | null>(null)
   const [notesListWidth, setNotesListWidth] = useState(() => {
     const saved = localStorage.getItem(NOTES_LIST_PERCENT_KEY)
     const pct = saved ? parseFloat(saved) : 0.3
@@ -303,13 +306,20 @@ export function NotesPage() {
         if (saved) {
           draftServerRevisionRef.current = saved.revision
           localStorage.removeItem(`chronicle:note_draft:${saved.id}`)
+          setSaveConflict((current) => current?.noteId === saved.id ? null : current)
           setLocalSaveStatus('saved')
         } else {
+          if (useNoteStore.getState().lastSaveConflict) {
+            setSaveConflict({ noteId, draft: liveDraft })
+          }
           setLocalSaveStatus('error')
         }
       }
-    } catch {
+    } catch (error: any) {
       if (localRevisionRef.current === revAtFlush) {
+        if (error?.response?.status === 409 || error?.code === 'NOTE_REVISION_CONFLICT') {
+          setSaveConflict({ noteId, draft: liveDraft })
+        }
         setLocalSaveStatus('error')
       }
     }
@@ -356,6 +366,34 @@ export function NotesPage() {
   function handleArchiveWrapper() {
     void handleArchive()
   }
+
+  const handleReloadConflict = useCallback(async () => {
+    const conflict = saveConflict
+    if (!conflict) return
+    const fresh = await api.getNoteById(conflict.noteId)
+    if (!fresh) return
+    localStorage.removeItem(`chronicle:note_draft:${conflict.noteId}`)
+    draftNoteIdRef.current = null
+    navigate(`/notes?id=${encodeURIComponent(conflict.noteId)}`)
+    await setActiveNote(conflict.noteId)
+    const active = useNoteStore.getState().activeNote
+    if (active?.id === conflict.noteId) applyNoteDraft(active)
+    setSaveConflict(null)
+  }, [applyNoteDraft, navigate, saveConflict, setActiveNote])
+
+  const handleKeepConflictCopy = useCallback(async () => {
+    const conflict = saveConflict
+    if (!conflict) return
+    const copy = await createNote({
+      title: `${conflict.draft.title || 'Untitled note'} (conflict copy)`,
+      contentHtml: conflict.draft.contentHtml,
+      tags: conflict.draft.tags,
+    })
+    localStorage.removeItem(`chronicle:note_draft:${conflict.noteId}`)
+    setSaveConflict(null)
+    navigate(`/notes?id=${encodeURIComponent(copy.id)}`)
+    applyNoteDraft(copy)
+  }, [applyNoteDraft, createNote, navigate, saveConflict])
 
   useEffect(() => {
     const unregisters = [
@@ -520,6 +558,15 @@ export function NotesPage() {
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
+            {saveConflict && (
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-[30px] py-2 text-xs text-amber-950 dark:text-amber-100">
+                <span>This note changed elsewhere. Your local draft is safe; choose how to resolve it.</span>
+                <div className="flex shrink-0 gap-2">
+                  <button className="rounded border border-amber-600/40 px-2 py-1 hover:bg-amber-500/10" onClick={() => void handleReloadConflict()}>Reload server version</button>
+                  <button className="rounded border border-amber-600/40 px-2 py-1 hover:bg-amber-500/10" onClick={() => void handleKeepConflictCopy()}>Keep as new note</button>
+                </div>
+              </div>
+            )}
             {!activeNote ? (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
                 Select or create a note.

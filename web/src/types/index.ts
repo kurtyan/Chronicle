@@ -26,6 +26,9 @@ export interface CreateTaskRequest {
   status?: TaskStatus
   dueDate?: number
   body?: string
+  // Returned by POST /api/tasks/reservations. It is a durable server-side reservation
+  // used by drafts that need an attachment directory before submission.
+  reservedId?: string
 }
 
 export interface UpdateTaskRequest {

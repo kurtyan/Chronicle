@@ -8,7 +8,7 @@ import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { FindBar } from '@/components/FindBar'
-import { getNextTaskId } from '@/services/api'
+import { reserveTaskId } from '@/services/api'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
 import { setSearchJumpIntent } from '@/lib/searchJump'
@@ -132,6 +132,8 @@ export function BoardPage() {
   const [draftPriority, setDraftPriority] = useState<'HIGH' | 'MEDIUM' | 'LOW'>('MEDIUM')
   const [draftTags, setDraftTags] = useState('')
   const [draftDueDate, setDraftDueDate] = useState('')
+  // A late reservation response must never attach itself to a newer draft.
+  const draftReservationEpoch = useRef(0)
 
   // Expanded filter bar (new + done + dropped slide)
   const [expandedFilter, setExpandedFilter] = useState(false)
@@ -428,8 +430,16 @@ export function BoardPage() {
         const s = stateRef.current
         if (s.currentSession) doAfk()
         const prevTaskId = s.activeTaskId && s.activeTaskId !== DRAFT_ID ? s.activeTaskId : null
-        // Get a real taskId from server for attachment support
-        const taskId = await getNextTaskId()
+        const reservationEpoch = ++draftReservationEpoch.current
+        // Reserve a durable task ID before opening the shortcut-created draft,
+        // so its attachments cannot later be claimed by another task.
+        let taskId: string | null = null
+        try {
+          taskId = await reserveTaskId()
+        } catch {
+          // The draft remains usable without pre-submit attachments.
+        }
+        if (reservationEpoch !== draftReservationEpoch.current) return
         setDraftTitle('')
         setDraftBody('')
         setDraftType('TODO')
@@ -591,6 +601,7 @@ export function BoardPage() {
     }
     // Remember previous task
     const prevTaskId = activeTaskId && activeTaskId !== DRAFT_ID ? activeTaskId : null
+    const reservationEpoch = ++draftReservationEpoch.current
     // Reset draft
     setDraftTitle('')
     setDraftBody('')
@@ -603,11 +614,14 @@ export function BoardPage() {
     useTaskStore.setState({ previousActiveTaskId: prevTaskId })
     setActiveTask(DRAFT_ID)
     // Get taskId asynchronously for attachment support (non-blocking)
-    getNextTaskId().then((id) => {
+    reserveTaskId().then((id) => {
+      if (reservationEpoch !== draftReservationEpoch.current) return
       useTaskStore.setState({ draftTaskId: id })
     }).catch(() => {
-      // Fallback: use DRAFT_ID if server is unavailable
-      useTaskStore.setState({ draftTaskId: DRAFT_ID })
+      if (reservationEpoch !== draftReservationEpoch.current) return
+      // No reservation means no pre-submit attachment directory. Do not send
+      // the UI-only DRAFT_ID as if it were a server task reservation.
+      useTaskStore.setState({ draftTaskId: null })
     })
   }
 
@@ -629,6 +643,7 @@ export function BoardPage() {
 
   async function doCancelDraft() {
     setShowCancelConfirm(false)
+    draftReservationEpoch.current += 1
     const prevId = useTaskStore.getState().previousActiveTaskId
     cancelDraft()
     await setActiveTask(null)

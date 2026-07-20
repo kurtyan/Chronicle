@@ -2,6 +2,10 @@ import { create } from 'zustand'
 import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession, SearchResult, TaskProgressContext } from '@/types'
 import * as api from '@/services/api'
 
+// All UI task mutations go through this store. Serialize writes per task so a
+// slower earlier response can never overwrite a later title/status update.
+const taskMutationQueues = new Map<string, Promise<unknown>>()
+
 export interface DraftTask {
   title: string
   body: string
@@ -242,6 +246,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         set({ entries, pinnedEntry, entryLoading: false, selectedTask: null })
       }
     } catch {
+      // An older task request may fail after the user has already selected a
+      // different task. Do not clear the newer task's detail pane.
+      if (get().activeTaskId !== id) return
       set({ entries: [], pinnedEntry: null, entryLoading: false, selectedTask: null })
     }
   },
@@ -253,7 +260,18 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   updateTask: async (id, req) => {
-    const updated = await api.updateTask(id, req)
+    const previous = taskMutationQueues.get(id) ?? Promise.resolve()
+    const operation = previous
+      .catch(() => undefined)
+      .then(() => api.updateTask(id, req))
+    taskMutationQueues.set(id, operation)
+
+    let updated: Task | null
+    try {
+      updated = await operation
+    } finally {
+      if (taskMutationQueues.get(id) === operation) taskMutationQueues.delete(id)
+    }
     if (!updated) return null
     set((state) => ({
       tasks: state.tasks.map((t) => (t.id === id ? updated : t)).sort((a, b) => b.updatedAt - a.updatedAt),
@@ -506,7 +524,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   startDraft: (data) => set({ draftTask: data }),
 
   commitDraft: async () => {
-    const { draftTask } = get()
+    const { draftTask, draftTaskId } = get()
     if (!draftTask || !draftTask.title.trim()) return
     const task = await api.createTask({
       title: draftTask.title.trim(),
@@ -515,11 +533,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       tags: draftTask.tags,
       dueDate: draftTask.dueDate ?? undefined,
       body: draftTask.body.trim() || undefined,
+      reservedId: draftTaskId ?? undefined,
     })
     // No auto-takeOver — task stays PENDING
     set((state) => ({
       tasks: [...state.tasks, task].sort((a, b) => b.updatedAt - a.updatedAt),
       draftTask: null,
+      draftTaskId: null,
       activeTaskId: task.id,
       selectedTask: task,
       previousActiveTaskId: null,
@@ -529,7 +549,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set({ entries })
   },
 
-  cancelDraft: () => set({ draftTask: null }),
+  cancelDraft: () => set({ draftTask: null, draftTaskId: null }),
 
   takeOver: async (taskId) => {
     const session = await api.takeOverTask(taskId)

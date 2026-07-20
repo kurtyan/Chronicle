@@ -3,7 +3,7 @@ import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskLogDraf
 
 // Deployment: server API + Tauri UI.
 // Always use HTTP API — the Tauri desktop app connects to the local server at localhost:8080.
-// The embedded sql.js path is no longer used.
+// The browser does not carry a second embedded database implementation.
 
 let _api: ApiInterface | null = null
 
@@ -19,8 +19,8 @@ async function getApi(): Promise<ApiInterface> {
 export async function fetchTodos(type?: string, status?: string): Promise<Task[]> {
   return (await getApi()).fetchTodos(type, status)
 }
-export async function getNextTaskId(): Promise<string> {
-  return (await getApi()).getNextTaskId()
+export async function reserveTaskId(): Promise<string> {
+  return (await getApi()).reserveTaskId()
 }
 export async function getTaskById(id: string): Promise<Task | null> {
   return (await getApi()).getTaskById(id)

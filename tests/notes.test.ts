@@ -155,6 +155,43 @@ test.describe('Notes', () => {
     expect(current.contentHtml).not.toContain('Stale overwrite')
   })
 
+  test('keeps a conflicted local note draft as a recoverable new note', async ({ page }) => {
+    const unique = Date.now()
+    const note = await createNote(page, `ConflictUi-${unique}`, '<p>Original</p>')
+    await page.goto(`/notes?id=${note.id}&lang=en`)
+    const titleInput = page.getByPlaceholder('Untitled note')
+    await expect(titleInput).toHaveValue(note.title)
+
+    const append = await page.request.post(`/api/notes/${note.id}/append`, {
+      data: { contentHtml: '<p>Server-side append</p>' },
+    })
+    expect(append.ok()).toBeTruthy()
+
+    await titleInput.fill(`${note.title} local edit`)
+    await expect(page.getByText('This note changed elsewhere. Your local draft is safe; choose how to resolve it.')).toBeVisible({ timeout: 5000 })
+    await page.getByRole('button', { name: 'Keep as new note' }).click()
+
+    await expect.poll(async () => {
+      const notes = await (await page.request.get(`/api/notes?q=${encodeURIComponent(`ConflictUi-${unique}`)}&includeArchived=true`)).json()
+      return notes.some((item: any) => item.id !== note.id && item.title === `${note.title} local edit (conflict copy)`)
+    }).toBeTruthy()
+
+    const original = await (await page.request.get(`/api/notes/${note.id}`)).json()
+    expect(original.contentHtml).toContain('Server-side append')
+  })
+
+  test('pins a note using its current revision', async ({ page }) => {
+    const note = await createNote(page, `PinRevision-${Date.now()}`)
+    await page.goto(`/notes?id=${note.id}&lang=en`)
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue(note.title)
+    await page.getByTitle('Pin').click()
+
+    await expect.poll(async () => {
+      const current = await (await page.request.get(`/api/notes/${note.id}`)).json()
+      return current.pinned
+    }).toBeTruthy()
+  })
+
   test('deleting a task removes stale note links', async ({ page }) => {
     const unique = Date.now()
     const task = await createTask(page, `DeleteLinkedTask-${unique}`)
