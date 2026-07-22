@@ -291,23 +291,15 @@ function moveSelectionToTextblockBoundary(editor: Editor, edge: 'start' | 'end')
   return true
 }
 
-function splitAfterLink(editor: Editor): boolean {
-  const { state, view } = editor
-  const { selection, schema } = state
-  const linkType = schema.marks.link
-  if (!linkType || !selection.empty) return false
-
-  const { $from } = selection
+function splitListItemOnEnter(editor: Editor): boolean {
+  const { $from } = editor.state.selection
   if (!$from.parent.isTextblock) return false
-  const nodeBefore = $from.nodeBefore
-  const nodeAfter = $from.nodeAfter
-  const hasLinkBefore = !!nodeBefore?.marks.some((mark) => mark.type === linkType)
-  const continuesLinkAfter = !!nodeAfter?.marks.some((mark) => mark.type === linkType)
-  if (!hasLinkBefore || continuesLinkAfter) return false
 
-  const tr = state.tr.split(selection.from).removeStoredMark(linkType).scrollIntoView()
-  view.dispatch(tr)
-  return true
+  const isInList = Array.from({ length: $from.depth }, (_, index) => $from.node(index + 1).type.name)
+    .some((name) => name === 'orderedList' || name === 'bulletList')
+  if (!isInList) return false
+
+  return editor.commands.splitListItem('listItem')
 }
 
 function findTaskMentionRangeInCurrentLine(editor: Editor): { from: number; to: number } | null {
@@ -465,7 +457,7 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
           }
         }
         if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === 'Enter') {
-          if (splitAfterLink(editorRef.current!)) {
+          if (splitListItemOnEnter(editorRef.current!)) {
             event.preventDefault()
             return true
           }

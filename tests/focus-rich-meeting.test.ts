@@ -60,6 +60,25 @@ function paragraph(text: string, taskId?: string) {
   }
 }
 
+function trailingLinkDocument(listType: 'orderedList' | 'bulletList' | null, text: string) {
+  const linkedParagraph = {
+    type: 'paragraph',
+    content: [{
+      type: 'text',
+      text,
+      marks: [{ type: 'link', attrs: { href: 'https://example.com/runbook', taskId: null } }],
+    }],
+  }
+  if (!listType) return { type: 'doc', content: [linkedParagraph] }
+  return {
+    type: 'doc',
+    content: [{
+      type: listType,
+      content: [{ type: 'listItem', content: [linkedParagraph] }],
+    }],
+  }
+}
+
 async function getTaskEntries(page: Page, taskId: string) {
   const res = await page.request.get(`/api/tasks/${taskId}/logs`)
   expect(res.ok()).toBeTruthy()
@@ -482,6 +501,55 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('p').nth(0)).toContainText('https://example.com/runbook')
     await expect(editor.locator('p').nth(1)).toContainText('next line')
     await expect(editor.locator('p').nth(1).locator('a')).toHaveCount(0)
+  })
+
+  test('focus editor continues lists and clears the link mark after a trailing link', async ({ page }) => {
+    const cases: Array<{ listType: 'orderedList' | 'bulletList' | null; selector: string; label: string }> = [
+      { listType: 'orderedList', selector: 'ol', label: 'ordered list' },
+      { listType: 'bulletList', selector: 'ul', label: 'bullet list' },
+      { listType: null, selector: '', label: 'paragraph' },
+    ]
+
+    for (const [index, scenario] of cases.entries()) {
+      await test.step(scenario.label, async () => {
+        const date = uniqueScriptDate(1_500 + Math.floor(Math.random() * 1_000) + index)
+        const linkText = `trailing link ${scenario.label}`
+        await saveDayScript(page, date, trailingLinkDocument(scenario.listType, linkText))
+        await page.goto(`/today?date=${date}&lang=en`)
+        await page.waitForLoadState('load')
+
+        const editor = page.locator('.day-script-editor.ProseMirror')
+        const originalParagraph = scenario.listType
+          ? editor.locator(`${scenario.selector} > li > p`).first()
+          : editor.locator(':scope > p').first()
+        await originalParagraph.locator('a').evaluate((link) => {
+          const editorElement = link.closest('[contenteditable="true"]') as HTMLElement
+          editorElement.focus()
+          const range = document.createRange()
+          range.setStartAfter(link)
+          range.collapse(true)
+          const selection = window.getSelection()!
+          selection.removeAllRanges()
+          selection.addRange(range)
+          document.dispatchEvent(new Event('selectionchange'))
+        })
+        await page.keyboard.press('Enter')
+
+        if (scenario.listType) {
+          const items = editor.locator(`${scenario.selector} > li`)
+          await expect(items).toHaveCount(2)
+          await expect(items.nth(0).locator('a')).toHaveText(linkText)
+          await expect(items.nth(1).locator('p')).toBeEmpty()
+          await expect(items.nth(1).locator('a')).toHaveCount(0)
+        } else {
+          const paragraphs = editor.locator(':scope > p')
+          await expect(paragraphs).toHaveCount(2)
+          await expect(paragraphs.nth(0).locator('a')).toHaveText(linkText)
+          await expect(paragraphs.nth(1)).toBeEmpty()
+          await expect(paragraphs.nth(1).locator('a')).toHaveCount(0)
+        }
+      })
+    }
   })
 
   test('focus editor renders new task badge as non-editable', async ({ page }) => {
