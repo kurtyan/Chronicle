@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession, SearchResult, TaskProgressContext } from '@/types'
+import type { Task, CreateTaskRequest, UpdateTaskRequest, TaskEntry, TaskType, Priority, WorkSession, AfkTransitionResult, SearchResult, TaskProgressContext } from '@/types'
 import * as api from '@/services/api'
 
 // This is a UI-only selection marker, never an ID accepted by the API.
@@ -68,7 +68,7 @@ interface TaskState {
   cancelDraft: () => void
   takeOver: (taskId: string) => Promise<WorkSession>
   resumeFromAfk: (taskId: string, startedAt: number) => Promise<WorkSession>
-  doAfk: () => Promise<void>
+  doAfk: (endedAt?: number | null) => Promise<AfkTransitionResult>
   autoTakeOver: (taskId: string) => Promise<void>
   doDrop: (id: string, reason: string) => Promise<Task | null>
   setLogContentDraft: (taskId: string, content: string) => void
@@ -590,11 +590,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     return session
   },
 
-  doAfk: async () => {
-    await api.doAfk()
-    const afkTime = Date.now()
-    localStorage.setItem('chronicle_lastAfkTime', String(afkTime))
-    set({ currentSession: null, lastAfkTime: afkTime })
+  doAfk: async (endedAt) => {
+    const result = await api.doAfk(endedAt)
+    if (result.currentSession) {
+      localStorage.removeItem('chronicle_lastAfkTime')
+      set({ currentSession: result.currentSession, lastAfkTime: null })
+    } else {
+      const afkTime = result.endedSession?.endedAt ?? endedAt ?? Date.now()
+      localStorage.setItem('chronicle_lastAfkTime', String(afkTime))
+      set({ currentSession: null, lastAfkTime: afkTime })
+    }
+    return result
   },
 
   autoTakeOver: async (taskId) => {

@@ -1054,7 +1054,12 @@ function useAutoAfk() {
   })
   const [resumeToast, setResumeToast] = useState<{ open: boolean; title: string }>({ open: false, title: '' })
   const afkInProgressRef = useRef(false)
-  const pendingAutoAfkRef = useRef<{ taskId: string; reason: string; triggeredAt: number } | null>(null)
+  const pendingAutoAfkRef = useRef<{
+    resumeTaskId: string | null
+    reason: string
+    triggeredAt: number
+    resolvedAt: number | null
+  } | null>(null)
 
   useEffect(() => {
     const p = (async () => {
@@ -1072,18 +1077,22 @@ function useAutoAfk() {
             return
           }
           console.log('[Auto-AFK] event received:', reason)
-          const currentSession = useTaskStore.getState().currentSession
           const triggeredAt = typeof payload === 'object' && typeof payload.triggeredAt === 'number'
             ? payload.triggeredAt
             : Date.now()
           afkInProgressRef.current = true
-          pendingAutoAfkRef.current = currentSession?.taskId
-            ? { taskId: currentSession.taskId, reason, triggeredAt }
-            : null
           try {
-            // End the session (calls server API + clears local state) then show dialog.
-            await useTaskStore.getState().doAfk()
-            setAfkDialog({ open: true, reason, triggeredAt, resolvedAt: null, autoResumed: false })
+            const result = await useTaskStore.getState().doAfk(triggeredAt)
+            const resolvedAt = result.currentSession && result.currentSession.startedAt > triggeredAt
+              ? result.currentSession.startedAt
+              : null
+            pendingAutoAfkRef.current = {
+              resumeTaskId: resolvedAt === null ? result.endedSession?.taskId ?? null : null,
+              reason,
+              triggeredAt,
+              resolvedAt,
+            }
+            setAfkDialog({ open: true, reason, triggeredAt, resolvedAt, autoResumed: false })
           } catch (error) {
             pendingAutoAfkRef.current = null
             afkInProgressRef.current = false
@@ -1098,21 +1107,52 @@ function useAutoAfk() {
             console.log('[Auto-AFK] resume skipped: no pending AFK context')
             return
           }
-          if (useTaskStore.getState().currentSession) {
-            console.log('[Auto-AFK] resume skipped: session already active')
+          if (pending.resolvedAt !== null) {
+            console.log('[Auto-AFK] resume skipped: AFK interval already resolved')
             return
           }
+
+          const currentSession = useTaskStore.getState().currentSession
+          if (currentSession) {
+            const resolvedAt = currentSession.startedAt > pending.triggeredAt
+              ? currentSession.startedAt
+              : returnedAt
+            pendingAutoAfkRef.current = null
+            afkInProgressRef.current = false
+            setAfkDialog((prev) => prev.open ? { ...prev, resolvedAt, autoResumed: false } : prev)
+            console.log('[Auto-AFK] resume skipped: a newer session is already active')
+            return
+          }
+
+          if (!pending.resumeTaskId) {
+            pendingAutoAfkRef.current = null
+            afkInProgressRef.current = false
+            setAfkDialog((prev) => prev.open ? { ...prev, resolvedAt: returnedAt, autoResumed: false } : prev)
+            return
+          }
+
           try {
-            const session = await useTaskStore.getState().resumeFromAfk(pending.taskId, returnedAt)
+            const session = await useTaskStore.getState().resumeFromAfk(pending.resumeTaskId, returnedAt)
             pendingAutoAfkRef.current = null
             afkInProgressRef.current = false
             const task = useTaskStore.getState().tasks.find((item) => item.id === session.taskId)
             setAfkDialog((prev) => prev.open
               ? { ...prev, resolvedAt: returnedAt, autoResumed: true }
               : prev)
-            setResumeToast({ open: true, title: task?.title ?? pending.taskId })
+            setResumeToast({ open: true, title: task?.title ?? pending.resumeTaskId })
             window.setTimeout(() => setResumeToast({ open: false, title: '' }), 3000)
           } catch (error) {
+            await useTaskStore.getState().loadCurrentSession().catch(() => {})
+            const currentSession = useTaskStore.getState().currentSession
+            if (currentSession && currentSession.startedAt > pending.triggeredAt) {
+              pendingAutoAfkRef.current = null
+              afkInProgressRef.current = false
+              setAfkDialog((prev) => prev.open
+                ? { ...prev, resolvedAt: currentSession.startedAt, autoResumed: false }
+                : prev)
+              console.log('[Auto-AFK] resume superseded by a newer session')
+              return
+            }
             console.error('[Auto-AFK] failed to resume from AFK:', error)
           }
         })
@@ -1130,6 +1170,9 @@ function useAutoAfk() {
   }, [])
 
   const onClose = useCallback(() => {
+    if (pendingAutoAfkRef.current?.resolvedAt !== null) {
+      pendingAutoAfkRef.current = null
+    }
     afkInProgressRef.current = false
     setAfkDialog(prev => ({ ...prev, open: false }))
   }, [])

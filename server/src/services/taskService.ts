@@ -580,6 +580,25 @@ export interface WorkSession {
   endedAt: number | null
 }
 
+export interface AfkTransitionResult {
+  endedSession: WorkSession | null
+  currentSession: WorkSession | null
+}
+
+export class AfkCutoffConflictError extends Error {
+  constructor() {
+    super('No work session was active at the requested AFK cutoff')
+    this.name = 'AfkCutoffConflictError'
+  }
+}
+
+export class WorkSessionConflictError extends Error {
+  constructor() {
+    super('Cannot resume from AFK because another work session overlaps the requested start time')
+    this.name = 'WorkSessionConflictError'
+  }
+}
+
 function rowToWorkSession(row: any): WorkSession {
   return {
     id: row.id,
@@ -596,8 +615,8 @@ export function startWorkSession(taskId: string, startedAt = Date.now()): WorkSe
   const id = crypto.randomUUID()
   getDb().transaction(() => {
     // Closing and opening must be one transaction: a concurrent read must
-    // never observe two current tasks or an unintended untracked gap.
-    run('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [Date.now()])
+    // never observe two current tasks, a gap, or a millisecond-scale overlap.
+    run('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [startedAt])
     run(
       'INSERT INTO work_sessions (id, task_id, started_at, ended_at) VALUES (?, ?, ?, NULL)',
       [id, taskId, startedAt]
@@ -606,8 +625,84 @@ export function startWorkSession(taskId: string, startedAt = Date.now()): WorkSe
   return { id, taskId, startedAt, endedAt: null }
 }
 
-export function endAllSessions(): void {
-  run('UPDATE work_sessions SET ended_at = ? WHERE ended_at IS NULL', [Date.now()])
+export function resumeWorkSession(taskId: string, startedAt: number): WorkSession {
+  const task = getTaskById(taskId)
+  if (!task) throw new Error('Task not found')
+
+  const id = crypto.randomUUID()
+  const now = Date.now()
+  return getDb().transaction(() => {
+    const overlap = queryOne(
+      `SELECT id FROM work_sessions
+       WHERE started_at <= ? AND (ended_at IS NULL OR ended_at > ?)
+       LIMIT 1`,
+      [now, startedAt]
+    )
+    if (overlap) throw new WorkSessionConflictError()
+
+    run(
+      'INSERT INTO work_sessions (id, task_id, started_at, ended_at) VALUES (?, ?, ?, NULL)',
+      [id, taskId, startedAt]
+    )
+    return { id, taskId, startedAt, endedAt: null }
+  })()
+}
+
+export function transitionToAfk(endedAt?: number): AfkTransitionResult {
+  const hasExplicitCutoff = endedAt !== undefined
+  const cutoff = endedAt ?? Date.now()
+
+  return getDb().transaction(() => {
+    let targetRow: any | null = null
+
+    if (hasExplicitCutoff) {
+      // A delayed idle event belongs to the session whose interval contained
+      // the original threshold, not necessarily the session that is open now.
+      targetRow = queryOne(
+        `SELECT * FROM work_sessions
+         WHERE started_at <= ? AND (ended_at IS NULL OR ended_at > ?)
+         ORDER BY started_at DESC LIMIT 1`,
+        [cutoff, cutoff]
+      )
+
+      // Make retries idempotent after the target has already been backdated.
+      if (!targetRow) {
+        targetRow = queryOne(
+          `SELECT * FROM work_sessions
+           WHERE started_at <= ? AND ended_at = ?
+           ORDER BY started_at DESC LIMIT 1`,
+          [cutoff, cutoff]
+        )
+      }
+
+      if (!targetRow) {
+        const currentRow = queryOne('SELECT * FROM work_sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1')
+        if (currentRow && currentRow.started_at > cutoff) {
+          throw new AfkCutoffConflictError()
+        }
+        return {
+          endedSession: null,
+          currentSession: currentRow ? rowToWorkSession(currentRow) : null,
+        }
+      }
+    } else {
+      targetRow = queryOne('SELECT * FROM work_sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1')
+    }
+
+    let endedSession: WorkSession | null = null
+    if (targetRow) {
+      if (targetRow.ended_at === null || targetRow.ended_at > cutoff) {
+        run('UPDATE work_sessions SET ended_at = ? WHERE id = ?', [cutoff, targetRow.id])
+      }
+      endedSession = { ...rowToWorkSession(targetRow), endedAt: cutoff }
+    }
+
+    const currentRow = queryOne('SELECT * FROM work_sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1')
+    return {
+      endedSession,
+      currentSession: currentRow ? rowToWorkSession(currentRow) : null,
+    }
+  })()
 }
 
 export function getCurrentSession(): WorkSession | null {

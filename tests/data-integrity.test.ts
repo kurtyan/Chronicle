@@ -193,13 +193,13 @@ test.describe('Task entry data integrity', () => {
   })
 
   test('resume from AFK starts a session at the detected return time and allows bounded AFK note', async ({ page }) => {
+    await page.request.post('/api/afk')
     const task = await createTask(page, `Integrity-ResumeAfk-${Date.now()}`)
     const takeoverRes = await page.request.post(`/api/tasks/${task.id}/takeover`)
     expect(takeoverRes.ok()).toBeTruthy()
-    await page.request.post('/api/afk')
-
-    const triggeredAt = Date.now() - 120_000
-    const returnedAt = Date.now() - 30_000
+    const triggeredAt = Date.now()
+    await page.request.post('/api/afk', { data: { endedAt: triggeredAt } })
+    const returnedAt = Date.now()
     const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
       data: { startedAt: returnedAt },
     })
@@ -216,9 +216,106 @@ test.describe('Task entry data integrity', () => {
     expect(afkEvent.submittedAt).toBe(returnedAt)
   })
 
+  test('auto AFK can end the active session at its original idle threshold without overlapping its AFK record', async ({ page }) => {
+    const task = await createTask(page, `Integrity-AfkEndedAt-${Date.now()}`)
+    const takeoverRes = await page.request.post(`/api/tasks/${task.id}/takeover`)
+    expect(takeoverRes.ok()).toBeTruthy()
+    const started = await takeoverRes.json()
+    const triggeredAt = Date.now()
+
+    const afkRes = await page.request.post('/api/afk', { data: { endedAt: triggeredAt } })
+    expect(afkRes.ok()).toBeTruthy()
+    const sessions = await (await page.request.get(`/api/sessions?start=${started.startedAt - 1}&end=${Date.now() + 1}`)).json()
+    expect(sessions.find((session: { id: string }) => session.id === started.id)).toMatchObject({ endedAt: triggeredAt })
+
+    const eventRes = await page.request.post('/api/afk-events', {
+      data: { reason: 'idle', triggeredAt, submittedAt: Date.now(), userNote: 'idle grace elapsed' },
+    })
+    expect(eventRes.status()).toBe(201)
+    expect(await eventRes.json()).toMatchObject({ triggeredAt })
+  })
+
+  test('AFK cutoff validation never creates a negative work session', async ({ page }) => {
+    await page.request.post('/api/afk')
+    const task = await createTask(page, `Integrity-AfkValidation-${Date.now()}`)
+    const takeoverRes = await page.request.post(`/api/tasks/${task.id}/takeover`)
+    expect(takeoverRes.ok()).toBeTruthy()
+    const session = await takeoverRes.json()
+
+    const futureRes = await page.request.post('/api/afk', { data: { endedAt: Date.now() + 60_000 } })
+    expect(futureRes.status()).toBe(400)
+    expect(await (await page.request.get('/api/sessions/current')).json()).toMatchObject({ id: session.id })
+
+    const beforeEverySession = Date.now() - 10 * 365 * 24 * 60 * 60 * 1000
+    const earlyRes = await page.request.post('/api/afk', { data: { endedAt: beforeEverySession } })
+    expect(earlyRes.status()).toBe(409)
+    expect(await (await page.request.get('/api/sessions/current')).json()).toMatchObject({ id: session.id })
+
+    const otherTask = await createTask(page, `Integrity-ResumeConflict-${Date.now()}`)
+    const futureResumeRes = await page.request.post(`/api/tasks/${otherTask.id}/resume-from-afk`, {
+      data: { startedAt: Date.now() + 60_000 },
+    })
+    expect(futureResumeRes.status()).toBe(400)
+    const overlappingResumeRes = await page.request.post(`/api/tasks/${otherTask.id}/resume-from-afk`, {
+      data: { startedAt: Date.now() },
+    })
+    expect(overlappingResumeRes.status()).toBe(409)
+    expect(await (await page.request.get('/api/sessions/current')).json()).toMatchObject({ id: session.id })
+
+    const beforeNullAfk = Date.now()
+    const nullRes = await page.request.post('/api/afk', { data: { endedAt: null } })
+    expect(nullRes.ok()).toBeTruthy()
+    const nullResult = await nullRes.json()
+    expect(nullResult).toMatchObject({ ok: true, currentSession: null })
+    expect(nullResult.endedSession.id).toBe(session.id)
+    expect(nullResult.endedSession.endedAt).toBeGreaterThanOrEqual(beforeNullAfk)
+    expect(nullResult.endedSession.endedAt).toBeGreaterThanOrEqual(session.startedAt)
+  })
+
+  test('delayed AFK backdates the session active at cutoff without ending a newer session', async ({ page }) => {
+    await page.request.post('/api/afk')
+    const oldTask = await createTask(page, `Integrity-AfkOld-${Date.now()}`)
+    const newTask = await createTask(page, `Integrity-AfkNew-${Date.now()}`)
+    const triggeredAt = Date.now()
+    const oldStartRes = await page.request.post(`/api/tasks/${oldTask.id}/resume-from-afk`, {
+      data: { startedAt: triggeredAt },
+    })
+    expect(oldStartRes.ok()).toBeTruthy()
+    const oldSession = await oldStartRes.json()
+
+    await page.waitForTimeout(5)
+    const newStartRes = await page.request.post(`/api/tasks/${newTask.id}/takeover`)
+    expect(newStartRes.ok()).toBeTruthy()
+    const newSession = await newStartRes.json()
+    expect(newSession.startedAt).toBeGreaterThan(triggeredAt)
+    const sessionsAfterTakeover = await (await page.request.get(`/api/sessions?start=${oldSession.startedAt - 1}&end=${Date.now() + 1}`)).json()
+    expect(sessionsAfterTakeover.find((session: { id: string }) => session.id === oldSession.id))
+      .toMatchObject({ endedAt: newSession.startedAt })
+
+    const afkRes = await page.request.post('/api/afk', { data: { endedAt: triggeredAt } })
+    expect(afkRes.ok()).toBeTruthy()
+    const transition = await afkRes.json()
+    expect(transition.endedSession).toMatchObject({ id: oldSession.id, endedAt: triggeredAt })
+    expect(transition.currentSession).toMatchObject({ id: newSession.id, taskId: newTask.id, endedAt: null })
+    expect(await (await page.request.get('/api/sessions/current')).json()).toMatchObject({ id: newSession.id })
+
+    const sessions = await (await page.request.get(`/api/sessions?start=${oldSession.startedAt - 1}&end=${Date.now() + 1}`)).json()
+    expect(sessions.find((session: { id: string }) => session.id === oldSession.id)).toMatchObject({ endedAt: triggeredAt })
+    expect(sessions.every((session: { startedAt: number; endedAt: number | null }) =>
+      session.endedAt === null || session.endedAt >= session.startedAt
+    )).toBeTruthy()
+
+    const eventRes = await page.request.post('/api/afk-events', {
+      data: { reason: 'idle', triggeredAt, submittedAt: newSession.startedAt, userNote: 'superseded by another client' },
+    })
+    expect(eventRes.status()).toBe(201)
+    expect(await eventRes.json()).toMatchObject({ triggeredAt, submittedAt: newSession.startedAt })
+  })
+
   test('AFK event rejects overlap with an active resumed session', async ({ page }) => {
+    await page.request.post('/api/afk')
     const task = await createTask(page, `Integrity-AfkOverlap-${Date.now()}`)
-    const startedAt = Date.now() - 60_000
+    const startedAt = Date.now()
     const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
       data: { startedAt },
     })
@@ -234,7 +331,8 @@ test.describe('Task entry data integrity', () => {
     await page.request.post('/api/afk').catch(() => {})
     const task = await createTask(page, `Integrity-AfkAutoBound-${Date.now()}`)
     const triggeredAt = Date.now()
-    const startedAt = triggeredAt + 10
+    await page.waitForTimeout(10)
+    const startedAt = Date.now()
     const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
       data: { startedAt },
     })
@@ -250,8 +348,9 @@ test.describe('Task entry data integrity', () => {
   })
 
   test('resume from AFK moves pending task to doing', async ({ page }) => {
+    await page.request.post('/api/afk')
     const task = await createTask(page, `Integrity-ResumePending-${Date.now()}`)
-    const startedAt = Date.now() - 10_000
+    const startedAt = Date.now()
     const resumeRes = await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
       data: { startedAt },
     })

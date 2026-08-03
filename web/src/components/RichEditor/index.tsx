@@ -12,6 +12,7 @@ import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
 import type { Task } from '@/types'
 import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
+import { ChronicleListItem, ChronicleTrailingCodeFence } from '@/components/RichEditor/ChronicleListItem'
 
 /** Detect Tauri environment */
 export function isTauri(): boolean {
@@ -348,7 +349,10 @@ function RichEditorInner({
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4] },
       codeBlock: false,
+      listItem: false,
     }),
+    ChronicleListItem,
+    ChronicleTrailingCodeFence,
     WrappedCodeBlock,
     ChronicleImage.configure({
       inline: false,

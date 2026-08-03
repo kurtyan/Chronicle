@@ -143,6 +143,170 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator('pre code')).toContainText('const value = 1')
   })
 
+  test('a trailing fence opens a code block without discarding text already on the line', async ({ page }) => {
+    const date = uniqueScriptDate(1_050 + Math.floor(Math.random() * 100))
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type('explain this ```')
+    await page.keyboard.press('Enter')
+    await expect(editor.locator(':scope > p').first()).toHaveText('explain this')
+    await expect(editor.locator(':scope > p + pre > code')).toHaveCount(1)
+  })
+
+  test('focus Backspace removes an empty pasted list placeholder without lifting its nested list', async ({ page }) => {
+    const date = uniqueScriptDate(1_100 + Math.floor(Math.random() * 100))
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [{
+        type: 'orderedList',
+        content: [{
+          type: 'listItem',
+          content: [
+            { type: 'paragraph' },
+            {
+              type: 'orderedList',
+              content: [{
+                type: 'listItem',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'keep this nested item' }] }],
+              }],
+            },
+          ],
+        }],
+      }],
+    })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    const placeholder = editor.locator('ol > li > p').first()
+    await placeholder.click()
+    await page.keyboard.type('x')
+    await expect(placeholder).toHaveText('x')
+    await page.keyboard.press('Backspace')
+    await page.keyboard.press('Backspace')
+
+    await expect(editor.locator(':scope > ol > li > p')).toHaveCount(0)
+    await expect(editor.locator(':scope > ol > li > ol > li')).toHaveCount(1)
+    await expect(editor.locator(':scope > ol > li > ol > li')).toContainText('keep this nested item')
+  })
+
+  test('fenced code remains in the current ordered list item in Focus and task logs', async ({ page }) => {
+    const date = uniqueScriptDate(1_250 + Math.floor(Math.random() * 100))
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const focusEditor = await clearFocusEditor(page)
+    await page.keyboard.type('1. ```')
+    await page.keyboard.press('Enter')
+    await expect(focusEditor.locator('ol > li')).toHaveCount(1)
+    await expect(focusEditor.locator('ol > li > pre > code')).toHaveCount(1)
+    await expect(focusEditor.locator('ol > li > p')).toHaveCount(0)
+    expect(await focusEditor.locator('ol > li').evaluate((item) => getComputedStyle(item).listStyleType)).toBe('decimal')
+
+    const title = `ListCodeLog-${Date.now()}`
+    await createTask(page, title)
+    await page.goto('/?lang=en')
+    await page.locator('h4').filter({ hasText: title }).first().click()
+    const logEditor = page.locator('[data-rich-editor="true"] .ProseMirror').first()
+    await expect(logEditor).toBeVisible()
+    await logEditor.click()
+    await page.keyboard.type('1. ```')
+    await page.keyboard.press('Enter')
+    await expect(logEditor.locator('ol > li')).toHaveCount(1)
+    await expect(logEditor.locator('ol > li > pre > code')).toHaveCount(1)
+    await expect(logEditor.locator('ol > li > p')).toHaveCount(0)
+  })
+
+  test('inline list fence preserves Focus task-link marks and appends code in the same item', async ({ page }) => {
+    const task = await createTask(page, `FenceMark-${Date.now()}`)
+    const date = uniqueScriptDate(1_350 + Math.floor(Math.random() * 100))
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [{
+        type: 'orderedList',
+        content: [{
+          type: 'listItem',
+          content: [{
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: `@${task.title}`,
+                marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
+              },
+              { type: 'text', text: ' explain ```' },
+            ],
+          }],
+        }],
+      }],
+    })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    const paragraph = editor.locator('ol > li > p')
+    await editor.focus()
+    await paragraph.evaluate((element) => {
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      range.collapse(false)
+      const selection = window.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(range)
+    })
+    await page.keyboard.press('Enter')
+
+    await expect(editor.locator(`ol > li > p a[data-task-id="${task.id}"]`)).toHaveText(`@${task.title}`)
+    await expect(paragraph).toContainText('explain')
+    await expect(editor.locator('ol > li > p + pre > code')).toHaveCount(1)
+    await expect(editor.locator('ol > li')).toHaveCount(1)
+  })
+
+  test('Focus list Tab and Shift+Tab indent and outdent list items', async ({ page }) => {
+    const date = uniqueScriptDate(1_400 + Math.floor(Math.random() * 100))
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type('1. first')
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('second')
+    await page.keyboard.press('Tab')
+    await expect(editor.locator(':scope > ol > li > ol > li')).toHaveText('second')
+    await page.keyboard.press('Shift+Tab')
+    await expect(editor.locator(':scope > ol > li')).toHaveCount(2)
+  })
+
+  test('Focus shows an ordered-list marker immediately after typing the input shortcut', async ({ page }) => {
+    const date = uniqueScriptDate(1_450 + Math.floor(Math.random() * 100))
+    await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = await clearFocusEditor(page)
+    await page.keyboard.type('1. ')
+
+    const item = editor.locator(':scope > ol > li')
+    const emptyParagraph = item.locator(':scope > p')
+    await expect(item).toHaveCount(1)
+    await expect(emptyParagraph).toHaveClass(/\bis-empty\b/)
+    const emptyContent = await emptyParagraph.evaluate((paragraph) => getComputedStyle(paragraph, '::before').content)
+    expect(emptyContent).not.toBe('none')
+    expect(emptyContent).not.toContain('Task title')
+    expect(await item.evaluate((listItem) => ({
+      height: listItem.getBoundingClientRect().height,
+      listStyleType: getComputedStyle(listItem).listStyleType,
+    }))).toMatchObject({
+      listStyleType: 'decimal',
+    })
+    expect(await item.evaluate((listItem) => listItem.getBoundingClientRect().height)).toBeGreaterThan(0)
+  })
+
   test('focus editor keeps three dashes as ordinary text', async ({ page }) => {
     const date = uniqueScriptDate(Date.now() % 20 + 40)
 
@@ -807,30 +971,25 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const task = await createTask(page, `NestedProgress-${Date.now()}`)
     const date = uniqueScriptDate(Date.now() % 20 + 30)
 
-    await page.request.put(`/api/day-scripts/${date}`, {
-      data: {
-        expectedRevision: 0,
-        document: {
-          type: 'doc',
-          content: [
-            {
-              type: 'paragraph',
-              content: [{
-                type: 'text',
-                text: `10:00-11:00 @${task.title}`,
-                marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
-              }],
-            },
-            {
-              type: 'bulletList',
-              content: [{
-                type: 'listItem',
-                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'nested progress' }] }],
-              }],
-            },
-          ],
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{
+            type: 'text',
+            text: `10:00-11:00 @${task.title}`,
+            marks: [{ type: 'link', attrs: { href: `/today?task=${encodeURIComponent(task.id)}`, taskId: task.id } }],
+          }],
         },
-      },
+        {
+          type: 'bulletList',
+          content: [{
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'nested progress' }] }],
+          }],
+        },
+      ],
     })
 
     let takeoverCount = 0

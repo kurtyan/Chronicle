@@ -199,7 +199,7 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.screenLockAfk': { 'zh-CN': '屏幕锁定时自动离开', en: 'Auto-AFK on screen lock' },
   'settings.screenLockAfkDesc': { 'zh-CN': 'Mac 屏幕锁定时自动结束工作会话', en: 'Automatically end work session when Mac screen is locked' },
   'settings.idleAfk': { 'zh-CN': '输入空闲自动离开', en: 'Auto-AFK on input idle' },
-  'settings.idleAfkDesc': { 'zh-CN': '键盘/鼠标无操作一段时间后自动离开', en: 'Automatically AFK after period of no keyboard/mouse input' },
+  'settings.idleAfkDesc': { 'zh-CN': '键盘/鼠标无操作达到阈值后，再持续 5 分钟才自动离开；期间活动会取消本次检测', en: 'After the idle threshold, Chronicle waits a fixed 5-minute grace period; activity during it cancels this detection' },
   'settings.idleTimeout': { 'zh-CN': '空闲超时', en: 'Idle timeout' },
   'settings.idleTimeoutMinutes': { 'zh-CN': '分钟', en: 'minutes' },
   'settings.saveAutoAfk': { 'zh-CN': '保存设置', en: 'Save Auto-AFK Settings' },

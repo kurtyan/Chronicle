@@ -149,21 +149,23 @@ test.describe('Auto takeover on actual edit', () => {
     await installTauriEventMock(page)
     const title = `AutoResumeAfk-${Date.now()}`
     const task = await createTaskWithTitle(page, title)
-    await page.request.post(`/api/tasks/${task.id}/takeover`)
+    const triggeredAt = Date.now()
+    await page.request.post(`/api/tasks/${task.id}/resume-from-afk`, {
+      data: { startedAt: triggeredAt },
+    })
 
     await openTask(page, title)
     await expect(page.getByTestId('workspace-info-bar').getByRole('button', { name: 'AFK' })).toBeVisible()
     await expect.poll(() => page.evaluate(() => (window as any).__chronicleTauriListenerCount?.('auto-afk-triggered') ?? 0)).toBeGreaterThan(0)
     await expect.poll(() => page.evaluate(() => (window as any).__chronicleTauriListenerCount?.('auto-afk-resume-detected') ?? 0)).toBeGreaterThan(0)
 
-    const triggeredAt = Date.now() - 90_000
     await page.evaluate((value) => {
       ;(window as any).__chronicleEmitTauriEvent('auto-afk-triggered', { reason: 'idle', triggeredAt: value })
     }, triggeredAt)
     await expect(page.getByRole('dialog')).toContainText('AutoAFK')
     await expectIdle(page)
 
-    const returnedAt = Date.now() - 10_000
+    const returnedAt = Date.now()
     await page.evaluate((value) => {
       ;(window as any).__chronicleEmitTauriEvent('auto-afk-resume-detected', { reason: 'idle-return', returnedAt: value })
     }, returnedAt)
@@ -181,6 +183,72 @@ test.describe('Auto takeover on actual edit', () => {
     const events = await (await page.request.get(`/api/afk-events?start=${triggeredAt - 1000}&end=${returnedAt + 1000}`)).json()
     expect(events.some((event: { submittedAt: number; userNote: string | null }) =>
       event.submittedAt === returnedAt && event.userNote === 'auto resumed'
+    )).toBeTruthy()
+  })
+
+  test('delayed auto AFK keeps a newer cross-client session and records only the idle gap', async ({ page }) => {
+    await installTauriEventMock(page)
+    const oldTitle = `AutoAfkOld-${Date.now()}`
+    const newTitle = `AutoAfkNew-${Date.now()}`
+    const oldTask = await createTaskWithTitle(page, oldTitle)
+    const newTask = await createTaskWithTitle(page, newTitle)
+    const triggeredAt = Date.now()
+    await page.request.post(`/api/tasks/${oldTask.id}/resume-from-afk`, {
+      data: { startedAt: triggeredAt },
+    })
+    await openTask(page, oldTitle)
+
+    await page.waitForTimeout(5)
+    const newSessionRes = await page.request.post(`/api/tasks/${newTask.id}/takeover`)
+    expect(newSessionRes.ok()).toBeTruthy()
+    const newSession = await newSessionRes.json()
+    expect(newSession.startedAt).toBeGreaterThan(triggeredAt)
+
+    await page.evaluate((value) => {
+      ;(window as any).__chronicleEmitTauriEvent('auto-afk-triggered', { reason: 'idle', triggeredAt: value })
+    }, triggeredAt)
+    await expect(page.getByRole('dialog')).toContainText('AutoAFK')
+    await expect.poll(async () => await (await page.request.get('/api/sessions/current')).json())
+      .toMatchObject({ id: newSession.id, taskId: newTask.id })
+
+    await page.evaluate(() => {
+      ;(window as any).__chronicleEmitTauriEvent('auto-afk-resume-detected', { reason: 'idle-return', returnedAt: Date.now() })
+    })
+    await page.waitForTimeout(100)
+    expect(await (await page.request.get('/api/sessions/current')).json()).toMatchObject({ id: newSession.id })
+    await expect(page.getByText('Resumed from AFK')).toHaveCount(0)
+
+    await page.getByPlaceholder(/Briefly describe|请简要说明/).fill('worked from another client')
+    await page.getByRole('button', { name: /Submit|提交/ }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    const events = await (await page.request.get(`/api/afk-events?start=${triggeredAt - 1}&end=${newSession.startedAt + 1}`)).json()
+    expect(events.some((event: { submittedAt: number; userNote: string | null }) =>
+      event.submittedAt === newSession.startedAt && event.userNote === 'worked from another client'
+    )).toBeTruthy()
+  })
+
+  test('auto AFK without a work session still resolves on return', async ({ page }) => {
+    await installTauriEventMock(page)
+    await page.request.post('/api/afk')
+    await page.goto('/?lang=en')
+    await expect.poll(() => page.evaluate(() => (window as any).__chronicleTauriListenerCount?.('auto-afk-triggered') ?? 0)).toBeGreaterThan(0)
+
+    const triggeredAt = Date.now()
+    await page.evaluate((value) => {
+      ;(window as any).__chronicleEmitTauriEvent('auto-afk-triggered', { reason: 'idle', triggeredAt: value })
+    }, triggeredAt)
+    await expect(page.getByRole('dialog')).toContainText('AutoAFK')
+    const returnedAt = Date.now()
+    await page.evaluate((value) => {
+      ;(window as any).__chronicleEmitTauriEvent('auto-afk-resume-detected', { reason: 'idle-return', returnedAt: value })
+    }, returnedAt)
+
+    await page.getByPlaceholder(/Briefly describe|请简要说明/).fill('idle without task')
+    await page.getByRole('button', { name: /Submit|提交/ }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    const events = await (await page.request.get(`/api/afk-events?start=${triggeredAt - 1}&end=${returnedAt + 1}`)).json()
+    expect(events.some((event: { submittedAt: number; userNote: string | null }) =>
+      event.submittedAt === returnedAt && event.userNote === 'idle without task'
     )).toBeTruthy()
   })
 })

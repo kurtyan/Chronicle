@@ -2,12 +2,12 @@ import {
   getAllTasks, getTaskById, createTask, updateTask, deleteTask,
   getTaskEntries, createTaskEntry, createTaskEntries, updateTaskEntry, deleteTaskEntry as deleteTaskEntryImpl, markTaskDone,
   getTaskLogDraft, saveTaskLogDraft, deleteTaskLogDraft,
-  startWorkSession, endAllSessions, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
+  startWorkSession, resumeWorkSession, transitionToAfk, getCurrentSession, getSessionsForRange, dropTask, getTodayTasks,
   setTaskExtraInfo, getTaskExtraInfo, getTaskExtraInfoValue, deleteTaskExtraInfo, getAllTasksWithPinned, togglePinned, getPinnedTaskIds,
   extractAndAddAgentConversationsFromEntry, getTaskAgentConversations,
   createAfkEvent, updateAfkEvent, getAfkEvents, reserveTaskId,
   getPinnedEntry, appendToPinnedEntry, unpinEntry,
-  type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type TaskExtraInfo, type AfkEvent, type AgentConversation,
+  type Task, type TaskEntry, type TaskLogDraft, type WorkSession, type AfkTransitionResult, type TaskExtraInfo, type AfkEvent, type AgentConversation,
 } from './taskService'
 import {
   getCarryOverDayScriptBlocks, getDayScript, saveDayScript, submitDayScriptProgress, rescheduleDayScriptFocus, confirmDayScriptProgressSync, getDayScriptExecutionRecords,
@@ -200,15 +200,15 @@ export class AppService {
     let changedTask: Task | null = null
     const task = getTaskById(taskId)
     if (!task) throw new Error('Task not found')
+    const session = resumeWorkSession(taskId, startedAt)
     if (task.status === 'PENDING') {
       changedTask = await updateTask(taskId, { status: 'DOING' })
     }
-    const session = startWorkSession(taskId, startedAt)
     return { session, task: changedTask }
   }
 
-  async doAfk(): Promise<void> {
-    endAllSessions()
+  async doAfk(endedAt?: number): Promise<AfkTransitionResult> {
+    return transitionToAfk(endedAt)
   }
 
   async getCurrentSession(): Promise<WorkSession | null> {

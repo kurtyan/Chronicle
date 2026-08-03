@@ -21,6 +21,7 @@ import { getLogger } from './logging'
 import { getVersion } from './version'
 import { createSSEStream, broadcastEvent } from './services/eventBus'
 import { testTaskSummaryPrompt } from './services/taskContextService'
+import { AfkCutoffConflictError, WorkSessionConflictError } from './services/taskService'
 import { buildPlanTodayDraft, generateDailySummary, getDailySummaryCache } from './services/dayScriptLlmService'
 import {
   hideWorkOverviewSignal,
@@ -476,17 +477,48 @@ app.post('/api/tasks/:id/resume-from-afk', async (c) => {
   if (!Number.isFinite(startedAt) || startedAt <= 0) {
     return c.json({ error: 'startedAt must be a positive timestamp' }, 400)
   }
-  const { session, task: changedTask } = await service.resumeTaskFromAfk(c.req.param('id'), startedAt)
-  saveConversationId(c, c.req.param('id'))
-  if (changedTask) emitTaskChange(c, changedTask)
-  broadcastEvent('session_started', { taskId: c.req.param('id'), startedAt: session.startedAt }, c.get('clientId'))
-  return c.json(session, 201)
+  if (startedAt > Date.now()) {
+    return c.json({ error: 'startedAt must not be in the future' }, 400)
+  }
+  try {
+    const { session, task: changedTask } = await service.resumeTaskFromAfk(c.req.param('id'), startedAt)
+    saveConversationId(c, c.req.param('id'))
+    if (changedTask) emitTaskChange(c, changedTask)
+    broadcastEvent('session_started', { taskId: c.req.param('id'), startedAt: session.startedAt }, c.get('clientId'))
+    return c.json(session, 201)
+  } catch (error) {
+    if (error instanceof WorkSessionConflictError) {
+      return c.json({ error: error.message }, 409)
+    }
+    throw error
+  }
 })
 
 app.post('/api/afk', async (c) => {
-  await service.doAfk()
-  broadcastEvent('session_ended', {}, c.get('clientId'))
-  return c.json({ ok: true })
+  const body = await c.req.json().catch(() => ({}))
+  const endedAt = body.endedAt == null ? undefined : Number(body.endedAt)
+  if (endedAt !== undefined && (!Number.isFinite(endedAt) || endedAt <= 0)) {
+    return c.json({ error: 'endedAt must be a positive timestamp' }, 400)
+  }
+  if (endedAt !== undefined && endedAt > Date.now()) {
+    return c.json({ error: 'endedAt must not be in the future' }, 400)
+  }
+  try {
+    const result = await service.doAfk(endedAt)
+    if (result.endedSession) {
+      broadcastEvent('session_ended', {
+        sessionId: result.endedSession.id,
+        endedAt: result.endedSession.endedAt,
+        currentTaskId: result.currentSession?.taskId ?? null,
+      }, c.get('clientId'))
+    }
+    return c.json({ ok: true, ...result })
+  } catch (error) {
+    if (error instanceof AfkCutoffConflictError) {
+      return c.json({ error: error.message }, 409)
+    }
+    throw error
+  }
 })
 
 app.get('/api/sessions/current', async (c) => {

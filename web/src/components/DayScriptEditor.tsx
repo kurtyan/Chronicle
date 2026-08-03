@@ -4,7 +4,7 @@ import Link from '@tiptap/extension-link'
 import Paragraph from '@tiptap/extension-paragraph'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
-import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -13,6 +13,7 @@ import type { DayScriptDocument, Task } from '@/types'
 import { buildDayScriptActivityKey, findActiveBlock, isNewTaskHeaderText, parseDayScriptDocument } from '@/lib/dayScript'
 import { ChronicleImage, isTauri, resolveImageSrcsInEditor, uploadAndInsertImage } from '@/components/RichEditor'
 import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
+import { ChronicleListItem, ChronicleTrailingCodeFence } from '@/components/RichEditor/ChronicleListItem'
 
 interface DayScriptEditorProps {
   value: DayScriptDocument['document']
@@ -291,15 +292,26 @@ function moveSelectionToTextblockBoundary(editor: Editor, edge: 'start' | 'end')
   return true
 }
 
-function splitListItemOnEnter(editor: Editor): boolean {
-  const { $from } = editor.state.selection
-  if (!$from.parent.isTextblock) return false
+function deleteEmptyListPlaceholder(editor: Editor): boolean {
+  const { state, view } = editor
+  const { selection } = state
+  const { $from } = selection
+  if (!selection.empty || $from.parent.type.name !== 'paragraph' || $from.parent.content.size !== 0) return false
 
-  const isInList = Array.from({ length: $from.depth }, (_, index) => $from.node(index + 1).type.name)
-    .some((name) => name === 'orderedList' || name === 'bulletList')
-  if (!isInList) return false
+  const paragraphDepth = $from.depth
+  const listItemDepth = paragraphDepth - 1
+  if (listItemDepth < 1 || $from.node(listItemDepth).type.name !== 'listItem') return false
 
-  return editor.commands.splitListItem('listItem')
+  const listItem = $from.node(listItemDepth)
+  const paragraphIndex = $from.index(listItemDepth)
+  const nextSibling = listItem.maybeChild(paragraphIndex + 1)
+  if (nextSibling?.type.name !== 'orderedList' && nextSibling?.type.name !== 'bulletList') return false
+
+  const from = $from.before(paragraphDepth)
+  const tr = state.tr.delete(from, $from.after(paragraphDepth))
+  tr.setSelection(Selection.near(tr.doc.resolve(Math.min(from, tr.doc.content.size)), 1))
+  view.dispatch(tr.scrollIntoView())
+  return true
 }
 
 function findTaskMentionRangeInCurrentLine(editor: Editor): { from: number; to: number } | null {
@@ -365,8 +377,11 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
         horizontalRule: {},
         paragraph: false,
         codeBlock: false,
+        listItem: false,
       }),
       DayScriptParagraph,
+      ChronicleListItem,
+      ChronicleTrailingCodeFence,
       WrappedCodeBlock,
       NewTaskBadge,
       ChronicleImage.configure({
@@ -378,6 +393,10 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
       }),
       Placeholder.configure({
         placeholder: '09:30-09:50 @Task title ✅',
+        // Empty list items are nested below orderedList/bulletList nodes. Let
+        // Placeholder decorate the active empty paragraph so the existing
+        // zero-width spacer keeps its line box (and list marker) visible.
+        includeChildren: true,
       }),
     ],
     content: safeValue,
@@ -432,6 +451,12 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
           event.preventDefault()
           return moveSelectionToTextblockBoundary(editorRef.current!, event.key === 'Home' ? 'start' : 'end')
         }
+        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === 'Backspace') {
+          if (deleteEmptyListPlaceholder(editorRef.current!)) {
+            event.preventDefault()
+            return true
+          }
+        }
         if (mentionStateRef.current) {
           if (event.key === 'ArrowDown') {
             event.preventDefault()
@@ -453,12 +478,6 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
           }
           if (event.key === 'Escape') {
             setMentionState(null)
-            return true
-          }
-        }
-        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === 'Enter') {
-          if (splitListItemOnEnter(editorRef.current!)) {
-            event.preventDefault()
             return true
           }
         }
@@ -929,7 +948,7 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
           color: transparent;
           pointer-events: none;
         }
-        .day-script-editor.ProseMirror p.is-editor-empty:first-child::before {
+        .day-script-editor.ProseMirror > p.is-editor-empty:first-child::before {
           content: attr(data-placeholder);
           color: hsl(var(--muted-foreground));
           pointer-events: none;

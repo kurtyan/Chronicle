@@ -79,6 +79,12 @@ export interface WorkSession {
   endedAt: number | null
 }
 
+export interface AfkTransitionResult {
+  ok: boolean
+  endedSession: WorkSession | null
+  currentSession: WorkSession | null
+}
+
 export interface SearchResult {
   taskId: string
   entryId?: string | null
