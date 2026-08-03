@@ -205,7 +205,8 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(focusEditor.locator('ol > li')).toHaveCount(1)
     await expect(focusEditor.locator('ol > li > pre > code')).toHaveCount(1)
     await expect(focusEditor.locator('ol > li > p')).toHaveCount(0)
-    expect(await focusEditor.locator('ol > li').evaluate((item) => getComputedStyle(item).listStyleType)).toBe('decimal')
+    expect(await focusEditor.locator('ol > li').evaluate((item) => getComputedStyle(item).listStyleType)).toBe('none')
+    expect(await focusEditor.locator('ol > li').evaluate((item) => getComputedStyle(item, '::before').content)).toContain('counter(list-item)')
 
     const title = `ListCodeLog-${Date.now()}`
     await createTask(page, title)

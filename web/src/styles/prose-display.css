@@ -65,6 +65,41 @@
   position: relative;
 }
 
+/*
+ * WebKit places an outside marker at the editor edge when a list item starts
+ * directly with a block-level <pre>, so Tauri clips the marker. Keep native
+ * markers for normal items and draw only code-first item markers in the
+ * existing list gutter.
+ */
+.ProseMirror :is(ol, ul) > li:has(> pre:first-child),
+.prose-mirror-display :is(ol, ul) > li:has(> pre:first-child) {
+  list-style: none;
+  position: relative;
+}
+
+.ProseMirror :is(ol, ul) > li:has(> pre:first-child)::before,
+.prose-mirror-display :is(ol, ul) > li:has(> pre:first-child)::before {
+  position: absolute;
+  right: calc(100% + 0.4rem);
+  top: 0.75rem;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.ProseMirror ol > li:has(> pre:first-child)::before,
+.prose-mirror-display ol > li:has(> pre:first-child)::before {
+  content: counter(list-item) ".";
+}
+
+.ProseMirror ul > li:has(> pre:first-child)::before,
+.prose-mirror-display ul > li:has(> pre:first-child)::before {
+  content: "\2022";
+}
+
+.day-script-editor.ProseMirror :is(ol, ul) > li:has(> pre:first-child)::before {
+  top: 1.15rem;
+}
+
 .ProseMirror pre[data-code-wrap="on"],
 .day-script-editor.ProseMirror pre[data-code-wrap="on"],
 .prose-mirror-display pre[data-code-wrap="on"] {
