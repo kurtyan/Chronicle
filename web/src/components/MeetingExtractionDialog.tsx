@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type React from 'react'
 import { CalendarClock, Check, Loader2, X } from 'lucide-react'
 import DOMPurify from 'dompurify'
+import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { createMeeting, extractMeetingInBackground, fetchBackgroundTask, fetchTodos, getTaskById, submitTaskEntries } from '@/services/api'
 import type { MeetingExtractionResult, Task } from '@/types'
@@ -331,7 +332,7 @@ export function MeetingExtractionDialog({
                 <div className="text-xs font-medium text-muted-foreground">Raw Content</div>
                 <div
                   className="prose prose-sm max-w-none rounded-2xl border border-border/60 bg-muted/20 p-4 text-xs leading-5 min-h-[360px] overflow-auto"
-                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.rawContent, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
+                  dangerouslySetInnerHTML={{ __html: withCodeFirstListMarkers(DOMPurify.sanitize(result.rawContent, { ALLOW_UNKNOWN_PROTOCOLS: true })) }}
                 />
               </div>
             </div>

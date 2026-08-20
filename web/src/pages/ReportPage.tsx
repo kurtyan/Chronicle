@@ -8,6 +8,7 @@ import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
 import { getTaskById, fetchTaskEntries } from '@/services/api'
 import { registerShortcut } from '@/shortcuts/registry'
+import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 
 type TimeView = 'day' | 'week' | 'month'
 type StatFilter = 'NEW' | 'COMPLETED' | 'IN_PROGRESS' | 'ALL'
@@ -49,7 +50,7 @@ function convertImageSrcs(html: string): string {
 }
 
 function sanitizeProseHtml(html: string): string {
-  return DOMPurify.sanitize(convertImageSrcs(html), { ALLOW_UNKNOWN_PROTOCOLS: true })
+  return withCodeFirstListMarkers(DOMPurify.sanitize(convertImageSrcs(html), { ALLOW_UNKNOWN_PROTOCOLS: true }))
 }
 
 function formatDuration(ms: number): string {

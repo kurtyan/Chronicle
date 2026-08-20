@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
 import DOMPurify from 'dompurify'
+import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 import {
   AlertCircle,
   AlertTriangle,
@@ -1063,7 +1064,7 @@ function TaskSummaryPromptTestDialog({
                             </div>
                             <div
                               className="prose-mirror-display text-sm"
-                              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(entry.content, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
+                              dangerouslySetInnerHTML={{ __html: withCodeFirstListMarkers(DOMPurify.sanitize(entry.content, { ALLOW_UNKNOWN_PROTOCOLS: true })) }}
                             />
                           </div>
                         ))}

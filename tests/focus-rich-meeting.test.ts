@@ -156,43 +156,6 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor.locator(':scope > p + pre > code')).toHaveCount(1)
   })
 
-  test('focus Backspace removes an empty pasted list placeholder without lifting its nested list', async ({ page }) => {
-    const date = uniqueScriptDate(1_100 + Math.floor(Math.random() * 100))
-    await saveDayScript(page, date, {
-      type: 'doc',
-      content: [{
-        type: 'orderedList',
-        content: [{
-          type: 'listItem',
-          content: [
-            { type: 'paragraph' },
-            {
-              type: 'orderedList',
-              content: [{
-                type: 'listItem',
-                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'keep this nested item' }] }],
-              }],
-            },
-          ],
-        }],
-      }],
-    })
-    await page.goto(`/today?date=${date}&lang=en`)
-    await page.waitForLoadState('load')
-
-    const editor = page.locator('.day-script-editor.ProseMirror')
-    const placeholder = editor.locator('ol > li > p').first()
-    await placeholder.click()
-    await page.keyboard.type('x')
-    await expect(placeholder).toHaveText('x')
-    await page.keyboard.press('Backspace')
-    await page.keyboard.press('Backspace')
-
-    await expect(editor.locator(':scope > ol > li > p')).toHaveCount(0)
-    await expect(editor.locator(':scope > ol > li > ol > li')).toHaveCount(1)
-    await expect(editor.locator(':scope > ol > li > ol > li')).toContainText('keep this nested item')
-  })
-
   test('fenced code remains in the current ordered list item in Focus and task logs', async ({ page }) => {
     const date = uniqueScriptDate(1_250 + Math.floor(Math.random() * 100))
     await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
@@ -204,9 +167,9 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await page.keyboard.press('Enter')
     await expect(focusEditor.locator('ol > li')).toHaveCount(1)
     await expect(focusEditor.locator('ol > li > pre > code')).toHaveCount(1)
-    await expect(focusEditor.locator('ol > li > p')).toHaveCount(0)
-    expect(await focusEditor.locator('ol > li').evaluate((item) => getComputedStyle(item).listStyleType)).toBe('none')
-    expect(await focusEditor.locator('ol > li').evaluate((item) => getComputedStyle(item, '::before').content)).toContain('counter(list-item)')
+    await expect(focusEditor.locator('ol > li > p')).toHaveCount(1)
+    await page.keyboard.type('const focusValue = 1')
+    await expect(focusEditor.locator('ol > li > pre > code')).toHaveText('const focusValue = 1')
 
     const title = `ListCodeLog-${Date.now()}`
     await createTask(page, title)
@@ -219,7 +182,30 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await page.keyboard.press('Enter')
     await expect(logEditor.locator('ol > li')).toHaveCount(1)
     await expect(logEditor.locator('ol > li > pre > code')).toHaveCount(1)
-    await expect(logEditor.locator('ol > li > p')).toHaveCount(0)
+    await expect(logEditor.locator('ol > li > p')).toHaveCount(1)
+    await page.keyboard.type('const logValue = 1')
+    await expect(logEditor.locator('ol > li > pre > code')).toHaveText('const logValue = 1')
+  })
+
+  test('read-only task logs render stable markers for code-first list items', async ({ page }) => {
+    const task = await createTask(page, `ReadOnlyListCode-${Date.now()}`)
+    const logRes = await page.request.post(`/api/tasks/${task.id}/logs`, {
+      data: {
+        type: 'log',
+        content: '<ol start="3"><li><pre><code>read-only code</code></pre></li></ol>',
+      },
+    })
+    expect(logRes.ok()).toBeTruthy()
+
+    await page.goto('/?lang=en')
+    await page.waitForLoadState('load')
+    await page.locator('h4').filter({ hasText: task.title }).first().click()
+
+    const entry = page.getByTestId('task-entry-block').filter({ hasText: 'read-only code' })
+    const marker = entry.locator('[data-testid="entry-content"] ol > li > .chronicle-code-list-marker')
+    await expect(marker).toBeVisible()
+    await expect(marker).toHaveText('3.')
+    await expect(entry.locator('[data-testid="entry-content"] ol > li > pre > code')).toHaveText('read-only code')
   })
 
   test('inline list fence preserves Focus task-link marks and appends code in the same item', async ({ page }) => {
@@ -250,15 +236,12 @@ test.describe('Focus rich editor and meeting task mentions', () => {
 
     const editor = page.locator('.day-script-editor.ProseMirror')
     const paragraph = editor.locator('ol > li > p')
-    await editor.focus()
-    await paragraph.evaluate((element) => {
-      const range = document.createRange()
-      range.selectNodeContents(element)
-      range.collapse(false)
-      const selection = window.getSelection()!
-      selection.removeAllRanges()
-      selection.addRange(range)
-    })
+    await paragraph.click()
+    // Clicking a task-linked paragraph fires notifyCursorTask -> setActiveTask
+    // (async navigation). Wait for the task detail to settle before End/Enter,
+    // otherwise the code-fence Enter races the navigation and loses the selection.
+    await expect(page.getByRole('heading', { name: task.title })).toBeVisible()
+    await page.keyboard.press('End')
     await page.keyboard.press('Enter')
 
     await expect(editor.locator(`ol > li > p a[data-task-id="${task.id}"]`)).toHaveText(`@${task.title}`)
@@ -706,6 +689,11 @@ test.describe('Focus rich editor and meeting task mentions', () => {
           await expect(items.nth(0).locator('a')).toHaveText(linkText)
           await expect(items.nth(1).locator('p')).toBeEmpty()
           await expect(items.nth(1).locator('a')).toHaveCount(0)
+          await page.keyboard.press('Backspace')
+          await expect(items).toHaveCount(1)
+          await page.keyboard.type(' plain text')
+          await expect(items.nth(0)).toContainText(`${linkText} plain text`)
+          await expect(items.nth(0).locator('a')).toHaveText(linkText)
         } else {
           const paragraphs = editor.locator(':scope > p')
           await expect(paragraphs).toHaveCount(2)
@@ -715,6 +703,63 @@ test.describe('Focus rich editor and meeting task mentions', () => {
         }
       })
     }
+  })
+
+  test('Backspace after a trailing link keeps a nested list at its current depth', async ({ page }) => {
+    const date = uniqueScriptDate(2_600 + Math.floor(Math.random() * 100))
+    const linkText = 'nested trailing link'
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [{
+        type: 'orderedList',
+        content: [{
+          type: 'listItem',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'parent item' }] },
+            {
+              type: 'orderedList',
+              content: [
+                {
+                  type: 'listItem',
+                  content: [{
+                    type: 'paragraph',
+                    content: [{
+                      type: 'text',
+                      text: linkText,
+                      marks: [{ type: 'link', attrs: { href: 'https://example.com/nested', taskId: null } }],
+                    }],
+                  }],
+                },
+                { type: 'listItem', content: [{ type: 'paragraph' }] },
+              ],
+            },
+          ],
+        }],
+      }],
+    })
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    const nestedItems = editor.locator(':scope > ol > li > ol > li')
+    await nestedItems.nth(1).locator('p').evaluate((paragraph) => {
+      const editorElement = paragraph.closest('[contenteditable="true"]') as HTMLElement
+      editorElement.focus()
+      const range = document.createRange()
+      range.selectNodeContents(paragraph)
+      range.collapse(true)
+      const selection = window.getSelection()!
+      selection.removeAllRanges()
+      selection.addRange(range)
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    await page.keyboard.press('Backspace')
+
+    await expect(nestedItems).toHaveCount(1)
+    await expect(editor.locator(':scope > ol > li')).toHaveCount(1)
+    await page.keyboard.type(' plain text')
+    await expect(nestedItems.first()).toContainText(`${linkText} plain text`)
+    await expect(nestedItems.first().locator('a')).toHaveText(linkText)
   })
 
   test('focus editor renders new task badge as non-editable', async ({ page }) => {

@@ -25,6 +25,7 @@ import * as api from '@/services/api'
 import type { GlobalSearchResponse, NoteSearchResult, SearchResult } from '@/types'
 import { setSearchJumpIntent } from '@/lib/searchJump'
 import { highlightText } from '@/lib/highlight'
+import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 import { useSearchPersistStore, isSearchPersistValid } from '@/stores/searchPersistStore'
 
 // Open links in system browser when running in Tauri
@@ -686,7 +687,7 @@ function BackgroundTaskResultDialog({ task, onOpenChange }: {
                 <div className="mb-1 text-xs font-medium uppercase tracking-normal text-muted-foreground">Content</div>
                 <div
                   className="prose-mirror-display rounded-md border border-border/70 bg-muted/10 p-3 text-sm"
-                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(result.content, { ALLOW_UNKNOWN_PROTOCOLS: true }) }}
+                  dangerouslySetInnerHTML={{ __html: withCodeFirstListMarkers(DOMPurify.sanitize(result.content, { ALLOW_UNKNOWN_PROTOCOLS: true })) }}
                 />
               </div>
             </div>

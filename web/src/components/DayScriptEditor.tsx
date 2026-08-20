@@ -4,7 +4,7 @@ import Link from '@tiptap/extension-link'
 import Paragraph from '@tiptap/extension-paragraph'
 import Placeholder from '@tiptap/extension-placeholder'
 import StarterKit from '@tiptap/starter-kit'
-import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state'
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -12,8 +12,8 @@ import { createPortal } from 'react-dom'
 import type { DayScriptDocument, Task } from '@/types'
 import { buildDayScriptActivityKey, findActiveBlock, isNewTaskHeaderText, parseDayScriptDocument } from '@/lib/dayScript'
 import { ChronicleImage, isTauri, resolveImageSrcsInEditor, uploadAndInsertImage } from '@/components/RichEditor'
-import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
-import { ChronicleListItem, ChronicleTrailingCodeFence } from '@/components/RichEditor/ChronicleListItem'
+import { createSharedEditorExtensions } from '@/components/RichEditor/editorExtensions'
+import { normalizeLegacyCodeFirstListItems } from '@/lib/proseHtml'
 
 interface DayScriptEditorProps {
   value: DayScriptDocument['document']
@@ -129,9 +129,17 @@ type LineMapping = {
 function sanitizeEditorNode(node: any): any | null {
   if (!node || typeof node !== 'object') return node
   if (node.type === 'text' && !node.text) return null
-  const content = Array.isArray(node.content)
+  let content = Array.isArray(node.content)
     ? node.content.map(sanitizeEditorNode).filter(Boolean)
     : undefined
+  // Normalize legacy code-first / nested-list-first / empty list items to
+  // paragraph-first (the list item content model is now `paragraph block*`).
+  if (node.type === 'listItem') {
+    const first = content && content[0]
+    if (!first || first.type !== 'paragraph') {
+      content = [{ type: 'paragraph' }, ...(content || [])]
+    }
+  }
   return {
     ...node,
     ...(content ? { content } : {}),
@@ -292,28 +300,6 @@ function moveSelectionToTextblockBoundary(editor: Editor, edge: 'start' | 'end')
   return true
 }
 
-function deleteEmptyListPlaceholder(editor: Editor): boolean {
-  const { state, view } = editor
-  const { selection } = state
-  const { $from } = selection
-  if (!selection.empty || $from.parent.type.name !== 'paragraph' || $from.parent.content.size !== 0) return false
-
-  const paragraphDepth = $from.depth
-  const listItemDepth = paragraphDepth - 1
-  if (listItemDepth < 1 || $from.node(listItemDepth).type.name !== 'listItem') return false
-
-  const listItem = $from.node(listItemDepth)
-  const paragraphIndex = $from.index(listItemDepth)
-  const nextSibling = listItem.maybeChild(paragraphIndex + 1)
-  if (nextSibling?.type.name !== 'orderedList' && nextSibling?.type.name !== 'bulletList') return false
-
-  const from = $from.before(paragraphDepth)
-  const tr = state.tr.delete(from, $from.after(paragraphDepth))
-  tr.setSelection(Selection.near(tr.doc.resolve(Math.min(from, tr.doc.content.size)), 1))
-  view.dispatch(tr.scrollIntoView())
-  return true
-}
-
 function findTaskMentionRangeInCurrentLine(editor: Editor): { from: number; to: number } | null {
   const { state } = editor
   const { $anchor } = state.selection
@@ -380,9 +366,7 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
         listItem: false,
       }),
       DayScriptParagraph,
-      ChronicleListItem,
-      ChronicleTrailingCodeFence,
-      WrappedCodeBlock,
+      ...createSharedEditorExtensions(),
       NewTaskBadge,
       ChronicleImage.configure({
         inline: false,
@@ -404,6 +388,7 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
       attributes: {
         class: 'day-script-editor min-h-[360px] text-[15px] leading-7 outline-none',
       },
+      transformPastedHTML: (html) => normalizeLegacyCodeFirstListItems(html),
       handleClick: (_view, _pos, event) => {
         const target = event.target as HTMLElement | null
         const link = target?.closest('a[data-task-id]') as HTMLAnchorElement | null
@@ -451,12 +436,6 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
           event.preventDefault()
           return moveSelectionToTextblockBoundary(editorRef.current!, event.key === 'Home' ? 'start' : 'end')
         }
-        if (!event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key === 'Backspace') {
-          if (deleteEmptyListPlaceholder(editorRef.current!)) {
-            event.preventDefault()
-            return true
-          }
-        }
         if (mentionStateRef.current) {
           if (event.key === 'ArrowDown') {
             event.preventDefault()
@@ -480,6 +459,23 @@ export function DayScriptEditor({ value, blocks: savedBlocks, tasks, scriptDate,
             setMentionState(null)
             return true
           }
+        }
+        if (event.key === 'Tab') {
+          // Code blocks insert/remove indentation themselves via
+          // WrappedCodeBlock's enableTabIndentation. Everything else keeps
+          // focus inside: lists sink/lift, plain text just swallows.
+          const { $from } = _view.state.selection
+          if ($from.parent.type.name === 'codeBlock') return false
+          event.preventDefault()
+          const activeEditor = editorRef.current
+          if (activeEditor) {
+            if (event.shiftKey) {
+              activeEditor.chain().focus().liftListItem('listItem').run()
+            } else {
+              activeEditor.chain().focus().sinkListItem('listItem').run()
+            }
+          }
+          return true
         }
         return false
       },

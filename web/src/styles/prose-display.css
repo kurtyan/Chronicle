@@ -65,19 +65,32 @@
   position: relative;
 }
 
-/*
- * WebKit places an outside marker at the editor edge when a list item starts
- * directly with a block-level <pre>, so Tauri clips the marker. Keep native
- * markers for normal items and draw only code-first item markers in the
- * existing list gutter.
- */
-.ProseMirror :is(ol, ul) > li:has(> pre:first-child),
+/* WebKit clips native markers when a list item starts with a block <pre>. */
+:is(.ProseMirror, .prose-mirror-display) :is(ol, ul) > li:has(> .chronicle-code-list-marker:first-child) {
+  list-style: none;
+  position: relative;
+}
+
+:is(.ProseMirror, .prose-mirror-display) .chronicle-code-list-marker {
+  position: absolute;
+  right: calc(100% + 0.4rem);
+  top: 0.75rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+.day-script-editor.ProseMirror .chronicle-code-list-marker {
+  top: 1.15rem;
+}
+
+/* Static HTML has no ProseMirror decoration, so retain a load-time fallback. */
 .prose-mirror-display :is(ol, ul) > li:has(> pre:first-child) {
   list-style: none;
   position: relative;
 }
 
-.ProseMirror :is(ol, ul) > li:has(> pre:first-child)::before,
 .prose-mirror-display :is(ol, ul) > li:has(> pre:first-child)::before {
   position: absolute;
   right: calc(100% + 0.4rem);
@@ -86,18 +99,12 @@
   white-space: nowrap;
 }
 
-.ProseMirror ol > li:has(> pre:first-child)::before,
 .prose-mirror-display ol > li:has(> pre:first-child)::before {
   content: counter(list-item) ".";
 }
 
-.ProseMirror ul > li:has(> pre:first-child)::before,
 .prose-mirror-display ul > li:has(> pre:first-child)::before {
   content: "\2022";
-}
-
-.day-script-editor.ProseMirror :is(ol, ul) > li:has(> pre:first-child)::before {
-  top: 1.15rem;
 }
 
 .ProseMirror pre[data-code-wrap="on"],
@@ -130,6 +137,10 @@
   white-space: pre !important;
   overflow-wrap: normal;
   word-break: normal;
+}
+
+.code-block-wrap-toggle::before {
+  content: "\21B5";
 }
 
 .code-block-wrap-toggle {

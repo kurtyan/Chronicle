@@ -5,6 +5,7 @@ import { TaskEntryBlock } from '@/components/TaskEntryBlock'
 import { Pin, Pencil, PinOff, ChevronDown, ChevronUp } from 'lucide-react'
 import { highlightHtml } from '@/lib/highlight'
 import DOMPurify from 'dompurify'
+import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 
 interface PinnedSectionProps {
   entry: TaskEntry
@@ -91,12 +92,12 @@ export function PinnedSection({ entry, taskId, onUpdate, onUnpin, highlightToken
             />
           ) : (
             <div
-              className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 text-foreground"
+              className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 text-foreground prose-mirror-display"
               dangerouslySetInnerHTML={{
-                __html: DOMPurify.sanitize(
+                __html: withCodeFirstListMarkers(DOMPurify.sanitize(
                   highlightTokens?.length ? highlightHtml(entry.content, highlightTokens) : entry.content,
                   { ALLOW_UNKNOWN_PROTOCOLS: true }
-                ),
+                )),
               }}
             />
           )}

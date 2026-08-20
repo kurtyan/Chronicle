@@ -5,6 +5,7 @@ import { RichEditor } from '@/components/RichEditor'
 import { useI18n } from '@/i18n/context'
 import { format } from 'date-fns'
 import { highlightHtml } from '@/lib/highlight'
+import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 import { FileText, ZoomIn, ZoomOut, X, Trash2, Pin } from 'lucide-react'
 
 // Check if HTML content is effectively empty (no visible text)
@@ -39,7 +40,7 @@ function convertImageSrcs(html: string): string {
 function withCodeBlockWrapButtons(html: string): string {
   return html.replace(/<pre\b([^>]*)>/g, (_match, attrs: string) => {
     const nextAttrs = /\sdata-code-wrap=/.test(attrs) ? attrs : `${attrs} data-code-wrap="on"`
-    return `<pre${nextAttrs}><button type="button" class="code-block-wrap-toggle" aria-label="Toggle code block soft wrap" title="Toggle soft wrap" aria-pressed="${nextAttrs.includes('data-code-wrap="off"') ? 'false' : 'true'}">↵</button>`
+    return `<pre${nextAttrs}><button type="button" class="code-block-wrap-toggle" tabindex="-1" aria-label="Toggle code block soft wrap" title="Toggle soft wrap" aria-pressed="${nextAttrs.includes('data-code-wrap="off"') ? 'false' : 'true'}"></button>`
   })
 }
 
@@ -610,7 +611,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
           ref={contentRef}
           data-testid="entry-content"
           className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"
-          dangerouslySetInnerHTML={{ __html: withCodeBlockWrapButtons(DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(convertImageSrcs(entry.content), highlightTokens) : convertImageSrcs(entry.content), { ALLOW_UNKNOWN_PROTOCOLS: true })) }}
+          dangerouslySetInnerHTML={{ __html: withCodeBlockWrapButtons(withCodeFirstListMarkers(DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(convertImageSrcs(entry.content), highlightTokens) : convertImageSrcs(entry.content), { ALLOW_UNKNOWN_PROTOCOLS: true }))) }}
         />
       </div>
       {selectionToolbar && (

@@ -11,8 +11,8 @@ import { useEffect, useRef, useMemo, useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { cn } from '@/lib/utils'
 import type { Task } from '@/types'
-import { WrappedCodeBlock } from '@/components/RichEditor/WrappedCodeBlock'
-import { ChronicleListItem, ChronicleTrailingCodeFence } from '@/components/RichEditor/ChronicleListItem'
+import { createSharedEditorExtensions } from '@/components/RichEditor/editorExtensions'
+import { normalizeLegacyCodeFirstListItems } from '@/lib/proseHtml'
 
 /** Detect Tauri environment */
 export function isTauri(): boolean {
@@ -351,9 +351,7 @@ function RichEditorInner({
       codeBlock: false,
       listItem: false,
     }),
-    ChronicleListItem,
-    ChronicleTrailingCodeFence,
-    WrappedCodeBlock,
+    ...createSharedEditorExtensions(),
     ChronicleImage.configure({
       inline: false,
     }),
@@ -369,7 +367,9 @@ function RichEditorInner({
 
   const editor = useEditor({
     extensions,
-    content,
+    // Normalize legacy code-first list HTML on first mount too (not just in the
+    // sync effect), otherwise the raw legacy HTML is parsed and throws/drops.
+    content: normalizeLegacyCodeFirstListItems(content),
     onUpdate: ({ editor }) => {
       contentRef.current = editor.getHTML()
       onChangeRef.current(editor.getHTML())
@@ -380,6 +380,7 @@ function RichEditorInner({
       attributes: {
         class: 'prose prose-sm max-w-none focus:outline-none min-h-[200px] p-4',
       },
+      transformPastedHTML: (html) => normalizeLegacyCodeFirstListItems(html),
       handleDOMEvents: {
           dragstart: (_view, event) => {
             if (event.target instanceof HTMLImageElement) {
@@ -497,6 +498,11 @@ function RichEditorInner({
           }
         }
         if (event.key === 'Tab') {
+          // Code blocks insert/remove indentation themselves via
+          // WrappedCodeBlock's enableTabIndentation. Everything else keeps
+          // focus inside: lists sink/lift, plain text just swallows.
+          const { $from } = view.state.selection
+          if ($from.parent.type.name === 'codeBlock') return false
           event.preventDefault()
           const ed = editorRef.current
           if (ed) {
@@ -642,7 +648,7 @@ function RichEditorInner({
   useEffect(() => {
     if (!editor) return
     if (content !== contentRef.current) {
-      editor.commands.setContent(content, { emitUpdate: false })
+      editor.commands.setContent(normalizeLegacyCodeFirstListItems(content), { emitUpdate: false })
       contentRef.current = content
     }
   }, [content, editor])

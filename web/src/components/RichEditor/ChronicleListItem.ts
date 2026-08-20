@@ -1,7 +1,15 @@
 import { Extension } from '@tiptap/core'
 import { ListItem } from '@tiptap/extension-list'
 import type { Editor } from '@tiptap/core'
+import type { ResolvedPos } from '@tiptap/pm/model'
 import { TextSelection } from '@tiptap/pm/state'
+
+function findAncestorDepth($pos: ResolvedPos, nodeName: string): number | null {
+  for (let depth = $pos.depth; depth > 0; depth -= 1) {
+    if ($pos.node(depth).type.name === nodeName) return depth
+  }
+  return null
+}
 
 export function turnTrailingFenceIntoCodeBlock(editor: Editor): boolean {
   const { state, view } = editor
@@ -21,14 +29,20 @@ export function turnTrailingFenceIntoCodeBlock(editor: Editor): boolean {
   let fenceOffset = fence.index
   while (fenceOffset > 0 && /[ \t]/.test(textBeforeCursor[fenceOffset - 1])) fenceOffset--
   const hasPrefix = textBeforeCursor.slice(0, fenceOffset).trim().length > 0
+  const inListItem = findAncestorDepth($from, 'listItem') !== null
   const codeBlockNode = codeBlock.create({ language: fence[1] ?? null })
   const tr = state.tr
   let codeStart: number
 
-  if (!hasPrefix) {
+  if (!hasPrefix && !inListItem) {
+    // Standalone empty paragraph: replace it with the code block directly,
+    // leaving no empty paragraph behind.
     codeStart = $from.before()
     tr.replaceWith(codeStart, $from.after(), codeBlockNode)
   } else {
+    // Keep the paragraph (empty in a list item, or with prefix text) and
+    // append the code block after it, so a list item never starts with a
+    // codeBlock (content model is `paragraph block*`).
     tr.delete($from.start() + fenceOffset, $from.pos)
     codeStart = tr.mapping.map($from.after())
     tr.insert(codeStart, codeBlockNode)
@@ -39,8 +53,8 @@ export function turnTrailingFenceIntoCodeBlock(editor: Editor): boolean {
   return true
 }
 
-export const ChronicleTrailingCodeFence = Extension.create({
-  name: 'chronicleTrailingCodeFence',
+export const ChronicleListEditing = Extension.create({
+  name: 'chronicleListEditing',
   priority: 1000,
 
   addKeyboardShortcuts() {
@@ -50,10 +64,9 @@ export const ChronicleTrailingCodeFence = Extension.create({
   },
 })
 
-// The default TipTap list item must start with a paragraph. Chronicle also
-// supports pasted nested lists without an artificial empty paragraph.
-// Extending ListItem, rather than replacing it with a bare node, retains
-// TipTap's Enter, Tab, and Shift+Tab list commands.
+// Use TipTap's default list item content model (paragraph first). Pasted
+// nested lists / code-first items are normalized at paste time instead of
+// relaxing the schema, which keeps splitListItem / joinItemBackward correct.
 export const ChronicleListItem = ListItem.extend({
-  content: 'paragraph block* | codeBlock block* | (bulletList | orderedList)+',
+  content: 'paragraph block*',
 })
