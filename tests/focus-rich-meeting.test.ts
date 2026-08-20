@@ -1012,6 +1012,33 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await expect(editor).not.toContainText('08:10-08:25')
   })
 
+  test('Cmd+Shift+R reschedules a selected Focus task created from a new-task line', async ({ page }) => {
+    const date = uniqueScriptDate(Date.now() % 20 + 120)
+    const title = `RescheduleCreatedTask-${Date.now()}`
+
+    await saveDayScript(page, date, {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: `08:00-08:20 new task ${title}` }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Initial task body' }] },
+      ],
+    })
+    const submitted = await page.request.post(`/api/day-scripts/${date}/submit-progress`, { data: {} })
+    expect(submitted.ok()).toBeTruthy()
+    expect((await submitted.json()).createdTasks).toHaveLength(1)
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    await editor.click()
+    await page.keyboard.press('Meta+a')
+    const rescheduled = page.waitForResponse((response) => response.url().includes(`/api/day-scripts/${date}/reschedule-focus`) && response.request().method() === 'POST')
+    await page.keyboard.press('Meta+Shift+r')
+    expect((await rescheduled).ok()).toBeTruthy()
+    await expect(editor).not.toContainText('08:00-08:20')
+    await expect(editor).toContainText(`@${title}`)
+  })
+
   test('focus editor maps nested list progress edits to the owning task', async ({ page }) => {
     await page.request.post('/api/afk').catch(() => {})
     const task = await createTask(page, `NestedProgress-${Date.now()}`)

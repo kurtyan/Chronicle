@@ -88,7 +88,7 @@ export interface ApiInterface {
   saveDayScript(date: string, body: { expectedRevision: number; document: Record<string, any>; focusActivity?: DayScriptFocusActivity[] }): Promise<SaveDayScriptResult>
   submitDayScriptProgress(date: string, body?: { focusActivity?: DayScriptFocusActivity[] }): Promise<SubmitDayScriptProgressResult>
   rescheduleDayScriptFocus(date: string, body: { expectedRevision: number; sortOrders: number[] }): Promise<{ script: DayScriptDocument; changed: boolean }>
-  confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }>
+  confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>, resolution?: 'create_logs' | 'replace_log' | 'accept_current'): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>; updatedLogs: Array<{ taskId: string; entryId: string; blockId: string }> }>
   getDayScriptExecutionRecords(date: string, filters?: { taskId?: string; start?: number; end?: number }): Promise<DayScriptExecutionRecord[]>
   generateDailySummary(date: string, body?: { refresh?: boolean; mode?: 'record' | 'test' }): Promise<DailySummaryResult>
   fetchDailySummaryCache(date: string): Promise<DailySummaryCacheResult | null>

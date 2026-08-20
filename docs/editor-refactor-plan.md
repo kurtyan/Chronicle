@@ -1,7 +1,7 @@
 # Chronicle 富文本编辑器：需求整理与改造方案
 
-> 状态：阶段 1 已实现并验证（其余阶段待实施）
-> 日期：2026-08-06
+> 状态：阶段 1–4 已实现，阶段 5–6 未做（实际执行结果见第 10 节）
+> 日期：2026-08-06（计划）／ 2026-08-20（执行结果更新）
 > 方法：本文的需求全部来自 `git log` 的 commit message 与 diff，不引用任何产品规划文档。
 
 ---
@@ -267,7 +267,9 @@ if (event.key === 'Tab') {
 - **`toHaveText` 会做 whitespace 归一化（trim 前导空格）**：用 `toHaveText('    const x = 1')` 断言缩进会「假绿」（前导空格被抹掉）。必须读 `locator.textContent()` 后 `expect().toBe()` 做精确比较。
 - **WebKit 下 Playwright 合成 `Tab` 不触发浏览器原生焦点遍历**：因此「Tab 跳 wrap 按钮」的行为断言是弱烟测（假绿）。可靠护栏是 `tabindex="-1"` 的静态断言。
 
-### 8.4 阶段 1 目标测试（新增 `tests/editor-tab-list.test.ts`，WebKit）
+### 8.4 编辑器目标测试（`tests/editor-tab-list.test.ts`，WebKit）
+
+> 下表是最初阶段 1 的 5 个目标用例；后续在修复过程中补充到 10 个（Cmd+A、Enter 换行、三连 Enter、ArrowUp/ArrowDown 等），最终状态见第 10.3 节。
 
 | 用例 | 目标行为 | 当前状态（修复前） |
 |------|----------|--------------------|
@@ -321,7 +323,7 @@ git diff --check
 
 这 3 个红用例即阶段 1 的验收标准：实现阶段 1 后应转绿，2 个绿用例保持不变。
 
-**阶段 1 已实现（2026-08-06）**：4 个文件改动——`WrappedCodeBlock`（启用 `enableTabIndentation` + 按钮加 `tabindex="-1"`/`contenteditable="false"`）、`TaskEntryBlock`（展示态按钮同样处理）、`RichEditor` 与 `DayScriptEditor`（Tab 路由改为「代码块放行给扩展、其余吞掉保焦点」）。`tests/editor-tab-list.test.ts` 5/5 转绿。
+**阶段 1 已实现（2026-08-06）**：4 个文件改动——`WrappedCodeBlock`（启用 `enableTabIndentation` + 按钮加 `tabindex="-1"`/`contenteditable="false"`）、`TaskEntryBlock`（展示态按钮同样处理）、`RichEditor` 与 `DayScriptEditor`（Tab 路由改为「代码块放行给扩展、其余吞掉保焦点」）。当时 `tests/editor-tab-list.test.ts` 5/5 转绿；后续补充到 **10/10 全绿**（见第 10.3 节）。
 
 ---
 
@@ -331,3 +333,52 @@ git diff --check
 2. 阶段 2 的粘贴规范化是否接受「列表项必须以段落开头」的约束（即不再支持 codeBlock 作为列表项首子节点）？
 3. 阶段 5 的 spellcheck：是彻底移除全局关闭、还是加设置项？
 4. 是否先在阶段 1 落地后暂停，观察真实使用反馈再进入阶段 2？
+
+---
+
+## 10. 实际执行结果与对抗性 Code Review（2026-08-20）
+
+> 本节是「执行后」的记录，取代上方阶段 1–6 的「计划」描述；两者有出入处以本节为准。
+
+### 10.1 各阶段执行状态
+
+| 阶段 | 状态 | 实际做法（与计划的出入） |
+|---|---|---|
+| 0 WIP 去留 | ✅ 完成 | 保留共享层方向；放弃 `priority:1000` 拦截与 code-list-marker |
+| 1 Tab + wrap 按钮 | ✅ 完成 | 按钮用 `contenteditable="false"`（**未用** Decoration widget，更简单）；`enableTabIndentation: true`；**额外移除**了自定义 ArrowUp/ArrowDown 覆盖 |
+| 2 content model | ✅ 完成 | 恢复 `paragraph block*`；fence 改为生成「段落+代码块」；`normalizeLegacyCodeFirstListItems`（加载 + 粘贴双向） |
+| 3 消除拦截 | ✅ 完成 | 删 `insertNewlineInCodeBlock`（冗余 + 破坏 `exitOnTripleEnter`）；删冗余 link handler；删 code-list-marker 装饰 |
+| 4 共享内核 | 🟡 部分 | 抽出 `createSharedEditorExtensions`；**`notifyCursorTask` 副作用收敛未做**（仅测试侧加等待） |
+| 5 键盘/文本策略 | ❌ 未做 | 全局 dispatcher 守卫、spellcheck 可配置，均未动 |
+| 6 回归护栏 | 🟡 部分 | 新增 WebKit editor 测试；全量 210/215 |
+
+### 10.2 对抗性 Code Review 结论（4 个全新 context sub agent）
+
+**发现并修复的真实问题：**
+
+| 级别 | 问题 | 修复 |
+|---|---|---|
+| 🔴 H1 | `insertNewlineInCodeBlock` 冗余且破坏 `exitOnTripleEnter`（三连 Enter 不退出代码块） | 删除该函数；补三连 Enter 退出测试 |
+| 🔴 H2 | `deleteEmptyListItemAfterTrailingLink` 用 `$from.index(listDepth)` 算错索引，可抛 `RangeError` 打断 Backspace | 连同冗余的 `splitListItemAfterTrailingLink` 一起删除（TipTap 默认行为已覆盖） |
+| 🔴 H3 | `normalizeLegacyCodeFirstListItems` 首次挂载被跳过 → 旧 `<li><pre>` 数据首次打开仍损坏 | 在 `useEditor` 的 `content` 选项也规范化 |
+| 🟠 M1 | 注释声称「粘贴时规范化」但无 paste 代码 | 两个编辑器加 `transformPastedHTML` |
+| 🟠 M2 | JSON 规范化对空列表项不兜底 | 空/非段落首子节点都补段落 |
+| 🟠 M3 | ArrowDown 无 WebKit 覆盖 | 补 ArrowDown 退出代码块测试 |
+| 🟡 L1 | Enter「换行」测试假绿（子串断言） | 改精确 `textContent` 断言 |
+| 🟡 Q4 | flaky fence 测试竞态 | 点击后加「等 `setActiveTask` 落定」等待 |
+
+**验证为正确、无需改：** `turnTrailingFenceIntoCodeBlock` 位置运算、删除 `deleteEmptyListPlaceholder`（正确且必要）、按钮 `contenteditable="false"`、`getPos` 不陈旧、`aria-pressed`、Mod-a、Tab 路由、共享工厂无循环引用且复用安全、marker 无重复冲突。
+
+### 10.3 测试现状
+
+- `tests/editor-tab-list.test.ts`：**10/10 全绿**（WebKit）
+- 全量：**210/215**（5 个失败均为既有、与编辑器无关：3× `task-summary-real-llm` 需真实 LLM；2× `plan-today-draft` Work Overview 面板 flaky）
+- `git diff --check` 通过；web/server 构建通过
+
+### 10.4 遗留项（未做，供后续）
+
+1. **`notifyCursorTask` 副作用收敛**（阶段 4 第 5 条）——当前靠测试侧等待规避，产品侧仍每次选区变化都 `setActiveTask`。
+2. **测试迁移 WebKit**——全量默认仍是 Chromium，仅 `editor-tab-list.test.ts` 用 WebKit（见 8.2）。
+3. **阶段 5**：全局 dispatcher 守卫、spellcheck 可配置。
+4. `renderHTML`/NodeView 丢 `language-*` class（既有，当前未用 `language`）。
+5. read-only marker 测试用 `toBeVisible()` 测不出 WebKit 裁剪（测试质量问题，见 review L2）。

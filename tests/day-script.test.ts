@@ -363,6 +363,37 @@ test.describe('Day Script progress sync', () => {
     expect((await current.json()).revision).toBe(result.script.revision)
   })
 
+  test('reschedule focus updates a selected new-task block with only a body baseline sync', async ({ page }) => {
+    const date = uniqueScriptDate(70)
+    const title = `DayScript-RescheduleNewTask-${Date.now()}`
+    const target = ceilToFiveMinutes(new Date())
+    const originalStart = addMinutes(target, -60)
+    const originalEnd = addMinutes(originalStart, 20)
+
+    const saved = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `${formatTime(originalStart)}-${formatTime(originalEnd)} new task ${title}` },
+          { text: 'Initial task body written from Focus' },
+        ]),
+      },
+    })
+    expect(saved.ok()).toBeTruthy()
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.createdTasks).toHaveLength(1)
+    expect(submitted.script.blocks[0].taskIds).toEqual([submitted.createdTasks[0].id])
+
+    const rescheduled = await rescheduleFocus(page, date, submitted.script.revision, [0])
+    expect(rescheduled.ok()).toBeTruthy()
+    const result = await rescheduled.json()
+    expect(result.changed).toBe(true)
+    expect(extractParagraphTexts(result.script.document)[0]).toContain(
+      `${formatTime(target)}-${formatTime(addMinutes(target, 20))}`,
+    )
+  })
+
   test('submit progress does not delay future planned focus lines or create a new revision', async ({ page }) => {
     const task = await createTask(page, `DayScript-NoAdvance-${Date.now()}`)
     const date = uniqueScriptDate(46)
@@ -602,6 +633,139 @@ test.describe('Day Script progress sync', () => {
     expect(entries).toHaveLength(2)
   })
 
+  test('dragon conflict can be resolved by creating a snapshot log', async ({ page }) => {
+    const task = await createTask(page, `DayScript-DragonConflict-${Date.now()}`)
+    const date = uniqueScriptDate(72)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `11:00-11:30 @${task.title} 🐲`, taskId: task.id },
+          { text: 'Original dragon progress' },
+        ]),
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
+
+    const changed = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: doc([
+          { text: `11:00-11:30 @${task.title} 🐲`, taskId: task.id },
+          { text: 'Rewritten dragon progress' },
+        ]),
+      },
+    })
+    expect(changed.ok()).toBeTruthy()
+    const conflictSubmit = await submitProgress(page, date)
+    expect(conflictSubmit.conflicts).toHaveLength(1)
+
+    const conflict = conflictSubmit.conflicts[0]
+    const resolve = await page.request.post(`/api/day-scripts/${date}/confirm-progress-sync`, {
+      data: {
+        resolution: 'create_logs',
+        items: [{ blockId: conflict.blockId, taskId: conflict.taskId }],
+      },
+    })
+    expect(resolve.ok()).toBeTruthy()
+    expect((await resolve.json()).createdLogs).toHaveLength(1)
+    expect((await submitProgress(page, date)).conflicts).toHaveLength(0)
+  })
+
+  test('conflict can accept current text as the new baseline without another log', async ({ page }) => {
+    const task = await createTask(page, `DayScript-AcceptConflict-${Date.now()}`)
+    const date = uniqueScriptDate(73)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `12:00-12:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Previously synced text' },
+        ]),
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
+
+    const changed = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: doc([
+          { text: `12:00-12:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Rewritten current text' },
+        ]),
+      },
+    })
+    expect(changed.ok()).toBeTruthy()
+    const conflictSubmit = await submitProgress(page, date)
+    expect(conflictSubmit.conflicts).toHaveLength(1)
+
+    const conflict = conflictSubmit.conflicts[0]
+    const accept = await page.request.post(`/api/day-scripts/${date}/confirm-progress-sync`, {
+      data: {
+        resolution: 'accept_current',
+        items: [{ blockId: conflict.blockId, taskId: conflict.taskId }],
+      },
+    })
+    expect(accept.ok()).toBeTruthy()
+    expect((await accept.json()).createdLogs).toHaveLength(0)
+    expect((await submitProgress(page, date)).conflicts).toHaveLength(0)
+    expect(await getEntries(page, task.id)).toHaveLength(1)
+  })
+
+  test('Focus conflict dialog can replace the synced log and does not reopen on Ctrl+Enter', async ({ page }) => {
+    const task = await createTask(page, `DayScript-ReplaceConflictUi-${Date.now()}`)
+    const date = uniqueScriptDate(74)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `13:00-13:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Original UI progress' },
+        ]),
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
+
+    const changed = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: doc([
+          { text: `13:00-13:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Rewritten UI progress' },
+        ]),
+      },
+    })
+    expect(changed.ok()).toBeTruthy()
+
+    await page.goto(`/today?date=${date}&lang=en`)
+    await page.waitForLoadState('load')
+    const editor = page.locator('.day-script-editor.ProseMirror')
+    await editor.click()
+    await page.keyboard.press('Control+Enter')
+
+    const dialog = page.getByRole('dialog').filter({ hasText: 'Progress sync confirmation' })
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: 'Replace log' }).click()
+    await expect(dialog).toBeHidden()
+
+    await editor.click()
+    await page.keyboard.press('Control+Enter')
+    await expect(dialog).toBeHidden()
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].content).toContain('Rewritten UI progress')
+    expect(entries[0].content).not.toContain('Original UI progress')
+  })
+
   test('completed focus line stores planned and actual execution record', async ({ page }) => {
     const task = await createTask(page, `DayScript-Execution-${Date.now()}`)
     const date = uniqueScriptDate(3)
@@ -808,7 +972,7 @@ test.describe('Day Script progress sync', () => {
     expect(entries[0].content).toContain('day-script-image.png')
   })
 
-  test('formatting changes in already synced progress create a conflict instead of slicing invalid html', async ({ page }) => {
+  test('formatting drift in synced text still appends only genuinely new progress', async ({ page }) => {
     const task = await createTask(page, `DayScript-HtmlDelta-${Date.now()}`)
     const date = uniqueScriptDate(20)
 
@@ -849,16 +1013,51 @@ test.describe('Day Script progress sync', () => {
     const second = await secondSave.json()
     expect(second.createdLogs).toHaveLength(0)
     const secondSubmit = await submitProgress(page, date)
-    expect(secondSubmit.createdLogs).toHaveLength(0)
-    expect(secondSubmit.conflicts).toHaveLength(1)
-    expect(secondSubmit.conflicts[0]).toMatchObject({
-      taskId: task.id,
-      existingProgress: 'Done',
-      currentProgress: 'Done\nNext',
-    })
+    expect(secondSubmit.createdLogs).toHaveLength(1)
+    expect(secondSubmit.conflicts).toHaveLength(0)
 
     const entries = await getEntries(page, task.id)
-    expect(entries).toHaveLength(1)
+    expect(entries).toHaveLength(2)
+    expect(entries[0].content).toContain('<strong>Done</strong>')
+    expect(entries[1].content).toContain('Next')
+    expect(entries[1].content).not.toContain('Done')
+  })
+
+  test('appending inside the same progress paragraph does not create a false conflict', async ({ page }) => {
+    const task = await createTask(page, `DayScript-SameParagraphDelta-${Date.now()}`)
+    const date = uniqueScriptDate(71)
+
+    const firstSave = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: 0,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Initial progress' },
+        ]),
+      },
+    })
+    expect(firstSave.ok()).toBeTruthy()
+    const first = await firstSave.json()
+    expect((await submitProgress(page, date)).createdLogs).toHaveLength(1)
+
+    const append = await page.request.put(`/api/day-scripts/${date}`, {
+      data: {
+        expectedRevision: first.script.revision,
+        document: doc([
+          { text: `10:00-10:30 @${task.title} ✅`, taskId: task.id },
+          { text: 'Initial progress with a same-line append' },
+        ]),
+      },
+    })
+    expect(append.ok()).toBeTruthy()
+
+    const submitted = await submitProgress(page, date)
+    expect(submitted.conflicts).toHaveLength(0)
+    expect(submitted.createdLogs).toHaveLength(1)
+    const entries = await getEntries(page, task.id)
+    expect(entries).toHaveLength(2)
+    expect(entries[1].content).toContain('with a same-line append')
+    expect(entries[1].content).not.toContain('Initial progress')
   })
 
   test('completed focus line appends image-only progress delta', async ({ page }) => {

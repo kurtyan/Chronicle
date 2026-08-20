@@ -1,5 +1,5 @@
 import { getDb, getMetaValue } from '../db'
-import { createTask, createTaskEntry, getTaskById, type Task } from './taskService'
+import { createTask, createTaskEntry, getTaskById, updateTaskEntry, type Task } from './taskService'
 
 type JsonNode = {
   type?: string
@@ -389,8 +389,8 @@ function rewritePlannedTimeHeaders(document: JsonNode, replacements: Map<number,
   return cloned
 }
 
-function blockHasExistingSync(block: RichDayScriptBlock, syncMap: Map<string, ExistingSync>): boolean {
-  return block.taskIds.some((taskId) => syncMap.has(`${block.id}:${taskId}`))
+function blockHasSubmittedHistory(block: RichDayScriptBlock, syncMap: Map<string, ExistingSync>): boolean {
+  return block.taskIds.some((taskId) => Boolean(syncMap.get(`${block.id}:${taskId}`)?.lastEntryId))
 }
 
 function rescheduleSelectedPlannedFocus(document: JsonNode, blocks: RichDayScriptBlock[], now: number, syncMap: Map<string, ExistingSync>, sortOrders: Set<number>): { document: JsonNode; changed: boolean } {
@@ -401,7 +401,10 @@ function rescheduleSelectedPlannedFocus(document: JsonNode, blocks: RichDayScrip
       if (!block.startTime || !block.endTime) return false
       if (plannedDurationMinutes(block.startTime, block.endTime) === null) return false
       if (block.completed || block.appendOnSubmit) return false
-      if (blockHasExistingSync(block, syncMap)) return false
+      // A newly-created Focus task gets a baseline-only sync row so its initial
+      // body is not duplicated as a task log. That checkpoint is not submitted
+      // history and must not make its planned time immutable.
+      if (blockHasSubmittedHistory(block, syncMap)) return false
       return true
     })
 
@@ -689,6 +692,22 @@ function progressDeltaHtmlFromSync(lines: ParsedLine[], existingProgress: string
     return currentHtml.slice(existingProgressHtml.length)
   }
   return progressDeltaHtml(lines, existingProgress)
+}
+
+function blockSyncLines(block: RichDayScriptBlock, progress: string, progressHtml: string): ParsedLine[] {
+  const lines = [...(block.progressLines ?? [])]
+  if (block.source === 'manual' && (block.headerRemainder?.trim() || block.headerRemainderHtml)) {
+    lines.unshift({
+      text: block.headerRemainder ?? '',
+      taskIds: [],
+      html: block.headerRemainderHtml || progressToHtml(block.headerRemainder ?? ''),
+      newTaskBadge: false,
+    })
+  }
+  if (lines.length === 0 && (progress || progressHtml)) {
+    lines.push({ text: progress, taskIds: [], html: progressHtml, newTaskBadge: false })
+  }
+  return lines
 }
 
 function progressToHtml(text: string): string {
@@ -1288,13 +1307,20 @@ function syncBlockProgress(scriptDate: string, block: RichDayScriptBlock, existi
       continue
     }
 
+    // Plain text is the append-only invariant. Raw HTML is not: appending text
+    // inside the same paragraph changes the closing-tag position, and harmless
+    // formatting/serialization changes can alter the prefix without rewriting
+    // any previously synced words.
     const canAppendDelta = progress.startsWith(existing.syncedProgress)
-      && (!existing.syncedProgressHtml || progressHtml.startsWith(existing.syncedProgressHtml))
 
     if (canAppendDelta) {
       const delta = normalizeProgress(progress.slice(existing.syncedProgress.length))
       const deltaHtml = existing.syncedProgress || existing.syncedProgressHtml
-        ? progressHtml.slice(existing.syncedProgressHtml.length)
+        ? progressDeltaHtmlFromSync(
+          blockSyncLines(block, progress, progressHtml),
+          existing.syncedProgress,
+          existing.syncedProgressHtml,
+        )
         : progressHtml
       if (!delta && !deltaHtml) {
         run(
@@ -1620,9 +1646,16 @@ export function getDayScriptExecutionRecords(scriptDate: string, filters?: { tas
   ).map(rowToExecutionRecord)
 }
 
-export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Array<{ taskId: string; entryId: string; blockId: string }> {
+export function confirmDayScriptProgressSync(
+  scriptDate: string,
+  items: Array<{ blockId: string; taskId: string }>,
+  resolution: 'create_logs' | 'replace_log' | 'accept_current' = 'create_logs',
+): {
+  createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  updatedLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+} {
   const existing = getExistingScript(scriptDate)
-  if (!existing) return []
+  if (!existing) return { createdLogs: [], updatedLogs: [] }
 
   const parsed = parseDocument(existing.document)
   const richBlocks = parsed.validationErrors.length === 0
@@ -1630,6 +1663,7 @@ export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ 
     : existing.blocks
   const blockMap = new Map(richBlocks.map((block) => [block.id, block]))
   const created: Array<{ taskId: string; entryId: string; blockId: string }> = []
+  const updated: Array<{ taskId: string; entryId: string; blockId: string }> = []
   const now = Date.now()
 
   const transaction = getDb().transaction(() => {
@@ -1638,29 +1672,56 @@ export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ 
       const task = getTaskById(item.taskId)
       if (!block || !task || !block.taskIds.includes(item.taskId)) continue
       const richBlock = block as RichDayScriptBlock
-      if (!richBlock.completed) continue
+      if (!richBlock.completed && !richBlock.appendOnSubmit) continue
       if (richBlock.newTaskCreated) continue
       const progress = blockSyncText(richBlock)
       const progressHtml = blockSyncHtml(richBlock)
       if (!progress && !progressHtml) continue
 
       const existingSync = queryOne(
-        'SELECT synced_progress, synced_progress_html FROM day_script_progress_syncs WHERE block_id = ? AND task_id = ?',
+        'SELECT synced_progress, synced_progress_html, last_entry_id FROM day_script_progress_syncs WHERE block_id = ? AND task_id = ?',
         [item.blockId, item.taskId]
-      ) as { synced_progress: string; synced_progress_html?: string } | null
+      ) as { synced_progress: string; synced_progress_html?: string; last_entry_id?: string | null } | null
       if (existingSync?.synced_progress === progress && (existingSync.synced_progress_html ?? '') === progressHtml) continue
+
+      if (resolution === 'accept_current') {
+        run(
+          'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [item.blockId, item.taskId, progress, progressHtml, existingSync?.last_entry_id ?? null, now]
+        )
+        continue
+      }
+
+      if (resolution === 'replace_log') {
+        const content = buildBlockLogHtml(richBlock, progress, progressHtml)
+        const replaced = existingSync?.last_entry_id
+          ? updateTaskEntry(item.taskId, existingSync.last_entry_id, content, 'log')
+          : null
+        const entry = replaced ?? createTaskEntry(item.taskId, content, 'log')
+        run(
+          'INSERT OR REPLACE INTO day_script_progress_syncs(block_id, task_id, synced_progress, synced_progress_html, last_entry_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [item.blockId, item.taskId, progress, progressHtml, entry.id, now]
+        )
+        const target = { taskId: item.taskId, entryId: entry.id, blockId: item.blockId }
+        if (replaced) updated.push(target)
+        else created.push(target)
+        continue
+      }
 
       const existingProgress = existingSync?.synced_progress ?? ''
       const existingProgressHtml = existingSync?.synced_progress_html ?? ''
       const canAppendDelta = Boolean(existingProgress)
         && progress.startsWith(existingProgress)
-        && (!existingProgressHtml || progressHtml.startsWith(existingProgressHtml))
       const logProgress = canAppendDelta
         ? normalizeProgress(progress.slice(existingProgress.length))
         : progress
 
       const logHtml = canAppendDelta
-        ? progressHtml.slice(existingProgressHtml.length)
+        ? progressDeltaHtmlFromSync(
+          blockSyncLines(richBlock, progress, progressHtml),
+          existingProgress,
+          existingProgressHtml,
+        )
         : progressHtml
       if (!logProgress && !logHtml) continue
       const entry = createTaskEntry(
@@ -1679,5 +1740,5 @@ export function confirmDayScriptProgressSync(scriptDate: string, items: Array<{ 
   })
 
   transaction()
-  return created
+  return { createdLogs: created, updatedLogs: updated }
 }

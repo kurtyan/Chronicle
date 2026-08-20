@@ -452,8 +452,15 @@ export class AppService {
     return rescheduleDayScriptFocus(scriptDate, expectedRevision, sortOrders)
   }
 
-  async confirmDayScriptProgressSync(scriptDate: string, items: Array<{ blockId: string; taskId: string }>): Promise<Array<{ taskId: string; entryId: string; blockId: string }>> {
-    return confirmDayScriptProgressSync(scriptDate, items)
+  async confirmDayScriptProgressSync(
+    scriptDate: string,
+    items: Array<{ blockId: string; taskId: string }>,
+    resolution: 'create_logs' | 'replace_log' | 'accept_current' = 'create_logs',
+  ): Promise<{
+    createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+    updatedLogs: Array<{ taskId: string; entryId: string; blockId: string }>
+  }> {
+    return confirmDayScriptProgressSync(scriptDate, items, resolution)
   }
 
   async getDayScriptExecutionRecords(scriptDate: string, filters?: { taskId?: string; start?: number; end?: number }): Promise<DayScriptExecutionRecord[]> {

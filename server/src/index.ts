@@ -907,14 +907,22 @@ app.put('/api/day-scripts/:date', async (c) => {
 app.post('/api/day-scripts/:date/confirm-progress-sync', async (c) => {
   const body = await c.req.json()
   const items = Array.isArray(body.items) ? body.items : []
-  const createdLogs = await service.confirmDayScriptProgressSync(c.req.param('date'), items)
-  for (const log of createdLogs) {
+  const resolution = body.resolution === 'accept_current' || body.resolution === 'replace_log'
+    ? body.resolution
+    : 'create_logs'
+  const result = await service.confirmDayScriptProgressSync(c.req.param('date'), items, resolution)
+  for (const log of result.createdLogs) {
     broadcastEvent('entry_created', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
     const changedTask = await service.getTaskById(log.taskId)
     emitTaskChange(c, changedTask)
   }
-  scheduleTaskSummaryRefresh(createdLogs.map((log) => log.taskId))
-  return c.json({ createdLogs })
+  for (const log of result.updatedLogs) {
+    broadcastEvent('entry_updated', { taskId: log.taskId, entryId: log.entryId, type: 'log' }, c.get('clientId'))
+    const changedTask = await service.getTaskById(log.taskId)
+    emitTaskChange(c, changedTask)
+  }
+  scheduleTaskSummaryRefresh([...result.createdLogs, ...result.updatedLogs].map((log) => log.taskId))
+  return c.json(result)
 })
 
 app.post('/api/day-scripts/:date/submit-progress', async (c) => {

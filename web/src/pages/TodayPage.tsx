@@ -1351,13 +1351,21 @@ export function TodayPage() {
     }
   }
 
-  async function handleConfirmConflicts() {
+  async function handleResolveConflicts(resolution: 'create_logs' | 'replace_log' | 'accept_current') {
     if (conflicts.length === 0) return
-    const result = await confirmDayScriptProgressSync(displayDate, conflicts.map((item) => ({ blockId: item.blockId, taskId: item.taskId })))
-    setConflicts([])
-    if (activeTaskId) await setActiveTask(activeTaskId)
-    if (result.createdLogs.length > 0) {
-      await doAfk()
+    try {
+      const result = await confirmDayScriptProgressSync(
+        displayDate,
+        conflicts.map((item) => ({ blockId: item.blockId, taskId: item.taskId })),
+        resolution,
+      )
+      setConflicts([])
+      if (activeTaskId) await setActiveTask(activeTaskId)
+      if (result.createdLogs.length > 0) {
+        await doAfk()
+      }
+    } catch (error: any) {
+      setSaveError(error?.response?.data?.error || error?.message || 'Failed to resolve progress sync conflicts.')
     }
   }
 
@@ -1673,7 +1681,7 @@ export function TodayPage() {
           </DialogHeader>
           <DialogBody className="min-h-0 overflow-y-auto">
             <div className="space-y-3 text-sm">
-              <p className="text-muted-foreground">Some completed blocks edited previously synced progress. Confirm to append the current block progress as a new task log snapshot.</p>
+              <p className="text-muted-foreground">Some ✅ or 🐲 blocks changed text that was already synced. Replace the latest synced log, create a snapshot log, or accept the current text without changing task logs.</p>
               {conflicts.map((conflict) => (
                 <div key={`${conflict.blockId}:${conflict.taskId}`} className="rounded-lg border border-border bg-muted/30 p-3">
                   <div className="font-medium">{conflict.taskTitle} · {conflict.startTime}-{conflict.endTime}</div>
@@ -1689,7 +1697,13 @@ export function TodayPage() {
             <button className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" onClick={() => setConflicts([])}>
               Later
             </button>
-            <button className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground hover:bg-primary/90" onClick={handleConfirmConflicts}>
+            <button className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" onClick={() => handleResolveConflicts('accept_current')}>
+              Accept without log
+            </button>
+            <button className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted" onClick={() => handleResolveConflicts('replace_log')}>
+              Replace log
+            </button>
+            <button className="rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground hover:bg-primary/90" onClick={() => handleResolveConflicts('create_logs')}>
               Create logs
             </button>
           </DialogFooter>

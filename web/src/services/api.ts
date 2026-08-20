@@ -234,8 +234,8 @@ export async function submitDayScriptProgress(date: string, body?: { focusActivi
 export async function rescheduleDayScriptFocus(date: string, body: { expectedRevision: number; sortOrders: number[] }): Promise<{ script: DayScriptDocument; changed: boolean }> {
   return (await getApi()).rescheduleDayScriptFocus(date, body)
 }
-export async function confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
-  return (await getApi()).confirmDayScriptProgressSync(date, items)
+export async function confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>, resolution: 'create_logs' | 'replace_log' | 'accept_current' = 'create_logs'): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>; updatedLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
+  return (await getApi()).confirmDayScriptProgressSync(date, items, resolution)
 }
 export async function getDayScriptExecutionRecords(date: string, filters?: { taskId?: string; start?: number; end?: number }): Promise<DayScriptExecutionRecord[]> {
   return (await getApi()).getDayScriptExecutionRecords(date, filters)

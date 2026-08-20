@@ -422,8 +422,8 @@ export const httpApi: ApiInterface = {
     return data
   },
 
-  async confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
-    const { data } = await (await withClientId()).post(`/api/day-scripts/${encodeURIComponent(date)}/confirm-progress-sync`, { items })
+  async confirmDayScriptProgressSync(date: string, items: Array<{ blockId: string; taskId: string }>, resolution: 'create_logs' | 'replace_log' | 'accept_current' = 'create_logs'): Promise<{ createdLogs: Array<{ taskId: string; entryId: string; blockId: string }>; updatedLogs: Array<{ taskId: string; entryId: string; blockId: string }> }> {
+    const { data } = await (await withClientId()).post(`/api/day-scripts/${encodeURIComponent(date)}/confirm-progress-sync`, { items, resolution })
     return data
   },
 
