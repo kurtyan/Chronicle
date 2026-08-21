@@ -468,8 +468,9 @@ test.describe('Plan Today draft', () => {
       await page.goto('/?lang=en')
       await page.waitForLoadState('load')
       await page.getByRole('button', { name: '<' }).click()
-      await page.getByRole('button', { name: 'Done' }).click()
-      await expect(page.getByRole('button', { name: 'Done' })).toHaveClass(/bg-primary/)
+      const doneFilter = page.getByRole('button', { name: 'Done', exact: true })
+      await doneFilter.click()
+      await expect(doneFilter).toHaveClass(/bg-primary/)
 
       await page.getByTitle('Today').click()
       await expect(page).toHaveURL(/\/today/)

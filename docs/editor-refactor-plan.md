@@ -257,9 +257,9 @@ if (event.key === 'Tab') {
 
 ### 8.2 浏览器选择：WebKit
 
-- 仓库默认 Playwright 跑 Chromium，但用户实际环境是 Tauri（WebKit）。WebKit 恰是问题重灾区（裁 code-first 列表标记、Tab 焦点、输入法）。
-- 阶段 1 目标测试通过 `test.use({ browserName: 'webkit' })` 指定 WebKit（`webkit-2287` 已安装，无需额外 install）。
-- 后续可评估为整套 editor 用例加 WebKit project。
+- 仓库默认 Playwright 跑 WebKit，以匹配用户实际的 Tauri 环境。WebKit 恰是问题重灾区（裁 code-first 列表标记、Tab 焦点、输入法）。
+- 全部 Playwright 测试由 `playwright.config.ts` 统一指定 WebKit（`webkit-2287` 已安装，无需额外 install）。
+- 若后续需要跨浏览器覆盖，应新增独立 project，同时保留 WebKit 作为默认测试引擎。
 
 ### 8.3 关键发现（影响测试断言）
 

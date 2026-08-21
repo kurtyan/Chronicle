@@ -629,7 +629,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     }
   })
 
-  test('focus editor creates a new line after pasting a link with one Enter', async ({ page, context }) => {
+  test('focus editor creates a new line after pasting a link with one Enter', async ({ page }) => {
     const date = uniqueScriptDate(Date.now() % 20 + 55)
 
     await saveDayScript(page, date, { type: 'doc', content: [{ type: 'paragraph' }] })
@@ -638,9 +638,15 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await page.waitForLoadState('load')
 
     const editor = await clearFocusEditor(page)
-    await context.grantPermissions(['clipboard-read', 'clipboard-write'])
-    await page.evaluate(() => navigator.clipboard.writeText('https://example.com/runbook'))
-    await page.keyboard.press('ControlOrMeta+V')
+    await editor.evaluate((element) => {
+      const clipboardData = new DataTransfer()
+      clipboardData.setData('text/plain', 'https://example.com/runbook')
+      element.dispatchEvent(new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }))
+    })
     await expect(editor.locator('a[href="https://example.com/runbook"]')).toBeVisible()
 
     await page.keyboard.press('Enter')
@@ -1147,7 +1153,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await page.goto('/today?lang=en')
     await page.waitForLoadState('load')
 
-    await expect(page.getByText(expected)).toBeVisible()
+    await expect(page.getByText(new RegExp(expected.replace('星期', '\\s*星期')))).toBeVisible()
 
     await page.request.put('/api/settings/start-of-day-offset', { data: { offset: 5 } })
   })

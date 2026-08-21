@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { webkit } from 'playwright';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -18,7 +18,7 @@ async function sleep(ms) {
 }
 
 async function run() {
-  const browser = await chromium.launch({ headless: true });
+  const browser = await webkit.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
 

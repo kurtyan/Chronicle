@@ -1,15 +1,13 @@
 import { test, expect, type Page } from '@playwright/test'
 
 // Phase 1 target tests for unified Tab handling + wrap-button focus isolation.
-// Runs in WebKit to match the desktop (Tauri) engine where the bugs surface.
+// The full Playwright suite runs in WebKit to match the desktop (Tauri) engine.
 //
 // Current status (before phase 1 fix):
 //   - "indents code on Tab"          -> RED
 //   - "does not focus wrap button"   -> RED (DayScriptEditor lets Tab hit it)
 //   - "wrap button out of tab order" -> RED (no tabindex/contenteditable)
 //   - "Tab/Shift+Tab indent/outdent" -> GREEN (regression guard)
-test.use({ browserName: 'webkit' })
-
 function uniqueScriptDate(dayOffset: number): string {
   const date = new Date(2099, 1, dayOffset)
   return [
