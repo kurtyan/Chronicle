@@ -137,10 +137,15 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
 export async function testLlmConnection(): Promise<{ ok: boolean; latencyMs: number; model: string }> {
   const settings = getLlmSettings()
   const started = Date.now()
+  const maxTokens = Math.min(
+    settings.meetingExtractionMaxTokens,
+    settings.taskSummaryMaxTokens,
+    settings.dailySummaryMaxTokens,
+  )
   await callChatCompletions(settings, [
     { role: 'system', content: 'Reply with JSON only.\n- Answer in Chinese.' },
     { role: 'user', content: '{"ping":true}' },
-  ], 16)
+  ], maxTokens)
   return { ok: true, latencyMs: Date.now() - started, model: settings.model }
 }
 

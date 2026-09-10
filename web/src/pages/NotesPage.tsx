@@ -72,6 +72,8 @@ export function NotesPage() {
   const flushSaveRef = useRef<() => Promise<void>>(async () => {})
   const noteSwitchRef = useRef<Promise<void>>(Promise.resolve())
   const localRevisionRef = useRef(0)
+  const saveInFlightRef = useRef<Promise<void> | null>(null)
+  const saveRequestedRef = useRef(false)
 
   useEffect(() => {
     draftTitleRef.current = draftTitle
@@ -283,48 +285,96 @@ export function NotesPage() {
   }
 
   async function flushSave() {
-    const noteId = draftNoteIdRef.current
-    if (!noteId) return
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
     }
-    setLocalSaveStatus('saving')
-    const liveDraft = {
-      title: draftTitleRef.current || latestDraftRef.current.title,
-      contentHtml: stripLeadingEmptyParagraphs(latestDraftRef.current.contentHtml),
-      tags: draftTagsRef.current.split(',').map((tag) => tag.trim()).filter(Boolean),
-    }
-    latestDraftRef.current = liveDraft
-    localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify({ ...liveDraft, baseRevision: draftServerRevisionRef.current }))
-    const revAtFlush = localRevisionRef.current
-    try {
-      const saved = useNoteStore.getState().activeNote?.id === noteId
-        ? await updateActiveNote({ ...liveDraft, expectedRevision: draftServerRevisionRef.current })
-        : await api.updateNote(noteId, { ...liveDraft, expectedRevision: draftServerRevisionRef.current })
-      if (localRevisionRef.current === revAtFlush) {
-        if (saved) {
-          draftServerRevisionRef.current = saved.revision
-          localStorage.removeItem(`chronicle:note_draft:${saved.id}`)
-          setSaveConflict((current) => current?.noteId === saved.id ? null : current)
-          setLocalSaveStatus('saved')
-        } else {
-          if (useNoteStore.getState().lastSaveConflict) {
-            setSaveConflict({ noteId, draft: liveDraft })
+    if (!draftNoteIdRef.current) return
+
+    saveRequestedRef.current = true
+    if (saveInFlightRef.current) return saveInFlightRef.current
+
+    // Register the in-flight promise before any save work begins. Deferring the
+    // drain to a microtask closes the re-entrancy window created by synchronous
+    // store updates at the start of updateActiveNote().
+    const run = Promise.resolve().then(async () => {
+      while (saveRequestedRef.current) {
+        saveRequestedRef.current = false
+        const noteId = draftNoteIdRef.current
+        if (!noteId) return
+
+        setLocalSaveStatus('saving')
+        const liveDraft = {
+          title: draftTitleRef.current || latestDraftRef.current.title,
+          contentHtml: stripLeadingEmptyParagraphs(latestDraftRef.current.contentHtml),
+          tags: draftTagsRef.current.split(',').map((tag) => tag.trim()).filter(Boolean),
+        }
+        latestDraftRef.current = liveDraft
+        const expectedRevision = draftServerRevisionRef.current
+        localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify({ ...liveDraft, baseRevision: expectedRevision }))
+        const revAtFlush = localRevisionRef.current
+        let failed = false
+
+        try {
+          const saved = useNoteStore.getState().activeNote?.id === noteId
+            ? await updateActiveNote({ ...liveDraft, expectedRevision })
+            : await api.updateNote(noteId, { ...liveDraft, expectedRevision })
+
+          if (saved) {
+            // A successful save advances the server revision even when the user
+            // continued typing while the request was in flight. Newer edits must
+            // be saved against this acknowledged revision, not the stale one.
+            draftServerRevisionRef.current = saved.revision
           }
-          setLocalSaveStatus('error')
+
+          if (!saved && useNoteStore.getState().lastSaveConflict) {
+            setSaveConflict({ noteId, draft: {
+              title: draftTitleRef.current || latestDraftRef.current.title,
+              contentHtml: latestDraftRef.current.contentHtml,
+              tags: draftTagsRef.current.split(',').map((tag) => tag.trim()).filter(Boolean),
+            } })
+          }
+          if (!saved) failed = true
+
+          if (localRevisionRef.current === revAtFlush && draftNoteIdRef.current === noteId) {
+            if (saved) {
+              localStorage.removeItem(`chronicle:note_draft:${saved.id}`)
+              setSaveConflict((current) => current?.noteId === saved.id ? null : current)
+              setLocalSaveStatus('saved')
+            } else {
+              setLocalSaveStatus('error')
+            }
+          }
+        } catch (error: any) {
+          failed = true
+          const isConflict = error?.response?.status === 409 || error?.code === 'NOTE_REVISION_CONFLICT'
+          if (isConflict) {
+            setSaveConflict({ noteId, draft: {
+              title: draftTitleRef.current || latestDraftRef.current.title,
+              contentHtml: latestDraftRef.current.contentHtml,
+              tags: draftTagsRef.current.split(',').map((tag) => tag.trim()).filter(Boolean),
+            } })
+          }
+          if (localRevisionRef.current === revAtFlush && draftNoteIdRef.current === noteId) {
+            setLocalSaveStatus('error')
+          }
+        }
+
+        if (failed) {
+          saveRequestedRef.current = false
+          return
+        }
+        if (localRevisionRef.current !== revAtFlush && draftNoteIdRef.current === noteId) {
+          saveRequestedRef.current = true
         }
       }
-    } catch (error: any) {
-      if (localRevisionRef.current === revAtFlush) {
-        if (error?.response?.status === 409 || error?.code === 'NOTE_REVISION_CONFLICT') {
-          setSaveConflict({ noteId, draft: liveDraft })
-        }
-        setLocalSaveStatus('error')
-      }
-    }
-    if (localRevisionRef.current !== revAtFlush && draftNoteIdRef.current === noteId) {
-      await flushSave()
+    })
+
+    saveInFlightRef.current = run
+    try {
+      await run
+    } finally {
+      if (saveInFlightRef.current === run) saveInFlightRef.current = null
     }
   }
 
@@ -366,6 +416,20 @@ export function NotesPage() {
   function handleArchiveWrapper() {
     void handleArchive()
   }
+
+  const handleTogglePin = useCallback(async () => {
+    await flushSaveRef.current()
+    if (useNoteStore.getState().lastSaveConflict) return
+    const current = useNoteStore.getState().activeNote
+    if (!current) return
+    const saved = await updateActiveNote({
+      pinned: !current.pinned,
+      expectedRevision: draftServerRevisionRef.current,
+    })
+    if (saved && draftNoteIdRef.current === saved.id) {
+      draftServerRevisionRef.current = saved.revision
+    }
+  }, [updateActiveNote])
 
   const handleReloadConflict = useCallback(async () => {
     const conflict = saveConflict
@@ -592,7 +656,7 @@ export function NotesPage() {
               <div className="flex shrink-0 items-center gap-1">
                 <button
                   className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  onClick={() => void updateActiveNote({ pinned: !activeNote.pinned })}
+                  onClick={() => void handleTogglePin()}
                   title={activeNote.pinned ? 'Unpin' : 'Pin'}
                 >
                   {activeNote.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}

@@ -25,6 +25,7 @@ async function createNote(page: Page, title: string, contentHtml = '<p>Initial n
 }
 
 const searchShortcut = process.platform === 'darwin' ? 'Meta+Shift+F' : 'Control+Shift+F'
+const saveShortcut = process.platform === 'darwin' ? 'Meta+S' : 'Control+S'
 
 test.describe('Notes', () => {
   test('CRUD, archive default exclusion, note FTS, and global search grouping', async ({ page }) => {
@@ -347,6 +348,56 @@ test.describe('Notes', () => {
       const saved = await (await page.request.get(`/api/notes/${first.id}`)).json()
       return saved.contentHtml
     }).toContain(`CreateFlushBody-${unique}`)
+  })
+
+  test('typing and Cmd+S during an in-flight autosave stay serialized without a false conflict', async ({ page }) => {
+    const unique = Date.now()
+    const note = await createNote(page, `SerializedSave-${unique}`, '<p>Initial</p>')
+    let releaseFirstSave!: () => void
+    const firstSaveReleased = new Promise<void>((resolve) => { releaseFirstSave = resolve })
+    let markFirstSaveReached!: () => void
+    const firstSaveReached = new Promise<void>((resolve) => { markFirstSaveReached = resolve })
+    const expectedRevisions: number[] = []
+    let activeRequests = 0
+    let maxActiveRequests = 0
+
+    await page.route(`**/api/notes/${note.id}`, async (route) => {
+      if (route.request().method() !== 'PUT') {
+        await route.continue()
+        return
+      }
+      activeRequests += 1
+      maxActiveRequests = Math.max(maxActiveRequests, activeRequests)
+      expectedRevisions.push(route.request().postDataJSON().expectedRevision)
+      if (expectedRevisions.length === 1) {
+        markFirstSaveReached()
+        await firstSaveReleased
+      }
+      await route.continue()
+      activeRequests -= 1
+    })
+
+    await page.goto(`/notes?id=${note.id}&lang=en`)
+    const editor = page.locator('[data-rich-editor="true"] .ProseMirror')
+    await editor.click()
+    await page.keyboard.press('End')
+    await page.keyboard.type(` First-${unique}`)
+    await firstSaveReached
+
+    await page.keyboard.type(` Latest-${unique}`)
+    await page.keyboard.press(saveShortcut)
+    await page.waitForTimeout(100)
+    expect(maxActiveRequests).toBe(1)
+    releaseFirstSave()
+
+    await expect(page.getByText('saved', { exact: true })).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('This note changed elsewhere. Your local draft is safe; choose how to resolve it.')).not.toBeVisible()
+    await expect.poll(async () => {
+      const saved = await (await page.request.get(`/api/notes/${note.id}`)).json()
+      return saved.contentHtml
+    }).toContain(`Latest-${unique}`)
+    expect(expectedRevisions).toEqual([note.revision, note.revision + 1])
+    expect(maxActiveRequests).toBe(1)
   })
 
   test('switching notes does not prepend blank paragraphs', async ({ page }) => {
