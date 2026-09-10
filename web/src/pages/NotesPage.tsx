@@ -74,6 +74,7 @@ export function NotesPage() {
   const localRevisionRef = useRef(0)
   const saveInFlightRef = useRef<Promise<void> | null>(null)
   const saveRequestedRef = useRef(false)
+  const draftDirtyRef = useRef(false)
 
   useEffect(() => {
     draftTitleRef.current = draftTitle
@@ -135,6 +136,7 @@ export function NotesPage() {
       draftTagsRef.current = ''
       latestDraftRef.current = { title: '', contentHtml: '', tags: [] }
       draftServerRevisionRef.current = 0
+      draftDirtyRef.current = false
       return
     }
     if (note.id === draftNoteIdRef.current) return
@@ -161,6 +163,7 @@ export function NotesPage() {
     draftTagsRef.current = next.tags.join(', ')
     latestDraftRef.current = next
     draftServerRevisionRef.current = restored?.baseRevision ?? note.revision
+    draftDirtyRef.current = Boolean(restored)
     setLocalSaveStatus(restored ? 'error' : 'idle')
   }, [])
 
@@ -278,6 +281,7 @@ export function NotesPage() {
       contentHtml: next.contentHtml ?? latestDraftRef.current.contentHtml,
       tags: next.tags ?? latestDraftRef.current.tags,
     }
+    draftDirtyRef.current = true
     setLocalSaveStatus('saving')
     localStorage.setItem(`chronicle:note_draft:${noteId}`, JSON.stringify({ ...latestDraftRef.current, baseRevision: draftServerRevisionRef.current }))
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
@@ -290,6 +294,7 @@ export function NotesPage() {
       saveTimerRef.current = null
     }
     if (!draftNoteIdRef.current) return
+    if (!draftDirtyRef.current) return
 
     saveRequestedRef.current = true
     if (saveInFlightRef.current) return saveInFlightRef.current
@@ -302,6 +307,7 @@ export function NotesPage() {
         saveRequestedRef.current = false
         const noteId = draftNoteIdRef.current
         if (!noteId) return
+        if (!draftDirtyRef.current) return
 
         setLocalSaveStatus('saving')
         const liveDraft = {
@@ -325,6 +331,7 @@ export function NotesPage() {
             // continued typing while the request was in flight. Newer edits must
             // be saved against this acknowledged revision, not the stale one.
             draftServerRevisionRef.current = saved.revision
+            draftDirtyRef.current = localRevisionRef.current !== revAtFlush
           }
 
           if (!saved && useNoteStore.getState().lastSaveConflict) {
@@ -361,6 +368,7 @@ export function NotesPage() {
         }
 
         if (failed) {
+          draftDirtyRef.current = true
           saveRequestedRef.current = false
           return
         }
@@ -453,7 +461,10 @@ export function NotesPage() {
       contentHtml: conflict.draft.contentHtml,
       tags: conflict.draft.tags,
     })
+    draftDirtyRef.current = false
+    saveRequestedRef.current = false
     localStorage.removeItem(`chronicle:note_draft:${conflict.noteId}`)
+    useNoteStore.setState({ lastSaveConflict: false, saveStatus: 'idle', error: null })
     setSaveConflict(null)
     navigate(`/notes?id=${encodeURIComponent(copy.id)}`)
     applyNoteDraft(copy)

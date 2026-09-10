@@ -172,13 +172,32 @@ test.describe('Notes', () => {
     await expect(page.getByText('This note changed elsewhere. Your local draft is safe; choose how to resolve it.')).toBeVisible({ timeout: 5000 })
     await page.getByRole('button', { name: 'Keep as new note' }).click()
 
+    let conflictCopyId = ''
     await expect.poll(async () => {
       const notes = await (await page.request.get(`/api/notes?q=${encodeURIComponent(`ConflictUi-${unique}`)}&includeArchived=true`)).json()
-      return notes.some((item: any) => item.id !== note.id && item.title === `${note.title} local edit (conflict copy)`)
+      const copy = notes.find((item: any) => item.id !== note.id && item.title === `${note.title} local edit (conflict copy)`)
+      conflictCopyId = copy?.id ?? ''
+      return Boolean(copy)
     }).toBeTruthy()
 
     const original = await (await page.request.get(`/api/notes/${note.id}`)).json()
     expect(original.contentHtml).toContain('Server-side append')
+
+    const deleteCopy = await page.request.delete(`/api/notes/${conflictCopyId}`)
+    expect(deleteCopy.ok()).toBeTruthy()
+    await page.locator(`[data-note-id="${note.id}"]`).click()
+    await expect(titleInput).toHaveValue(note.title)
+    await titleInput.fill(`${note.title} returned`)
+
+    await expect(page.getByText('saved', { exact: true })).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('This note changed elsewhere. Your local draft is safe; choose how to resolve it.')).not.toBeVisible()
+    await expect.poll(async () => {
+      const current = await (await page.request.get(`/api/notes/${note.id}`)).json()
+      return { title: current.title, contentHtml: current.contentHtml }
+    }).toEqual({
+      title: `${note.title} returned`,
+      contentHtml: '<p>Original</p><hr><p>Server-side append</p>',
+    })
   })
 
   test('pins a note using its current revision', async ({ page }) => {
@@ -330,6 +349,24 @@ test.describe('Notes', () => {
       const saved = await (await page.request.get(`/api/notes/${first.id}`)).json()
       return saved.contentHtml
     }).toContain(`SwitchBody-${unique}`)
+  })
+
+  test('switching away from an untouched note does not issue a full-note save', async ({ page }) => {
+    const unique = Date.now()
+    const first = await createNote(page, `UntouchedFirst-${unique}`)
+    const second = await createNote(page, `UntouchedSecond-${unique}`)
+    let firstNoteSaves = 0
+
+    await page.route(`**/api/notes/${first.id}`, async (route) => {
+      if (route.request().method() === 'PUT') firstNoteSaves += 1
+      await route.continue()
+    })
+
+    await page.goto(`/notes?id=${first.id}&lang=en`)
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue(first.title)
+    await page.locator(`[data-note-id="${second.id}"]`).click()
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue(second.title)
+    expect(firstNoteSaves).toBe(0)
   })
 
   test('pending autosave flushes before creating a new note', async ({ page }) => {

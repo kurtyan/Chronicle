@@ -4,6 +4,8 @@ import * as api from '@/services/api'
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
+let activeNoteRequestVersion = 0
+
 interface NoteState {
   notes: Note[]
   activeNote: Note | null
@@ -46,31 +48,40 @@ export const useNoteStore = create<NoteState>((set, get) => ({
   },
 
   setActiveNote: async (id) => {
+    const requestVersion = ++activeNoteRequestVersion
     if (!id) {
       set({ activeNote: null, linkedTasks: [] })
       return
     }
-    const existing = get().notes.find((note) => note.id === id)
-    set({ activeNote: existing ?? null })
     const note = await api.getNoteById(id)
+    if (requestVersion !== activeNoteRequestVersion) return
     if (!note) {
-      if (get().activeNote?.id === id) set({ activeNote: null, linkedTasks: [] })
+      set({ activeNote: null, linkedTasks: [] })
       return
     }
-    if (!get().activeNote || get().activeNote?.id === id) {
-      set({ activeNote: note })
-      await get().loadLinkedTasks(note.id)
+    set({ activeNote: note })
+    const linkedTasks = await api.fetchNoteTasks(note.id)
+    if (requestVersion === activeNoteRequestVersion && get().activeNote?.id === note.id) {
+      set({ linkedTasks })
     }
   },
 
   createNote: async (data) => {
+    activeNoteRequestVersion += 1
     const note = await api.createNote({
       title: data?.title || 'Untitled note',
       contentHtml: data?.contentHtml || '<p></p>',
       tags: data?.tags || [],
       linkedTaskIds: data?.linkedTaskIds || [],
     })
-    set((state) => ({ notes: [note, ...state.notes], activeNote: note, linkedTasks: [] }))
+    set((state) => ({
+      notes: [note, ...state.notes],
+      activeNote: note,
+      linkedTasks: [],
+      saveStatus: 'idle',
+      lastSaveConflict: false,
+      error: null,
+    }))
     return note
   },
 
