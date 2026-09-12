@@ -5,6 +5,9 @@ import Database from 'better-sqlite3'
 import { getDbFilePath, getDb, closeDb, initDb } from '../db'
 import { getLastBackupAt } from './backupService'
 import { createStoredZip, readStoredZip, type ZipEntry } from './backupBundle'
+import { evidenceFingerprint, refreshReviewEvidenceFingerprint } from './reviewEvidenceService'
+import { htmlToPlainText } from './searchText'
+import type { ReviewEvidence } from '../../../shared/projectReviewTypes'
 
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0')
 const BACKUP_FORMAT = 'chronicle-backup'
@@ -40,19 +43,116 @@ function tableExists(database: Database.Database, table: string): boolean {
 
 function rewriteAttachmentPaths(databasePath: string, sourceAttachmentDir: string | undefined, targetAttachmentDir: string): void {
   if (!sourceAttachmentDir || path.resolve(sourceAttachmentDir) === path.resolve(targetAttachmentDir)) return
+  // Replace decoded values, never serialized JSON: destination quotes/backslashes
+  // must be escaped by JSON.stringify rather than injected into its syntax.
+  const replacements = new Map<string, string>([
+    [sourceAttachmentDir, targetAttachmentDir],
+    [encodeURI(sourceAttachmentDir), encodeURI(targetAttachmentDir)],
+    [encodeURIComponent(sourceAttachmentDir), encodeURIComponent(targetAttachmentDir)],
+  ])
+  // Identical encodings of a simple source path should retain the raw destination
+  // for plain text; quoted HTML attributes are escaped separately below.
+  replacements.set(sourceAttachmentDir, targetAttachmentDir)
+  const escaped = [...replacements.keys()].sort((a, b) => b.length - a.length).map(value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const pattern = new RegExp(`(?:${escaped.join('|')})(?=$|[/\\\\\\s"'<>?#&]|%2[fF]|%5[cC])`, 'g')
+  const rewriteText = (value: string, fileUrl = false) => value.replace(pattern, match => fileUrl && (match === sourceAttachmentDir || match === encodeURI(sourceAttachmentDir)) ? encodeURI(targetAttachmentDir) : replacements.get(match)!)
+  const decodeHtml = (value: string) => value.replace(/&(#x[0-9a-f]+|#\d+|quot|apos|amp|lt|gt);/gi, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const code = entity[1].toLowerCase() === 'x' ? parseInt(entity.slice(2), 16) : Number(entity.slice(1))
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match
+    }
+    return ({ quot: '"', apos: "'", amp: '&', lt: '<', gt: '>' } as Record<string, string>)[entity.toLowerCase()] ?? match
+  })
+  const escapeHtml = (value: string, quote?: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(quote === "'" ? /'/g : /"/g, quote === "'" ? '&#39;' : '&quot;')
+  const rewriteHtmlText = (value: string, quote?: string, fileUrl = false) => {
+    const decoded = decodeHtml(value), rewritten = rewriteText(decoded, fileUrl)
+    return decoded === rewritten ? value : escapeHtml(rewritten, quote)
+  }
+  const rewriteHtml = (value: string) => value.split(/(<(?:[^>"']|"[^"]*"|'[^']*')*>)/g).map(part => part.startsWith('<')
+    ? part.replace(/(\s[\w:-]+\s*=\s*)(["'])([\s\S]*?)\2/g, (_match, prefix: string, quote: string, content: string) => `${prefix}${quote}${rewriteHtmlText(content, quote, /^\s*(?:href|src)\s*=/i.test(prefix) && /^(?:file|chronicle-attachment):\/\//i.test(content))}${quote}`)
+    : rewriteHtmlText(part)).join('')
+  const mapJson = (value: any, key = ''): any => {
+    if (Array.isArray(value)) return value.map(item => mapJson(item))
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([name, item]) => [name, mapJson(item, name)]))
+    if (typeof value !== 'string') return value
+    // Evidence event/task content can itself contain serialized JSON (including
+    // before_json/after_json). Decode each layer so escaped source paths also move.
+    if (/^\s*[\[{]/.test(value)) {
+      try {
+        const parsed = JSON.parse(value), mapped = mapJson(parsed)
+        return JSON.stringify(mapped) === JSON.stringify(parsed) ? value : JSON.stringify(mapped)
+      } catch { /* Ordinary text that starts with a bracket is not structured JSON. */ }
+    }
+    return ['contentHtml', 'content_html'].includes(key) || /^\s*<(?:p|div|a|img|h[1-6]|ul|ol|pre|blockquote)\b/i.test(value)
+      ? rewriteHtml(value) : rewriteText(value, ['href', 'src'].includes(key) && /^(?:file|chronicle-attachment):\/\//i.test(value))
+  }
+  const mapEvidence = (original: ReviewEvidence): ReviewEvidence => {
+    const evidence = mapJson(original) as ReviewEvidence
+    for (const source of evidence.sources) {
+      if ((source.kind === 'task_entry' || source.kind === 'note') && source.contentHtml !== undefined) source.content = htmlToPlainText(source.contentHtml)
+    }
+    // Preserve frozen source versions, scope, metrics, coverage and model output;
+    // only physical attachment locations and hashes derived from them change.
+    return refreshReviewEvidenceFingerprint(evidence)
+  }
   const database = new Database(databasePath)
   try {
-    const columns: Array<[string, string]> = [
+    const htmlColumns: Array<[string, string]> = [
       ['task_entries', 'content'],
       ['task_log_drafts', 'content'],
       ['notes', 'content_html'],
-      ['day_scripts', 'document_json'],
+      ['project_review_versions', 'content_html'],
     ]
-    for (const [table, column] of columns) {
-      if (!tableExists(database, table)) continue
-      database.prepare(`UPDATE ${table} SET ${column} = REPLACE(${column}, ?, ?) WHERE INSTR(${column}, ?) > 0`)
-        .run(sourceAttachmentDir, targetAttachmentDir, sourceAttachmentDir)
-    }
+    const jsonColumns: Array<[string, string]> = [
+      ['day_scripts', 'document_json'],
+      ['project_events', 'before_json'],
+      ['project_events', 'after_json'],
+      ['project_review_versions', 'evidence_json'],
+      ['project_insight_drafts', 'evidence_json'],
+      ['project_insight_drafts', 'content_json'],
+    ]
+    const textColumns: Array<[string, string]> = [
+      ['tasks', 'title'], ['notes', 'title'], ['project_review_versions', 'title'],
+      ['areas', 'name'], ['areas', 'description'], ['areas', 'focus'],
+      ['milestones', 'name'], ['milestones', 'goal'], ['milestones', 'completion_criteria'],
+      ['milestones', 'latest_progress'], ['milestones', 'next_step'], ['milestones', 'blockers'],
+    ]
+    database.transaction(() => {
+      for (const [table, column] of textColumns) {
+        if (!tableExists(database, table)) continue
+        const update = database.prepare(`UPDATE ${table} SET ${column}=? WHERE rowid=?`)
+        for (const row of database.prepare(`SELECT rowid AS row_id,${column} AS content FROM ${table} WHERE ${column} IS NOT NULL`).all() as any[]) {
+          const rewritten = rewriteText(row.content)
+          if (rewritten !== row.content) update.run(rewritten, row.row_id)
+        }
+      }
+      for (const [table, column] of htmlColumns) {
+        if (!tableExists(database, table)) continue
+        const update = database.prepare(`UPDATE ${table} SET ${column}=? WHERE rowid=?`)
+        for (const row of database.prepare(`SELECT rowid AS row_id,${column} AS content FROM ${table} WHERE ${column} IS NOT NULL`).all() as any[]) {
+          const rewritten = rewriteHtml(row.content)
+          if (rewritten !== row.content) update.run(rewritten, row.row_id)
+        }
+      }
+      for (const [table, column] of jsonColumns) {
+        if (!tableExists(database, table)) continue
+        const update = database.prepare(`UPDATE ${table} SET ${column}=? WHERE rowid=?`)
+        for (const row of database.prepare(`SELECT rowid AS row_id,${column} AS content FROM ${table} WHERE ${column} IS NOT NULL`).all() as any[]) {
+          let parsed: any
+          try { parsed = JSON.parse(row.content) } catch { throw new Error(`Invalid backup JSON in ${table}.${column}`) }
+          const mapped = column === 'evidence_json' ? mapEvidence(parsed) : mapJson(parsed)
+          if (JSON.stringify(mapped) !== JSON.stringify(parsed)) update.run(JSON.stringify(mapped), row.row_id)
+        }
+      }
+      if (tableExists(database, 'project_insight_drafts')) {
+        const update = database.prepare('UPDATE project_insight_drafts SET request_key=? WHERE id=?')
+        for (const row of database.prepare('SELECT id,evidence_json,model,prompt_version,budget_json FROM project_insight_drafts').all() as any[]) {
+          const evidence = JSON.parse(row.evidence_json)
+          update.run(evidenceFingerprint({ scope: evidence.scope, fingerprint: evidence.fingerprint, model: row.model, budget: JSON.parse(row.budget_json), promptVersion: row.prompt_version }), row.id)
+        }
+      }
+    })()
   } finally {
     database.close()
   }
@@ -150,13 +250,12 @@ export async function importDatabase(fileBuffer: Buffer): Promise<{ success: str
     } finally {
       staged.close()
     }
+    rewriteAttachmentPaths(stagedPath, imported.sourceAttachmentDir, attachmentDir)
   } catch (error) {
     fs.rmSync(stagedPath, { force: true })
     if (imported.attachmentStagePath) fs.rmSync(imported.attachmentStagePath, { recursive: true, force: true })
     throw error
   }
-
-  rewriteAttachmentPaths(stagedPath, imported.sourceAttachmentDir, attachmentDir)
 
   // Pre-import backup
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')

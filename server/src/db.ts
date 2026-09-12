@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3'
 import { getDbPath, ensureDataDir } from './config'
 import { getLogger } from './logging'
+import { initProjectSchema } from './projectSchema'
+import { initProjectReviewSchema } from './projectReviewSchema'
 
 let db: Database.Database | null = null
 
@@ -475,6 +477,10 @@ export function initDb() {
     db.prepare('DELETE FROM _meta WHERE key = ?').run('search_index_version')
   }
 
+  initProjectSchema(db)
+  initProjectReviewSchema(db)
+  db.prepare('INSERT OR REPLACE INTO _meta(key,value) VALUES (?,?)').run('project_schema_version', '1')
+  db.prepare('INSERT OR REPLACE INTO _meta(key,value) VALUES (?,?)').run('project_review_schema_version', '1')
   cleanupOrphans()
   db.pragma('foreign_keys = ON')
 

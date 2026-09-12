@@ -1,6 +1,11 @@
+import { NotesTagSearch } from '@/components/Notes/NotesTagSearch'
+import { notesSearchParams, parseNotesSearchInput, readNotesSearch, rememberNotesSearch, type NotesSearchValue } from '@/components/Notes/notesSearchState'
+import { useNotesSearchResults } from '@/components/Notes/useNotesSearchResults'
+import { ProjectRelations } from '@/components/Projects/ProjectRelations'
+import { ProjectFeatureBoundary } from '@/components/Projects/ProjectFeatureBoundary'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Archive, ArchiveRestore, FilePlus2, FileText, ListTodo, Pin, PinOff, Search } from 'lucide-react'
+import { Archive, ArchiveRestore, FilePlus2, FileText, ListTodo, Pin, PinOff } from 'lucide-react'
 import { RichEditor } from '@/components/RichEditor'
 import { FindBar } from '@/components/FindBar'
 import { registerShortcut } from '@/shortcuts/registry'
@@ -33,13 +38,23 @@ export function NotesPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const {
-    notes, activeNote, linkedTasks, loading, saveStatus, includeArchived,
-    loadNotes, setActiveNote, createNote, updateActiveNote, archiveActiveNote, unarchiveActiveNote,
+    notes: storedNotes, activeNote, linkedTasks, saveStatus, includeArchived,
+    setActiveNote, createNote, updateActiveNote, archiveActiveNote, unarchiveActiveNote,
   } = useNoteStore()
   const tasks = useTaskStore((state) => state.tasks)
   const loadTodos = useTaskStore((state) => state.loadTodos)
   const setTaskActive = useTaskStore((state) => state.setActiveTask)
-  const [query, setQuery] = useState('')
+  const [notesSearch, setNotesSearch] = useState(() => readNotesSearch(location.search))
+  const query = parseNotesSearchInput(notesSearch.input).text
+  const { notes, loading, error: searchError, loadNotes } = useNotesSearchResults(notesSearch.filters, query, includeArchived, storedNotes)
+  const urlNoteId = new URLSearchParams(location.search).get('id')
+  const updateNotesSearch = useCallback((value: NotesSearchValue) => {
+    setNotesSearch(value)
+    rememberNotesSearch(value)
+    navigate(`/notes?${notesSearchParams(location.search, value)}`, { replace: true })
+  }, [location.search, navigate])
+  const noteUrl = useCallback((id: string) => `/notes?${notesSearchParams(location.search, notesSearch, id)}`, [location.search, notesSearch])
+  useEffect(() => { setNotesSearch(readNotesSearch(location.search)) }, [location.search])
   const [draftTitle, setDraftTitle] = useState('')
   const [draftContent, setDraftContent] = useState('')
   const [draftTags, setDraftTags] = useState('')
@@ -58,6 +73,8 @@ export function NotesPage() {
     return Math.round(window.innerWidth * pct)
   })
   const notesContainerRef = useRef<HTMLDivElement | null>(null)
+  const notesListRef = useRef<HTMLDivElement | null>(null)
+  const pendingListFocusRef = useRef<string | null>(null)
   const isResizingRef = useRef(false)
   const resizeStartXRef = useRef(0)
   const resizeStartWidthRef = useRef(0)
@@ -85,21 +102,12 @@ export function NotesPage() {
   }, [draftTags])
 
   useEffect(() => {
-    void loadNotes()
     void loadTodos()
-  }, [loadNotes, loadTodos])
+  }, [loadTodos])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadNotes({ includeArchived, query: query.trim() || undefined })
-    }, 180)
-    return () => window.clearTimeout(timer)
-  }, [includeArchived, loadNotes, query])
-
-  useEffect(() => {
-    const id = new URLSearchParams(location.search).get('id')
-    if (id) void setActiveNote(id)
-  }, [location.search, setActiveNote])
+    if (urlNoteId) void setActiveNote(urlNoteId)
+  }, [urlNoteId, setActiveNote])
 
   useEffect(() => {
     const handler = () => setJumpSignal((value) => value + 1)
@@ -202,9 +210,7 @@ export function NotesPage() {
     }
   }, [])
 
-  const visibleNotes = useMemo(() => {
-    return notes
-  }, [notes])
+  const visibleNotes = notes
 
   const parsedTags = useMemo(() => draftTags.split(',').map((tag) => tag.trim()).filter(Boolean), [draftTags])
 
@@ -259,10 +265,26 @@ export function NotesPage() {
 
   const focusActiveNoteListItem = useCallback(() => {
     const noteId = activeNoteIdRef.current
+    pendingListFocusRef.current = null
     if (!noteId) return
     const item = document.querySelector(`[data-note-id="${CSS.escape(noteId)}"]`) as HTMLButtonElement | null
+    if (item) { item.focus(); return }
+    // The editor may become usable before the debounced list request finishes.
+    // Keep keyboard focus in a stable list container until its item mounts.
+    notesListRef.current?.focus()
+    if (loading) pendingListFocusRef.current = noteId
+  }, [loading])
+
+  useEffect(() => {
+    const noteId = pendingListFocusRef.current
+    if (!noteId || loading) return
+    pendingListFocusRef.current = null
+    // A late response must not steal focus after the user resumes editing or
+    // moves to another control. An excluded Note leaves focus on the list.
+    if (document.activeElement !== notesListRef.current || activeNoteIdRef.current !== noteId) return
+    const item = notesListRef.current?.querySelector<HTMLButtonElement>(`[data-note-id="${CSS.escape(noteId)}"]`)
     item?.focus()
-  }, [])
+  }, [visibleNotes, loading])
 
   const handleTitleKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return
@@ -394,32 +416,32 @@ export function NotesPage() {
     const run = noteSwitchRef.current.then(async () => {
       await flushSaveRef.current()
       const note = await createNote({ title: 'Untitled note' })
-      navigate(`/notes?id=${encodeURIComponent(note.id)}`)
+      navigate(noteUrl(note.id))
       applyNoteDraft(note)
     })
     noteSwitchRef.current = run.catch(() => {})
     await run
-  }, [applyNoteDraft, createNote, navigate])
+  }, [applyNoteDraft, createNote, navigate, noteUrl])
 
   const handleSelectNote = useCallback(async (id: string) => {
     const run = noteSwitchRef.current.then(async () => {
       await flushSaveRef.current()
-      navigate(`/notes?id=${encodeURIComponent(id)}`)
+      navigate(noteUrl(id))
       await setActiveNote(id)
       const next = useNoteStore.getState().activeNote
       if (next?.id === id) applyNoteDraft(next)
     })
     noteSwitchRef.current = run.catch(() => {})
     await run
-  }, [applyNoteDraft, navigate, setActiveNote])
+  }, [applyNoteDraft, navigate, noteUrl, setActiveNote])
 
   const handleArchive = useCallback(async () => {
     if (!activeNote) return
     await flushSaveRef.current()
     if (activeNote.archived) await unarchiveActiveNote()
     else await archiveActiveNote()
-    await loadNotes({ includeArchived, query: query.trim() || undefined })
-  }, [activeNote, archiveActiveNote, includeArchived, loadNotes, query, unarchiveActiveNote])
+    await loadNotes()
+  }, [activeNote, archiveActiveNote, loadNotes, unarchiveActiveNote])
 
   function handleArchiveWrapper() {
     void handleArchive()
@@ -466,9 +488,9 @@ export function NotesPage() {
     localStorage.removeItem(`chronicle:note_draft:${conflict.noteId}`)
     useNoteStore.setState({ lastSaveConflict: false, saveStatus: 'idle', error: null })
     setSaveConflict(null)
-    navigate(`/notes?id=${encodeURIComponent(copy.id)}`)
+    navigate(noteUrl(copy.id))
     applyNoteDraft(copy)
-  }, [applyNoteDraft, createNote, navigate, saveConflict])
+  }, [applyNoteDraft, createNote, navigate, noteUrl, saveConflict])
 
   useEffect(() => {
     const unregisters = [
@@ -539,6 +561,7 @@ export function NotesPage() {
       if (event.key !== 'Escape') return
       const target = event.target as HTMLElement | null
       if (target?.closest('[role="dialog"]')) return
+      if (target?.closest('[data-notes-tag-search="true"]')) return
       if (!isEditing()) return
 
       event.preventDefault()
@@ -573,26 +596,24 @@ export function NotesPage() {
               <FilePlus2 className="h-4 w-4" />
             </button>
           </div>
-          <div className="flex items-center gap-2 rounded-md border border-border px-2">
-            <Search className="h-4 w-4 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="h-9 min-w-0 flex-1 bg-transparent text-sm outline-none"
-              placeholder="Search notes..."
-            />
-          </div>
+          <ProjectFeatureBoundary label="标签筛选" fallback={<div className="space-y-2">
+            <p role="alert" className="text-xs text-muted-foreground">标签建议暂时不可用，可以继续搜索笔记文字。</p>
+            <input aria-label="搜索 Notes 或输入 # 标签" className="w-full rounded border border-border bg-background p-2 text-sm" placeholder="搜索笔记文字" value={notesSearch.input} onChange={event => updateNotesSearch({ ...notesSearch, input: event.target.value })} />
+            {notesSearch.filters.length > 0 && <button type="button" className="text-xs underline" onClick={() => updateNotesSearch({ ...notesSearch, filters: [] })}>清除标签筛选</button>}
+          </div>}><NotesTagSearch value={notesSearch} onChange={updateNotesSearch} /></ProjectFeatureBoundary>
           <label className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
             <input
               type="checkbox"
               checked={includeArchived}
-              onChange={(event) => void loadNotes({ includeArchived: event.target.checked, query: query.trim() || undefined })}
+              onChange={(event) => useNoteStore.setState({ includeArchived: event.target.checked })}
             />
             Archived
           </label>
         </div>
-        <div className="flex-1 space-y-1 overflow-y-auto p-2">
-          {loading && notes.length === 0 ? (
+        <div ref={notesListRef} role="region" aria-label="Notes list" tabIndex={-1} className="flex-1 space-y-1 overflow-y-auto p-2 outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/40">
+          {searchError ? (
+            <div role="alert" className="p-4 text-sm text-red-600">{searchError}<button className="ml-2 underline" onClick={() => void loadNotes()}>重试</button></div>
+          ) : loading && notes.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">Loading notes...</div>
           ) : visibleNotes.length === 0 ? (
             <div className="p-4 text-sm text-muted-foreground">No notes.</div>
@@ -695,6 +716,7 @@ export function NotesPage() {
                 placeholder="Untitled note"
               />
             </div>
+            <div className="px-[30px] pb-2"><ProjectFeatureBoundary resetKey={activeNote.id} label="项目关联"><ProjectRelations key={activeNote.id} sourceType="note" sourceId={activeNote.id} /></ProjectFeatureBoundary></div>
             {linkedTasks.length > 0 && (
               <div className="px-[30px] pb-2">
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/80 px-3 py-2 text-xs">

@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { getDb } from '../db'
 
-export type BackgroundTaskType = 'daily_summary' | 'task_summary' | 'meeting_extract'
+export type BackgroundTaskType = 'daily_summary' | 'task_summary' | 'meeting_extract' | 'project_insight'
 export type BackgroundTaskStatus = 'running' | 'success' | 'error'
 
 export interface BackgroundTask {

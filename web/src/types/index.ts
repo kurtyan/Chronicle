@@ -6,6 +6,8 @@ export type Priority = 'HIGH' | 'MEDIUM' | 'LOW'
 
 export interface Task {
   id: string
+  primaryMilestoneId?: string | null
+  projectRevision?: number
   title: string
   type: TaskType
   priority: Priority
@@ -19,6 +21,8 @@ export interface Task {
 }
 
 export interface CreateTaskRequest {
+  primaryMilestoneId?: string | null
+  references?: import("../../../shared/projectTypes").ProjectReferenceInput[]
   title: string
   type: TaskType
   priority: Priority
@@ -143,11 +147,16 @@ export interface NoteSearchResult {
   rank: number
 }
 
+export interface ProjectSearchResult {
+  kind: 'area' | 'milestone'; id: string; title: string; areaId?: string; areaTitle?: string; snippet: string; updatedAt: number; archived: boolean
+}
 export interface GlobalSearchResponse {
   results: {
     tasks: Array<SearchResult & { kind: 'task' }>
     taskEntries: Array<SearchResult & { kind: 'task_entry' }>
     notes: NoteSearchResult[]
+    areas?: ProjectSearchResult[]
+    milestones?: ProjectSearchResult[]
   }
   tokens: string[]
   total: number
@@ -155,6 +164,8 @@ export interface GlobalSearchResponse {
     tasks: number
     taskEntries: number
     notes: number
+    areas?: number
+    milestones?: number
   }
 }
 

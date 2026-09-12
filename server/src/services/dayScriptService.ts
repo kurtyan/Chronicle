@@ -680,7 +680,7 @@ function progressDeltaHtml(lines: ParsedLine[], existingProgress: string): strin
     }
 
     const deltaText = normalizeProgress(normalizeProgress(next).slice(existing.length))
-    if (deltaText) remaining.push({ text: deltaText, taskIds: [], html: progressToHtml(deltaText) })
+    if (deltaText) remaining.push({ text: deltaText, taskIds: [], html: progressToHtml(deltaText), newTaskBadge: false })
     consumed = next
   }
   return progressLinesToHtml(remaining)

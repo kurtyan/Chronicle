@@ -1,3 +1,6 @@
+import { entityPath } from '@/services/projectApi'
+import { ProjectFeatureBoundary } from '@/components/Projects/ProjectFeatureBoundary'
+import { FolderKanban } from 'lucide-react'
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import { BoardPage } from './pages/BoardPage'
 import { ReportPage } from './pages/ReportPage'
@@ -6,7 +9,7 @@ import { TodayPage } from './pages/TodayPage'
 import { NotesPage } from './pages/NotesPage'
 import { AlertCircle, BarChart3, Calendar, CheckCircle2, ClipboardList, FileText, ListTodo, Loader2, Search, Settings, X } from 'lucide-react'
 import { useI18n } from './i18n/context'
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import type React from 'react'
 import { createPortal } from 'react-dom'
 import { useSSE } from './hooks/useSSE'
@@ -22,11 +25,28 @@ import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 import type { MeetingExtractionResult } from '@/types'
 import { fetchBackgroundTask } from '@/services/api'
 import * as api from '@/services/api'
-import type { GlobalSearchResponse, NoteSearchResult, SearchResult } from '@/types'
+import type { GlobalSearchResponse, NoteSearchResult, SearchResult, ProjectSearchResult } from '@/types'
 import { setSearchJumpIntent } from '@/lib/searchJump'
 import { highlightText } from '@/lib/highlight'
 import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 import { useSearchPersistStore, isSearchPersistValid } from '@/stores/searchPersistStore'
+
+const ProjectsPage = lazy(() => import('@/pages/ProjectsPage').then(module => ({ default: module.ProjectsPage })))
+const AreaDetailPage = lazy(() => import('@/pages/ProjectDetailPage').then(module => ({ default: module.AreaDetailPage })))
+const MilestoneDetailPage = lazy(() => import('@/pages/ProjectDetailPage').then(module => ({ default: module.MilestoneDetailPage })))
+
+function ProjectRoute({ children }: { children: React.ReactNode }) {
+  const location = useLocation()
+  return <ProjectFeatureBoundary resetKey={location.pathname} label="方向与里程碑页面"><Suspense fallback={<div className="p-6 text-sm text-muted-foreground">正在加载方向与里程碑…</div>}>{children}</Suspense></ProjectFeatureBoundary>
+}
+
+function safeProjectSearchResults(value: unknown, kind: 'area' | 'milestone'): ProjectSearchResult[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is ProjectSearchResult => item !== null && typeof item === 'object'
+    && item.kind === kind && typeof item.id === 'string' && typeof item.title === 'string'
+    && typeof item.snippet === 'string' && typeof item.archived === 'boolean'
+    && (item.areaTitle === undefined || typeof item.areaTitle === 'string'))
+}
 
 // Open links in system browser when running in Tauri
 function useSystemBrowserLinks() {
@@ -185,6 +205,7 @@ function Sidebar() {
     { path: '/today', icon: <Calendar className="w-5 h-5" />, label: t('sidebar.today') },
     { path: '/notes', icon: <FileText className="w-5 h-5" />, label: t('sidebar.notes') },
     { path: '/report', icon: <BarChart3 className="w-5 h-5" />, label: t('sidebar.report') },
+    { path: '/projects', icon: <FolderKanban className="w-5 h-5" />, label: '方向与里程碑' },
     { path: '/settings', icon: <Settings className="w-5 h-5" />, label: t('sidebar.settings') },
   ]
 
@@ -207,7 +228,7 @@ function Sidebar() {
           <button
             key={item.path}
             className={`w-8 h-8 rounded-md flex items-center justify-center transition ${
-              location.pathname === item.path
+              (location.pathname === item.path || (item.path === '/projects' && location.pathname.startsWith('/projects/')))
                 ? 'bg-primary text-primary-foreground'
                 : 'hover:bg-muted text-muted-foreground'
             }`}
@@ -773,6 +794,11 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
   const focusRestoreRef = useRef<HTMLElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // Optional project search sections must not invalidate otherwise usable task/note results.
+  const projectSections = useMemo(() => ({
+    areas: safeProjectSearchResults(result?.results.areas, 'area'),
+    milestones: safeProjectSearchResults(result?.results.milestones, 'milestone'),
+  }), [result])
 
   const flattened = useMemo(() => {
     if (!result?.results) return []
@@ -780,8 +806,10 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
       ...result.results.tasks.map((item, i) => ({ ...item, kind: 'task' as const, flatIndex: i, section: 'tasks' as const })),
       ...result.results.taskEntries.map((item, i) => ({ ...item, kind: 'task_entry' as const, flatIndex: result.results.tasks.length + i, section: 'taskEntries' as const })),
       ...result.results.notes.map((item, i) => ({ ...item, kind: 'note' as const, flatIndex: result.results.tasks.length + result.results.taskEntries.length + i, section: 'notes' as const })),
+      ...projectSections.areas.map(item => ({ ...item, section: 'areas' as const })),
+      ...projectSections.milestones.map(item => ({ ...item, section: 'milestones' as const })),
     ]
-  }, [result])
+  }, [result, projectSections])
 
   useEffect(() => {
     if (!open) return
@@ -970,6 +998,10 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
     )
   }
 
+  function renderProjectResult(item: ProjectSearchResult, flatIdx: number) {
+    const isSelected = flatIdx === selectedIndex
+    return <button key={item.id} data-search-idx={flatIdx} type="button" tabIndex={isSelected ? 0 : -1} className={`w-full rounded-md border px-3 py-2 text-left transition ${isSelected ? 'border-primary/50 bg-primary/10 ring-1 ring-primary/30' : 'border-border bg-background hover:bg-muted'}`} onClick={() => { persistSearchState(); onOpenChange(false); navigate(entityPath(item.kind, item.id)) }} onKeyDown={event => handleResultKeyDown(event, flatIdx)}><div className="text-sm font-medium">{highlightText(item.title, result?.tokens || [])}</div><div className="text-xs text-muted-foreground">{item.kind === 'area' ? '方向' : `${item.areaTitle || ''} › 里程碑`}{item.archived ? ' · 已归档' : ''}</div>{item.snippet && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{highlightText(item.snippet, result?.tokens || [])}</p>}</button>
+  }
   const sections = result?.results
   const counts = result?.counts
 
@@ -986,7 +1018,7 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
       >
         <DialogHeader>
           <DialogTitle className="text-base">Search</DialogTitle>
-          <DialogDescription>Tasks, task entries, and notes</DialogDescription>
+          <DialogDescription>Tasks、日志、Notes、方向与里程碑</DialogDescription>
         </DialogHeader>
         <DialogBody className="p-4">
           <div className="mb-4 flex items-center gap-2 rounded-md border border-border px-3">
@@ -1039,6 +1071,8 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                   </div>
                 </section>
               )}
+              {projectSections.areas.length > 0 && <section><div className="mb-2 text-xs font-semibold text-muted-foreground">方向（{projectSections.areas.length}）</div><div className="space-y-2">{projectSections.areas.map((item, i) => renderProjectResult(item, sections.tasks.length + sections.taskEntries.length + sections.notes.length + i))}</div></section>}
+              {projectSections.milestones.length > 0 && <section><div className="mb-2 text-xs font-semibold text-muted-foreground">里程碑（{projectSections.milestones.length}）</div><div className="space-y-2">{projectSections.milestones.map((item, i) => renderProjectResult(item, sections.tasks.length + sections.taskEntries.length + sections.notes.length + projectSections.areas.length + i))}</div></section>}
             </div>
           )}
         </DialogBody>
@@ -1403,6 +1437,9 @@ function Layout() {
           <Route path="/today" element={<TodayPage />} />
           <Route path="/notes" element={<NotesPage />} />
           <Route path="/report" element={<ReportPage />} />
+          <Route path="/projects" element={<ProjectRoute><ProjectsPage /></ProjectRoute>} />
+          <Route path="/projects/areas/:id" element={<ProjectRoute><AreaDetailPage /></ProjectRoute>} />
+          <Route path="/projects/milestones/:id" element={<ProjectRoute><MilestoneDetailPage /></ProjectRoute>} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
       </main>

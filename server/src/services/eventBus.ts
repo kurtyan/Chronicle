@@ -59,6 +59,9 @@ export function createSSEStream(clientId: string): ReadableStream {
     start(ctrl) {
       controller = ctrl
       if (listener) listeners.add(listener)
+      // Send a frame immediately: WebKit may wait for body bytes before
+      // resolving fetch(), leaving an idle client connecting until a heartbeat.
+      enqueue(`event: heartbeat\ndata: {"ts":${Date.now()}}\n\n`)
     },
     pull() {
       // A heartbeat will normally deliver this within five seconds. Flush a

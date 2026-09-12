@@ -2,11 +2,12 @@
 
 Chronicle is a local-first work journal for managing tasks, daily plans, notes, and work history. It runs only on the local machine with a Hono + SQLite server, a React UI, and a Tauri desktop shell.
 
-The current app has five main surfaces:
+The current app has six main surfaces:
 
 - Board: task list, task detail, rich task logs, pinned excerpts, linked notes, work sessions, AFK/drop flows, and task summary generation.
 - Today: daily planning with time blocks, carry-over blocks, progress sync, work overview signals, and daily summary generation.
 - Notes: rich HTML notes with autosave, archive/unarchive, pinned notes, body search, linked tasks, and task-entry append flows.
+- Projects: Areas and stage/ongoing milestones, primary task allocation, typed Note/Task references, recorded effort, manual reviews, and source-backed LLM drafts. See the [project management guide](docs/project-management-guide.md).
 - Report: daily and range reporting over tasks, entries, sessions, and AFK events.
 - Settings: data import/export, launchd controls, LLM provider settings, prompt testing, call logs, workday start offset, diagnostics, and version info.
 
@@ -18,7 +19,8 @@ React + Vite UI
   tauri/               Tauri desktop shell using the same UI source
 
 Hono server
-  server/src/index.ts  loopback HTTP API, SSE stream, static UI serving
+  server/src/index.ts  process startup, loopback listeners, shutdown
+  server/src/app.ts    HTTP API, SSE stream, static UI serving
   server/src/db.ts     SQLite schema and migrations
   server/src/services  Task, note, search, day-script, LLM, backup services
 

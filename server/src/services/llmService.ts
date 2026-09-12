@@ -236,9 +236,12 @@ export async function callChatCompletionsWithRaw(
   settings: LlmSettings,
   messages: Array<{ role: string; content: string }>,
   maxTokens: number,
-  options: { jsonResponse?: boolean } = { jsonResponse: true },
+  options: { jsonResponse?: boolean; signal?: AbortSignal } = { jsonResponse: true },
 ): Promise<{ content: string; providerResponse: string; finishReason: string | null }> {
   const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (options.signal?.aborted) controller.abort()
+  else options.signal?.addEventListener('abort', abort, { once: true })
   const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
   try {
     const res = await fetch(`${settings.baseUrl.replace(/\/$/, '')}/chat/completions`, {
@@ -273,6 +276,7 @@ export async function callChatCompletionsWithRaw(
     return { content, providerResponse: text, finishReason }
   } finally {
     clearTimeout(timeout)
+    options.signal?.removeEventListener('abort', abort)
   }
 }
 

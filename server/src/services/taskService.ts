@@ -1,5 +1,8 @@
 import { getDb, getMetaValue, setMetaValue } from '../db'
 import { upsertTaskSearchDocument, upsertTaskEntrySearchDocument, removeTaskSearchDocuments, removeSearchDocument, sourceForEntryType } from './searchIndexService'
+import { applyTaskAssignment, validatePrimaryMilestone } from './projectService'
+import { setReferences } from './projectReferenceService'
+import type { ProjectReferenceInput } from '../../../shared/projectTypes'
 
 const AGENT_CONVERSATIONS_KEY = 'agent_conversations'
 const AGENT_CONVERSATIONS_BACKFILL_VERSION_KEY = 'agent_conversations_backfill_version'
@@ -63,6 +66,8 @@ export interface Task {
   startedAt: number | null
   completedAt: number | null
   dueDate: number | null
+  primaryMilestoneId: string | null
+  projectRevision: number
 }
 
 export interface TaskEntry {
@@ -192,6 +197,8 @@ function rowToTask(row: any): Task {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     dueDate: row.due_date,
+    primaryMilestoneId: row.primary_milestone_id ?? null,
+    projectRevision: row.project_revision ?? 1,
   }
 }
 
@@ -265,15 +272,18 @@ export function createTask(data: {
   dueDate?: number
   body?: string
   reservedId?: string
+  primaryMilestoneId?: string | null
+  references?: ProjectReferenceInput[]
 }): Task {
   const now = Date.now()
   const status = data.status ?? 'PENDING'
   let id = ''
   getDb().transaction(() => {
+    validatePrimaryMilestone(data.primaryMilestoneId)
     id = data.reservedId ? claimReservedTaskId(data.reservedId) : allocateTaskId()
     run(
-      `INSERT INTO tasks (id, title, type, priority, tags, status, created_at, updated_at, started_at, completed_at, due_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, title, type, priority, tags, status, created_at, updated_at, started_at, completed_at, due_date, primary_milestone_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         data.title,
@@ -286,6 +296,7 @@ export function createTask(data: {
         status === 'DOING' ? now : null,
         null,
         data.dueDate ?? null,
+        data.primaryMilestoneId ?? null,
       ]
     )
 
@@ -300,21 +311,39 @@ export function createTask(data: {
       upsertTaskEntrySearchDocument(id, entryId, sourceForEntryType('body'), data.body.trim(), now)
     }
     upsertTaskSearchDocument(id, data.title, data.tags ?? [])
+    // An empty optional relationship list must not make ordinary Task creation
+    // depend on project storage. Nonempty and malformed values still use the
+    // existing validation inside this transaction, so explicit links are atomic.
+    if (data.references !== undefined && (!Array.isArray(data.references) || data.references.length > 0)) {
+      setReferences('task', id, data.references, 1)
+    }
   })()
 
   return getTaskById(id)!
 }
 
-export function updateTask(id: string, data: {
+export interface UpdateTaskData {
   title?: string
   type?: string
   priority?: string
   tags?: string[]
   status?: string
   dueDate?: number
-}): Task | null {
+  primaryMilestoneId?: string | null
+  expectedProjectRevision?: number
+  assignmentToken?: string
+}
+
+export function updateTask(id: string, data: UpdateTaskData): Task | null {
+  return getDb().transaction(() => updateTaskInternal(id, data))()
+}
+
+function updateTaskInternal(id: string, data: UpdateTaskData): Task | null {
   const existing = getTaskById(id)
   if (!existing) return null
+  if (data.primaryMilestoneId !== undefined) {
+    applyTaskAssignment(id, data.primaryMilestoneId, data.expectedProjectRevision, data.assignmentToken)
+  }
 
   const updates: string[] = ['updated_at = ?']
   const params: any[] = [Date.now()]
@@ -380,6 +409,9 @@ export function deleteTask(id: string): boolean {
     db.prepare('DELETE FROM work_overview_hidden_signals WHERE task_id = ?').run(id)
     db.prepare('DELETE FROM note_links WHERE target_id = ?').run(id)
     removeTaskSearchDocuments(id)
+    // Project references already use ON DELETE CASCADE. Keep ordinary deletion
+    // independent of that optional table; SQLite still enforces any constraints
+    // and rolls back the entire cleanup if deleting the Task is rejected.
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
   })
 

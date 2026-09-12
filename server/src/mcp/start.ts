@@ -6,6 +6,7 @@ import { searchAll, searchTasks } from '../services/searchService'
 import { setTaskExtraInfo } from '../services/taskService'
 import type { IncomingMessage, ServerResponse } from 'http'
 import * as z from 'zod/v4'
+import { registerProjectTools } from './projectTools'
 
 function saveConversationIdIfPresent(conversationId: string | undefined, taskId: string) {
   if (conversationId && taskId) {
@@ -13,7 +14,7 @@ function saveConversationIdIfPresent(conversationId: string | undefined, taskId:
   }
 }
 
-function createMcpServer(service: AppService, claudeConversationId?: string): McpServer {
+export function createMcpServer(service: AppService, claudeConversationId?: string): McpServer {
   const server = new McpServer(
     { name: 'chronicle', version: '1.0.0' },
     {
@@ -21,6 +22,8 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
         'Chronicle is a local-first task management system. Use these tools to query and manage tasks, work sessions, and logs.',
     }
   )
+
+  registerProjectTools(server)
 
   server.registerTool(
     'query_tasks',
@@ -164,6 +167,11 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
           .optional()
           .describe('Priority: HIGH, MEDIUM, or LOW. Default: MEDIUM.'),
         tags: z.array(z.string()).optional().describe('Optional tags.'),
+        primaryMilestoneId: z.string().nullable().optional().describe('Primary milestone for recorded work. Other references do not allocate time.'),
+        references: z.array(z.object({
+          targetType: z.enum(['area', 'milestone']), targetId: z.string(),
+          role: z.enum(['related', 'outcome', 'review', 'growth']).optional(),
+        })).optional().describe('Initial typed references, saved atomically with the task.'),
         dueDate: z
           .number()
           .optional()
@@ -178,12 +186,14 @@ function createMcpServer(service: AppService, claudeConversationId?: string): Mc
           ),
       },
     },
-    async ({ title, type, priority, tags, dueDate, conversationId }): Promise<CallToolResult> => {
+    async ({ title, type, priority, tags, primaryMilestoneId, references, dueDate, conversationId }): Promise<CallToolResult> => {
       const task = await service.createTask({
         title,
         type: type ?? 'TODO',
         priority: priority ?? 'MEDIUM',
         tags,
+        primaryMilestoneId,
+        references,
         dueDate,
       })
       saveConversationIdIfPresent(conversationId || claudeConversationId, task.id)

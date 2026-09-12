@@ -4,7 +4,7 @@ import { tokenize } from './tokenizer'
 import { htmlToPlainText } from './searchText'
 
 type EntryType = 'body' | 'log' | 'pinned'
-type EntrySource = 'entry_body' | 'entry_log' | 'entry_pinned'
+export type EntrySource = 'entry_body' | 'entry_log' | 'entry_pinned'
 
 export function sourceForEntryType(type: string): EntrySource {
   if (type === 'body') return 'entry_body'

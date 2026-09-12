@@ -51,7 +51,7 @@ export async function ensureApiReady(): Promise<string> {
 }
 
 // Axios interceptor to attach X-Client-Id header
-async function withClientId(): Promise<AxiosInstance> {
+export async function withClientId(): Promise<AxiosInstance> {
   const client = await getClient()
   if (!interceptorAdded) {
     client.interceptors.request.use((config) => {
@@ -59,7 +59,12 @@ async function withClientId(): Promise<AxiosInstance> {
       return config
     })
     client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        if (response.config.method && response.config.method !== 'get' && /^\/api\/(tasks|notes|sessions|afk)(\/|$)/.test(response.config.url || '')) {
+          window.dispatchEvent(new Event('chronicle:projects-changed'))
+        }
+        return response
+      },
       (error) => {
         const method = String(error?.config?.method ?? 'GET').toUpperCase()
         const url = String(error?.config?.url ?? 'unknown')

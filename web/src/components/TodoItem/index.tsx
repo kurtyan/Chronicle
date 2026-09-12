@@ -1,3 +1,5 @@
+import { useProjectStore } from '@/stores/projectStore'
+import { ProjectFeatureBoundary } from '@/components/Projects/ProjectFeatureBoundary'
 import type { Task } from '@/types'
 import { priorityColors } from '@/types'
 import { cn } from '@/lib/utils'
@@ -33,6 +35,7 @@ export function TodoItem({ task, isActive, pinned, onClick, onContextMenu }: Tod
         <span className={`mt-1 w-2 h-2 rounded-full flex-shrink-0 ${priorityColors[task.priority]}`} />
         <div className="min-w-0 flex-1">
           <h4 className="text-sm font-medium truncate">{task.title}</h4>
+          {task.primaryMilestoneId && <ProjectFeatureBoundary resetKey={task.primaryMilestoneId} fallback={<span className="text-xs text-muted-foreground">里程碑暂时不可用</span>}><TaskMilestoneLabel milestoneId={task.primaryMilestoneId} /></ProjectFeatureBoundary>}
         </div>
         <span className="text-xs text-muted-foreground shrink-0 ml-2 whitespace-nowrap" title={timeTitle}>
           {timeLabel}
@@ -40,4 +43,10 @@ export function TodoItem({ task, isActive, pinned, onClick, onContextMenu }: Tod
       </div>
     </button>
   )
+}
+
+function TaskMilestoneLabel({ milestoneId }: { milestoneId: string }) {
+  const milestones = useProjectStore(state => state.milestones)
+  const milestone = milestones.find(item => item.id === milestoneId)
+  return <p className="mt-1 truncate text-xs text-primary/80">{milestone?.name || milestoneId}{milestone?.archived ? ' · 已归档' : ''}</p>
 }

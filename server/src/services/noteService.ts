@@ -5,6 +5,7 @@ import { htmlToPlainText } from './searchText'
 import { getTaskById, getTaskEntries, getPinnedEntry, type Task, type TaskEntry } from './taskService'
 import { upsertNoteSearchDocument, removeSearchDocument } from './searchIndexService'
 import { searchNotes as searchNotesCore, type NoteSearchResult } from './searchService'
+import { getBacklinks } from './projectReferenceService'
 
 export interface Note {
   id: string
@@ -14,6 +15,7 @@ export interface Note {
   pinned: boolean
   archived: boolean
   revision: number
+  projectRevision: number
   createdAt: number
   updatedAt: number
 }
@@ -49,6 +51,7 @@ function rowToNote(row: any): Note {
     pinned: Boolean(row.pinned),
     archived: Boolean(row.archived),
     revision: Number(row.revision ?? 1),
+    projectRevision: Number(row.project_revision ?? 1),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -98,16 +101,32 @@ function syncTaskMentionLinks(note: Note): void {
   }
 }
 
-export function getNotes(options?: { includeArchived?: boolean; query?: string; limit?: number }): Note[] {
+/** Intersect authoritative backlink sets before any list/search limit is applied. */
+function projectFilteredNoteIds(filters?: string[]): string[] | undefined {
+  if (filters === undefined) return undefined
+  if (!Array.isArray(filters) || filters.length > 50 || filters.some(value => typeof value !== 'string' || !/^(area|milestone):[^:]+$/.test(value))) throw new Error('Invalid projectFilters; expected Area or milestone tags')
+  if (!filters.length) return undefined
+  let result: Set<string> | undefined
+  for (const filter of new Set(filters)) {
+    const [type, id] = filter.split(':') as ['area' | 'milestone', string]
+    const ids = new Set(getBacklinks(type, id).notes.map(note => note.sourceId))
+    result = result === undefined ? ids : new Set([...result].filter(noteId => ids.has(noteId)))
+  }
+  return [...result!]
+}
+export function getNotes(options?: { includeArchived?: boolean; query?: string; limit?: number; projectFilters?: string[] }): Note[] {
   const includeArchived = Boolean(options?.includeArchived)
-  if (options?.query?.trim()) return searchNotes(options.query, options.limit, includeArchived).results.map((result) => getNoteById(result.noteId)).filter((note): note is Note => Boolean(note))
+  const noteIds = projectFilteredNoteIds(options?.projectFilters)
+  if (noteIds?.length === 0) return []
+  if (options?.query?.trim()) return searchNotesCore(options.query, options.limit, includeArchived, noteIds).results.map((result) => getNoteById(result.noteId)).filter((note): note is Note => Boolean(note))
   const limit = Math.min(Math.max(options?.limit ?? 200, 1), 1000)
+  const conditions = [...(includeArchived ? [] : ['archived = 0']), ...(noteIds ? ['id IN (SELECT value FROM json_each(?))'] : [])]
   const rows = getDb().prepare(`
     SELECT * FROM notes
-    ${includeArchived ? '' : 'WHERE archived = 0'}
+    ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
     ORDER BY pinned DESC, updated_at DESC
     LIMIT ?
-  `).all(limit)
+  `).all(...(noteIds ? [JSON.stringify(noteIds)] : []), limit)
   return rows.map(rowToNote)
 }
 
@@ -283,6 +302,8 @@ export function getLinkedTasksForNote(noteId: string): Task[] {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     dueDate: row.due_date,
+    primaryMilestoneId: row.primary_milestone_id ?? null,
+    projectRevision: Number(row.project_revision ?? 1),
   }))
 }
 
@@ -335,6 +356,6 @@ export function addTaskEntryToNote(taskId: string, entryId: string, noteId?: str
   })
 }
 
-export function searchNotes(query: string, limit = 50, includeArchived = false): { results: NoteSearchResult[]; tokens: string[] } {
-  return searchNotesCore(query, limit, includeArchived)
+export function searchNotes(query: string, limit = 50, includeArchived = false, projectFilters?: string[]): { results: NoteSearchResult[]; tokens: string[] } {
+  return searchNotesCore(query, limit, includeArchived, projectFilteredNoteIds(projectFilters))
 }

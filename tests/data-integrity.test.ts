@@ -107,7 +107,8 @@ test.describe('Task entry data integrity', () => {
 
   test('exports and restores a complete ZIP backup including recent writes and attachments', async ({ page }) => {
     const task = await createTask(page, `ExportSnapshot-${Date.now()}`)
-    const attachmentPath = `/private/tmp/chronicle-playwright-data/attachments/${task.id}/evidence.txt`
+    const testDataDirectory = process.env.CHRONICLE_TEST_DATA_DIR ?? '/private/tmp/chronicle-playwright-data'
+    const attachmentPath = path.join(testDataDirectory, 'attachments', task.id, 'evidence.txt')
     fs.mkdirSync(path.dirname(attachmentPath), { recursive: true })
     fs.writeFileSync(attachmentPath, 'backup attachment')
     const exported = await page.request.get('/api/settings/export')

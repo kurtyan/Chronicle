@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import DOMPurify from 'dompurify'
 import { fetchTodayReport, fetchSummary, fetchSessions, fetchRangeStats, fetchReportTasks, getAfkEvents, fetchStartOfDayOffset, setStartOfDayOffset } from '@/services/api'
-import { format, startOfWeek as dfStartOfWeek, startOfMonth, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
+import { format, startOfWeek as dfStartOfWeek, addDays, addWeeks, addMonths, isSameDay } from 'date-fns'
 import { BarChart3, CheckCircle2, Clock, ListTodo, ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X } from 'lucide-react'
 import type { Task, WorkSession, AfkEvent } from '@/types'
 import { priorityColors } from '@/types'
@@ -9,6 +9,10 @@ import { useI18n } from '@/i18n/context'
 import { getTaskById, fetchTaskEntries } from '@/services/api'
 import { registerShortcut } from '@/shortcuts/registry'
 import { withCodeFirstListMarkers } from '@/lib/proseHtml'
+import { Link } from 'react-router-dom'
+import { getWorkPeriodRange } from '@/lib/workPeriod'
+import { projectApi, entityPath, projectError, type WorkStatistics } from '@/services/projectApi'
+import { ProjectFeatureBoundary } from '@/components/Projects/ProjectFeatureBoundary'
 
 type TimeView = 'day' | 'week' | 'month'
 type StatFilter = 'NEW' | 'COMPLETED' | 'IN_PROGRESS' | 'ALL'
@@ -59,6 +63,28 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60
   return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`
+}
+
+function ProjectWorkDistribution({ statistics, error }: { statistics: WorkStatistics | null; error: string }) {
+  const [grouping, setGrouping] = useState<'area' | 'milestone'>('milestone')
+  return <section className="shrink-0 rounded-lg border p-3" aria-label="方向与里程碑投入">
+    <div className="mb-2 flex flex-wrap items-center gap-3">
+      <label className="text-sm font-medium">投入分布 <select aria-label="投入分组" className="ml-2 rounded border bg-background p-1" value={grouping} onChange={event => setGrouping(event.target.value as 'area' | 'milestone')}>
+        <option value="milestone">里程碑</option><option value="area">方向</option>
+      </select></label>
+      {statistics && <span className="text-xs text-muted-foreground">同本页期间 · 合计 {formatDuration(statistics.totalMs)} · {format(statistics.asOf, 'HH:mm:ss')}</span>}
+    </div>
+    {error && <p role="alert" className="text-sm text-destructive">投入分布更新失败：{error}。{statistics ? '以下保留上次结果。' : ''}</p>}
+    {statistics && <div className="max-h-36 overflow-y-auto space-y-1 text-sm">
+      {(grouping === 'area' ? statistics.byArea : statistics.byMilestone).map(group => <div key={group.id} className="flex items-center gap-3">
+        <Link className="min-w-0 flex-1 truncate underline decoration-dotted" to={entityPath(grouping, group.id)}>{group.name}</Link>
+        <span className="tabular-nums">{formatDuration(group.totalMs)}</span>
+      </div>)}
+      <div className="flex justify-between text-muted-foreground"><Link to="/?projectFilter=unassigned">未归属</Link><span className="tabular-nums">{formatDuration(statistics.unassignedMs)}</span></div>
+      {statistics.anomalies.length > 0 && <p className="text-amber-600">有 {statistics.anomalies.length} 条时段需要核对，请查看时间明细。</p>}
+    </div>}
+    {!statistics && !error && <p className="text-sm text-muted-foreground">正在读取投入…</p>}
+  </section>
 }
 
 type RecordType = 'work' | 'afk' | 'gap'
@@ -140,6 +166,11 @@ export function ReportPage() {
   const [afkEvents, setAfkEvents] = useState<AfkEvent[]>([])
   const [sessionTasks, setSessionTasks] = useState<Record<string, Task>>({})
   const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [projectStatistics, setProjectStatistics] = useState<WorkStatistics | null>(null)
+  const [projectStatisticsError, setProjectStatisticsError] = useState('')
+  // Explicit report refreshes may reload core data; unrelated project events
+  // only refresh the optional distribution and must preserve pagination.
+  const [reportRevision, setReportRevision] = useState(0)
   const [activeSection, setActiveSection] = useState<'onDuty' | 'workTime' | 'idleTime' | null>(null)
 
   // Date-range stats
@@ -152,6 +183,7 @@ export function ReportPage() {
   const [allTasksHasMore, setAllTasksHasMore] = useState(false)
   const [selectedStatFilter, setSelectedStatFilter] = useState<StatFilter>('COMPLETED')
   const [allTasksLoading, setAllTasksLoading] = useState(false)
+  const reportTaskRequestVersion = useRef(0)
 
   // Side panel
   const [selectedTask, setSelectedTask] = useState<ReportTask | null>(null)
@@ -160,7 +192,7 @@ export function ReportPage() {
   // Work day offset — read global setting, fallback to localStorage, default 5
   const [workDayOffset, setWorkDayOffset] = useState(5)
   useEffect(() => {
-    fetchStartOfDayOffset().then(offset => setWorkDayOffset(offset))
+    fetchStartOfDayOffset().then(offset => setWorkDayOffset(offset)).catch(() => {})
   }, [])
 
   const clamp = (val: number, min: number, max: number) => Math.max(min, Math.min(val, max))
@@ -188,30 +220,26 @@ export function ReportPage() {
     return () => clearInterval(timer)
   }, [timeView, selectedDate])
 
-  const getDayRange = (): { start: number; end: number } => {
-    if (timeView === 'day') {
-      const d = new Date(selectedDate)
-      d.setHours(0, 0, 0, 0)
-      const start = d.getTime() + workDayOffset * 3600_000
-      d.setDate(d.getDate() + 1)
-      const end = d.getTime() + workDayOffset * 3600_000
-      return { start, end }
+  const getDayRange = () => getWorkPeriodRange(timeView, selectedDate, workDayOffset)
+
+  useEffect(() => {
+    let disposed = false
+    let requestVersion = 0
+    setProjectStatistics(null)
+    const refresh = async () => {
+      const version = ++requestVersion
+      try {
+        const data = await projectApi.statistics({ ...getDayRange(), asOf: Date.now() })
+        if (!disposed && version === requestVersion) { setProjectStatistics(data); setProjectStatisticsError('') }
+      } catch (error) {
+        if (!disposed && version === requestVersion) setProjectStatisticsError(projectError(error))
+      }
     }
-    if (timeView === 'week') {
-      const ws = dfStartOfWeek(selectedDate, { weekStartsOn: 1 })
-      ws.setHours(0, 0, 0, 0)
-      const start = ws.getTime() + workDayOffset * 3600_000
-      const end = addDays(ws, 7).getTime() + workDayOffset * 3600_000
-      return { start, end }
-    }
-    const ms = startOfMonth(selectedDate)
-    ms.setHours(0, 0, 0, 0)
-    const start = ms.getTime() + workDayOffset * 3600_000
-    const me = addMonths(ms, 1)
-    me.setHours(0, 0, 0, 0)
-    const end = me.getTime() + workDayOffset * 3600_000
-    return { start, end }
-  }
+    void refresh()
+    const timer = window.setInterval(refresh, 10_000)
+    window.addEventListener('chronicle:projects-changed', refresh)
+    return () => { disposed = true; window.clearInterval(timer); window.removeEventListener('chronicle:projects-changed', refresh) }
+  }, [timeView, selectedDate, workDayOffset, sessions])
 
   const getDaysInRange = (rangeStart: number, rangeEnd: number) => {
     const days: { date: Date; dayStart: number; dayEnd: number; daySessions: WorkSession[] }[] = []
@@ -245,6 +273,7 @@ export function ReportPage() {
   }
 
   const loadData = useCallback(() => {
+    setReportRevision(value => value + 1)
     setLoading(true)
     Promise.all([fetchTodayReport(), fetchSummary()])
       .then(([r, s]) => { setReport(r); setSummary(s) })
@@ -320,10 +349,11 @@ export function ReportPage() {
     })
 
     return () => { isStale = true; abortController.abort() }
-  }, [timeView, selectedDate, workDayOffset])
+  }, [timeView, selectedDate, workDayOffset, reportRevision])
 
   // Fetch report tasks when filter or date range changes
   useEffect(() => {
+    const requestVersion = ++reportTaskRequestVersion.current
     const abortController = new AbortController()
     const { start, end } = getDayRange()
     let isStale = false
@@ -353,8 +383,8 @@ export function ReportPage() {
         }
       })
 
-    return () => { isStale = true; abortController.abort() }
-  }, [selectedStatFilter, timeView, selectedDate, workDayOffset])
+    return () => { isStale = true; abortController.abort(); if (reportTaskRequestVersion.current === requestVersion) reportTaskRequestVersion.current++ }
+  }, [selectedStatFilter, timeView, selectedDate, workDayOffset, reportRevision])
 
   // When stat filter or reportTasks change, update selectedTask if it no longer matches
   useEffect(() => {
@@ -402,6 +432,8 @@ export function ReportPage() {
         return sum + Math.max(0, clamp(sessionEnd, dayStart, dayEnd) - clamp(s.startedAt, dayStart, dayEnd))
       }, 0)
     }
+    // The original live counters are authoritative session calculations.
+    // An optional project distribution snapshot must never freeze them.
     return { onDuty: totalOnDuty, workTime: totalWorkTime, idleTime: Math.max(0, totalOnDuty - totalWorkTime) }
   }, [sessions, afkEvents, timeView, selectedDate, workDayOffset, nowTick])
 
@@ -497,17 +529,21 @@ export function ReportPage() {
   const filteredTasks = reportTasks
 
   const loadMoreAllTasks = () => {
-    if (!allTasksHasMore) return
+    if (!allTasksHasMore || allTasksLoading || selectedStatFilter !== 'ALL') return
+    const requestVersion = reportTaskRequestVersion.current
     const nextPage = allTasksPage + 1
-    setAllTasksPage(nextPage)
     const { start, end } = getDayRange()
+    setAllTasksLoading(true)
     fetchReportTasks({ start, end, filter: 'ALL', page: nextPage, pageSize: 50 })
       .then(data => {
-        setReportTasks(prev => [...prev, ...data.items])
+        if (reportTaskRequestVersion.current !== requestVersion) return
+        setReportTasks(prev => [...new Map([...prev, ...data.items].map(task => [task.id, task])).values()])
+        setAllTasksPage(nextPage)
         setAllTasksTotal(data.total)
         setAllTasksHasMore(data.hasMore)
       })
       .catch(() => {})
+      .finally(() => { if (reportTaskRequestVersion.current === requestVersion) setAllTasksLoading(false) })
   }
 
   // Open side panel for a task
@@ -609,6 +645,10 @@ export function ReportPage() {
             </div>
           </div>
         </div>
+
+        <ProjectFeatureBoundary label="方向与里程碑投入" resetKey={projectStatistics}>
+          <ProjectWorkDistribution statistics={projectStatistics} error={projectStatisticsError} />
+        </ProjectFeatureBoundary>
 
         {/* Stats row with expandable list */}
         <div className="border rounded-lg">

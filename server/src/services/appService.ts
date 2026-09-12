@@ -24,11 +24,13 @@ import {
 } from './noteService'
 import { rebuildSearchIndex } from './searchIndexService'
 import { getDb } from '../db'
+import { getRecordedWork } from './recordedWorkService'
+import type { ProjectReferenceInput } from '../../../shared/projectTypes'
 
 export class AppService {
   // --- Notes ---
 
-  async getNotes(options?: { includeArchived?: boolean; query?: string; limit?: number }): Promise<Note[]> {
+  async getNotes(options?: { includeArchived?: boolean; query?: string; limit?: number; projectFilters?: string[] }): Promise<Note[]> {
     return getNotes(options)
   }
 
@@ -101,6 +103,8 @@ export class AppService {
     dueDate?: number
     body?: string
     reservedId?: string
+    primaryMilestoneId?: string | null
+    references?: ProjectReferenceInput[]
   }): Promise<Task> {
     return createTask(data)
   }
@@ -116,6 +120,9 @@ export class AppService {
     tags?: string[]
     status?: string
     dueDate?: number
+    primaryMilestoneId?: string | null
+    expectedProjectRevision?: number
+    assignmentToken?: string
   }): Promise<Task | null> {
     return updateTask(id, data)
   }
@@ -357,32 +364,16 @@ export class AppService {
   }
 
   private enrichTasks(tasks: Task[], now: number, start?: number, end?: number): Array<Task & { body: string; workMs: number; rangeWorkMs: number }> {
+    const totals = getRecordedWork({ asOf: now }).byTask
+    const period = start !== undefined && end !== undefined
+      ? getRecordedWork({ start, end, asOf: now }).byTask : totals
     return tasks.map(task => {
       const entries = getDb().prepare(
         'SELECT content FROM task_entries WHERE task_id = ? AND type = ? ORDER BY created_at ASC'
       ).all(task.id, 'body') as { content: string }[]
       const body = entries.map(e => e.content).join('\n\n')
 
-      const sessions = getDb().prepare(
-        'SELECT started_at, ended_at FROM work_sessions WHERE task_id = ?'
-      ).all(task.id) as { started_at: number; ended_at: number | null }[]
-      let workMs = 0
-      let rangeWorkMs = 0
-      for (const s of sessions) {
-        const sessionEnd = s.ended_at ?? now
-        workMs += sessionEnd - s.started_at
-        if (start !== undefined && end !== undefined) {
-          const clampedStart = Math.max(s.started_at, start)
-          const clampedEnd = Math.min(sessionEnd, end)
-          if (clampedStart < clampedEnd) {
-            rangeWorkMs += clampedEnd - clampedStart
-          }
-        } else {
-          rangeWorkMs = workMs
-        }
-      }
-
-      return { ...task, body, workMs, rangeWorkMs }
+      return { ...task, body, workMs: totals.get(task.id) ?? 0, rangeWorkMs: period.get(task.id) ?? 0 }
     })
   }
 

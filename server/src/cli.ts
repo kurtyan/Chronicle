@@ -34,7 +34,7 @@ function getServerHost() {
   return readConfig()?.server?.host ?? '127.0.0.1'
 }
 
-function findServerPID(port) {
+function findServerPID(port?: number) {
   port = port || getServerPort()
   try {
     // Check PID file first
@@ -128,7 +128,7 @@ function cmdStop() {
       console.log(`[chronicle] Server force-stopped (PID ${pid})`)
       if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE)
     } catch (err) {
-      console.error('[chronicle] Failed to stop server:', err.message)
+      console.error('[chronicle] Failed to stop server:', err instanceof Error ? err.message : String(err))
     }
   }
 }

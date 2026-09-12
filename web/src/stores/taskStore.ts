@@ -16,6 +16,8 @@ export interface DraftTask {
   priority: Priority
   tags: string[]
   dueDate: number | null
+  primaryMilestoneId?: string | null
+  projectReferences?: import("../../../shared/projectTypes").ProjectReferenceInput[]
 }
 
 interface TaskState {
@@ -86,12 +88,39 @@ interface TaskState {
   receiveTaskSummaryFailure: (taskId: string, error: string) => void
 }
 
+const TASK_DRAFT_KEY = 'chronicle:task_draft'
+const TASK_DRAFT_ID_KEY = 'chronicle:task_draft_id'
+
+// Draft recovery is optional. A blocked or full cache must never interrupt a
+// Task mutation, session transition, or notification to another store listener.
+function readDraftCache(key: string): string | null {
+  try { return localStorage.getItem(key) } catch { return null }
+}
+
+function writeDraftCache(key: string, value: string | null): void {
+  try {
+    if (value === null) localStorage.removeItem(key)
+    else localStorage.setItem(key, value)
+  } catch { /* Keep working from the in-memory draft when recovery is unavailable. */ }
+}
+
+function restoredDraft(): DraftTask | null {
+  try {
+    const value = JSON.parse(readDraftCache(TASK_DRAFT_KEY) || 'null')
+    return value && typeof value.title === 'string' && typeof value.body === 'string'
+      && ['TODO', 'TOREAD', 'DAILY_IMPROVE'].includes(value.type)
+      && ['HIGH', 'MEDIUM', 'LOW'].includes(value.priority)
+      && Array.isArray(value.tags) && value.tags.every((tag: unknown) => typeof tag === 'string')
+      ? value : null
+  } catch { return null }
+}
+const initialDraft = restoredDraft()
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
   pinnedIds: new Set(),
   loading: false,
   error: null,
-  activeTaskId: null,
+  activeTaskId: initialDraft ? DRAFT_TASK_ID : null,
   selectedTask: null,
   entries: [],
   pinnedEntry: null,
@@ -100,8 +129,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   statusFilter: null,
   isTodayFilter: false,
   savedFilterTypes: [],
-  draftTask: null,
-  draftTaskId: null,
+  draftTask: initialDraft,
+  draftTaskId: initialDraft ? readDraftCache(TASK_DRAFT_ID_KEY) : null,
   logContentDraft: {},
   currentSession: null,
   lastAfkTime: null,
@@ -531,7 +560,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     })
   },
 
-  startDraft: (data) => set({ draftTask: data }),
+  startDraft: (data) => {
+    const previous = get().draftTask
+    const draft = { ...data, primaryMilestoneId: data.primaryMilestoneId === undefined ? previous?.primaryMilestoneId ?? null : data.primaryMilestoneId, projectReferences: data.projectReferences ?? previous?.projectReferences ?? [] }
+    set({ draftTask: draft })
+  },
 
   commitDraft: async () => {
     const { draftTask, draftTaskId } = get()
@@ -544,6 +577,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       dueDate: draftTask.dueDate ?? undefined,
       body: draftTask.body.trim() || undefined,
       reservedId: draftTaskId ?? undefined,
+      ...(draftTask.primaryMilestoneId ? { primaryMilestoneId: draftTask.primaryMilestoneId } : {}),
+      ...(draftTask.projectReferences?.length ? { references: draftTask.projectReferences } : {}),
     })
     // No auto-takeOver — task stays PENDING
     set((state) => ({
@@ -697,3 +732,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 }))
+
+// Persist only draft changes; unrelated Task/session updates must not touch it.
+useTaskStore.subscribe((state, previous) => {
+  if (state.draftTask !== previous.draftTask) {
+    try { writeDraftCache(TASK_DRAFT_KEY, state.draftTask ? JSON.stringify(state.draftTask) : null) } catch { /* A malformed optional draft must not block store listeners. */ }
+  }
+  const reservation = state.draftTask ? state.draftTaskId : null
+  const previousReservation = previous.draftTask ? previous.draftTaskId : null
+  if (reservation !== previousReservation) writeDraftCache(TASK_DRAFT_ID_KEY, reservation)
+})

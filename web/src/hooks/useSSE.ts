@@ -1,3 +1,5 @@
+import { notifyProjectsChanged } from '@/services/projectApi'
+import { refreshTaskProjectMetadata } from '@/lib/projectTaskRefresh'
 import { useEffect, useRef, useState } from 'react'
 import { useTaskStore } from '@/stores/taskStore'
 import { clientId, isTauriEnv, ensureApiReady } from '@/services/httpApi'
@@ -171,7 +173,25 @@ export function useSSE() {
 
       const handlers: Record<string, (data: string) => void> = {
         heartbeat: () => {},
+        projects_changed: (raw) => {
+          notifyProjectsChanged()
+          // Area summaries and project insights do not change Task content.
+          // Even assignment/reference updates must preserve the log editor.
+          try {
+            const event = JSON.parse(raw)
+            if (event?.targetType === 'task_assignment' && typeof event.targetId === 'string') {
+              void refreshTaskProjectMetadata(event.targetId.split(','))
+            } else if (event?.sourceType === 'task' && typeof event.sourceId === 'string') {
+              void refreshTaskProjectMetadata([event.sourceId])
+            }
+          } catch { /* Ignore malformed optional metadata events. */ }
+        },
+        note_created: () => notifyProjectsChanged(),
+        note_updated: () => notifyProjectsChanged(),
+        note_deleted: () => notifyProjectsChanged(),
+        project_insight_updated: () => notifyProjectsChanged(),
         resync: () => {
+          notifyProjectsChanged()
           // The server intentionally drops granular events for a slow client.
           // Re-fetch authoritative state instead of replaying an unbounded queue.
           console.log('[SSE] resync requested after backpressure')
@@ -181,32 +201,39 @@ export function useSSE() {
           if (activeTaskIdRef.current) setActiveTask(activeTaskIdRef.current)
         },
         task_created: () => {
+          notifyProjectsChanged()
           console.log('[SSE] task_created, calling loadTodos')
           loadTodos()
           if (activeTaskIdRef.current) setActiveTask(activeTaskIdRef.current)
         },
         task_updated: () => {
+          notifyProjectsChanged()
           console.log('[SSE] task_updated, calling loadTodos')
           loadTodos()
           if (activeTaskIdRef.current) setActiveTask(activeTaskIdRef.current)
         },
         task_deleted: () => {
+          notifyProjectsChanged()
           console.log('[SSE] task_deleted, calling loadTodos')
           loadTodos()
         },
         entry_created: () => {
+          notifyProjectsChanged()
           console.log('[SSE] entry_created')
           if (activeTaskIdRef.current) setActiveTask(activeTaskIdRef.current)
         },
         entry_updated: () => {
+          notifyProjectsChanged()
           console.log('[SSE] entry_updated')
           if (activeTaskIdRef.current) setActiveTask(activeTaskIdRef.current)
         },
         session_started: () => {
+          notifyProjectsChanged()
           console.log('[SSE] session_started')
           loadCurrentSession()
         },
         session_ended: () => {
+          notifyProjectsChanged()
           console.log('[SSE] session_ended')
           loadCurrentSession()
         },
@@ -245,6 +272,7 @@ export function useSSE() {
           } catch { /* ignore malformed event */ }
         },
         db_imported: () => {
+          notifyProjectsChanged()
           console.log('[SSE] db_imported')
           loadTodos()
           loadPinnedIds()
@@ -258,6 +286,7 @@ export function useSSE() {
         handlers,
         () => {
           if (destroyed) return
+          notifyProjectsChanged()
           console.log('[SSE] Connected')
           setState('connected')
           globalState = 'connected'

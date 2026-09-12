@@ -48,6 +48,38 @@ export interface SearchCounts {
   notes: number
 }
 
+export interface ProjectSearchResult {
+  kind: 'area' | 'milestone'
+  id: string
+  title: string
+  areaId?: string
+  areaTitle?: string
+  snippet: string
+  updatedAt: number
+  archived: boolean
+}
+
+// Project objects are small, structured records. Query their authoritative
+// names directly so renames are immediately visible without rebuilding the
+// existing Task/Note full-text index or changing its backward-compatible keys.
+function searchProjectObjects(query: string, limit: number, includeArchived: boolean) {
+  const terms = query.trim().split(/\s+/).filter(Boolean).slice(0, 12)
+  const empty = { areas: [] as ProjectSearchResult[], milestones: [] as ProjectSearchResult[], areaCount: 0, milestoneCount: 0 }
+  if (!terms.length) return empty
+  const db = getDb()
+  const available = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='areas'").get()
+  if (!available) return empty
+  const areasWhere = terms.map(() => "INSTR(LOWER(a.id || ' ' || a.name || ' ' || a.description || ' ' || a.focus), LOWER(?)) > 0").join(' AND ')
+  const milestonesWhere = terms.map(() => "INSTR(LOWER(m.id || ' ' || m.name || ' ' || m.goal || ' ' || m.completion_criteria || ' ' || a.name), LOWER(?)) > 0").join(' AND ')
+  const areasPredicate = `${includeArchived ? '1' : 'a.archived = 0'} AND ${areasWhere}`
+  const milestonesPredicate = `${includeArchived ? '1' : 'm.archived = 0'} AND ${milestonesWhere}`
+  const areaCount = (db.prepare(`SELECT COUNT(*) AS n FROM areas a WHERE ${areasPredicate}`).get(...terms) as { n: number }).n
+  const milestoneCount = (db.prepare(`SELECT COUNT(*) AS n FROM milestones m JOIN areas a ON a.id=m.area_id WHERE ${milestonesPredicate}`).get(...terms) as { n: number }).n
+  const areas = (db.prepare(`SELECT a.* FROM areas a WHERE ${areasPredicate} ORDER BY a.updated_at DESC, a.id LIMIT ?`).all(...terms, limit) as any[]).map(row => ({ kind: 'area' as const, id: row.id, title: row.name, snippet: row.description.slice(0, 240), updatedAt: row.updated_at, archived: Boolean(row.archived) }))
+  const milestones = (db.prepare(`SELECT m.*, a.name AS area_name FROM milestones m JOIN areas a ON a.id=m.area_id WHERE ${milestonesPredicate} ORDER BY m.updated_at DESC, m.id LIMIT ?`).all(...terms, limit) as any[]).map(row => ({ kind: 'milestone' as const, id: row.id, title: row.name, areaId: row.area_id, areaTitle: row.area_name, snippet: row.goal.slice(0, 240), updatedAt: row.updated_at, archived: Boolean(row.archived) }))
+  return { areas, milestones, areaCount, milestoneCount }
+}
+
 interface RawHit {
   docKey: string
   kind: 'task' | 'task_entry' | 'note'
@@ -122,6 +154,7 @@ function runFtsQuery(
   limit: number,
   hitType: 'exact' | 'prefix' | 'phrase',
   oneHitPerTask: boolean,
+  scopeParams: string[] = [],
 ): Map<string, RawHit> {
   if (!ftsQuery.trim()) return new Map()
   const db = getDb()
@@ -151,7 +184,7 @@ function runFtsQuery(
        ORDER BY score
        LIMIT ?`
     : `${baseQuery} ORDER BY score LIMIT ?`
-  const rows = db.prepare(query).all(ftsQuery, limit) as Array<any>
+  const rows = db.prepare(query).all(ftsQuery, ...scopeParams, limit) as Array<any>
 
   const hits = new Map<string, RawHit>()
   for (const row of rows) {
@@ -307,6 +340,7 @@ function searchCore(
   limit: number,
   includeArchived: boolean,
   oneHitPerTask = false,
+  noteIds?: string[],
 ): { hits: RankedHit[]; tokens: string[]; counts: SearchCounts; total: number } {
   const trimmed = query.trim()
   if (!trimmed) return { hits: [], tokens: [], counts: { tasks: 0, taskEntries: 0, notes: 0 }, total: 0 }
@@ -315,16 +349,18 @@ function searchCore(
   if (tokens.length === 0) return { hits: [], tokens: [], counts: { tasks: 0, taskEntries: 0, notes: 0 }, total: 0 }
 
   const { exact, prefix, phrase } = buildFtsQueries(tokens)
-  const { join: scopeJoin, where: scopeWhere } = buildScopeSql(scope, includeArchived)
+  const { join: scopeJoin, where } = buildScopeSql(scope, includeArchived)
+  const scopeWhere = where + (noteIds ? ' AND d.note_id IN (SELECT value FROM json_each(?))' : '')
+  const scopeParams = noteIds ? [JSON.stringify(noteIds)] : []
   const candidateLimit = Math.min(limit * 4, 400)
 
   const allHits = new Map<string, RawHit>()
 
-  const exactHits = runFtsQuery(exact, scopeWhere, scopeJoin, candidateLimit, 'exact', oneHitPerTask)
+  const exactHits = runFtsQuery(exact, scopeWhere, scopeJoin, candidateLimit, 'exact', oneHitPerTask, scopeParams)
   for (const [key, hit] of exactHits) allHits.set(key, hit)
 
   if (phrase) {
-    const phraseHits = runFtsQuery(phrase, scopeWhere, scopeJoin, candidateLimit, 'phrase', oneHitPerTask)
+    const phraseHits = runFtsQuery(phrase, scopeWhere, scopeJoin, candidateLimit, 'phrase', oneHitPerTask, scopeParams)
     for (const [key, hit] of phraseHits) {
       const existing = allHits.get(key)
       if (existing) {
@@ -336,7 +372,7 @@ function searchCore(
   }
 
   if (prefix) {
-    const prefixHits = runFtsQuery(prefix, scopeWhere, scopeJoin, candidateLimit, 'prefix', oneHitPerTask)
+    const prefixHits = runFtsQuery(prefix, scopeWhere, scopeJoin, candidateLimit, 'prefix', oneHitPerTask, scopeParams)
     for (const [key, hit] of prefixHits) {
       if (!allHits.has(key)) allHits.set(key, hit)
     }
@@ -433,10 +469,10 @@ export function searchTasks(query: string, limit = 50): SearchResponse {
   return { results, tokens }
 }
 
-export function searchNotes(query: string, limit = 50, includeArchived = false): { results: NoteSearchResult[]; tokens: string[] } {
+export function searchNotes(query: string, limit = 50, includeArchived = false, noteIds?: string[]): { results: NoteSearchResult[]; tokens: string[] } {
   const safeLimit = Math.min(Math.max(limit, 1), 200)
-  const { hits, tokens } = searchCore(query, 'notes', safeLimit, includeArchived)
-  const results = hits.map((hit) => hitToNoteSearchResult(hit, tokens))
+  const { hits, tokens } = searchCore(query, 'notes', safeLimit, includeArchived, false, noteIds)
+  const results = hits.slice(0, safeLimit).map((hit) => hitToNoteSearchResult(hit, tokens))
   return { results, tokens }
 }
 
@@ -445,9 +481,11 @@ export function searchAll(query: string, limit = 50, includeArchived = false): {
     tasks: Array<SearchResult & { kind: 'task' }>
     taskEntries: Array<SearchResult & { kind: 'task_entry' }>
     notes: NoteSearchResult[]
+    areas: ProjectSearchResult[]
+    milestones: ProjectSearchResult[]
   }
   tokens: string[]
-  counts: SearchCounts
+  counts: SearchCounts & { areas: number; milestones: number }
   total: number
 } {
   const safeLimit = Math.min(Math.max(limit, 1), 200)
@@ -470,5 +508,8 @@ export function searchAll(query: string, limit = 50, includeArchived = false): {
     }
   }
 
-  return { results: { tasks, taskEntries, notes }, tokens, counts, total }
+  const projects = searchProjectObjects(query, safeLimit, includeArchived)
+  return { results: { tasks, taskEntries, notes, areas: projects.areas, milestones: projects.milestones }, tokens,
+    counts: { ...counts, areas: projects.areaCount, milestones: projects.milestoneCount },
+    total: total + projects.areaCount + projects.milestoneCount }
 }

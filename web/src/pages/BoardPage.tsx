@@ -1,5 +1,11 @@
+import { useLocation } from 'react-router-dom'
+import { EntityReferenceChip, EntityReferencePicker } from '@/components/Projects/EntityReferencePicker'
+import { ProjectFilter, useProjectLinkedIds } from '@/components/Projects/ProjectFilter'
+import { AssignmentDialog } from '@/components/Projects/AssignmentDialog'
+import { ProjectFeatureBoundary } from '@/components/Projects/ProjectFeatureBoundary'
+import { useProjectStore } from '@/stores/projectStore'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { DRAFT_TASK_ID, useTaskStore } from '@/stores/taskStore'
+import { DRAFT_TASK_ID, useTaskStore, type DraftTask } from '@/stores/taskStore'
 import type { Task, TaskType, SearchResult } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
@@ -12,7 +18,7 @@ import { reserveTaskId } from '@/services/api'
 import type { WorkSession } from '@/types'
 import { highlightText } from '@/lib/highlight'
 import { setSearchJumpIntent } from '@/lib/searchJump'
-import { registerShortcut } from '@/shortcuts/registry'
+import { matchesCombo, registerShortcut } from '@/shortcuts/registry'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
@@ -34,6 +40,15 @@ function isHtmlEmpty(html: string): boolean {
 
 export function BoardPage() {
   const { t } = useI18n()
+  const location = useLocation()
+  const [projectFilter, setProjectFilter] = useState(() => new URLSearchParams(location.search).get('projectFilter') || '')
+  const [bulkSelecting, setBulkSelecting] = useState(false)
+  const [bulkIds, setBulkIds] = useState<string[]>([])
+  const [assigning, setAssigning] = useState(false)
+  const projectMilestones = useProjectStore(s => s.milestones)
+  const linkedProjectTaskIds = useProjectLinkedIds(projectFilter, 'task')
+  useEffect(() => { setProjectFilter(new URLSearchParams(location.search).get('projectFilter') || '') }, [location.search])
+
   const {
     tasks, loading, error, activeTaskId, selectedTask, entries, filterTypes,
     statusFilter, isTodayFilter, draftTask, draftTaskId, currentSession, lastAfkTime, pinnedIds,
@@ -132,6 +147,10 @@ export function BoardPage() {
   const [draftPriority, setDraftPriority] = useState<'HIGH' | 'MEDIUM' | 'LOW'>('MEDIUM')
   const [draftTags, setDraftTags] = useState('')
   const [draftDueDate, setDraftDueDate] = useState('')
+  const [draftSaving, setDraftSaving] = useState(false)
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null)
+  const draftSaveInFlight = useRef(false)
+  const draftSaveShortcut = /Mac|iPod|iPhone|iPad/.test(navigator.platform) ? '⌘Enter' : 'Ctrl+Enter'
   // A late reservation response must never attach itself to a newer draft.
   const draftReservationEpoch = useRef(0)
 
@@ -238,6 +257,14 @@ export function BoardPage() {
     setShowFindBar((open) => !open)
   }
 
+  const sortedTasks = tasks.filter(task => {
+    if (!projectFilter) return true
+    if (projectFilter === 'unassigned') return !task.primaryMilestoneId
+    const [kind, id] = projectFilter.split(':')
+    const milestone = projectMilestones.find(m => m.id === task.primaryMilestoneId)
+    return linkedProjectTaskIds.has(task.id) || (kind === 'milestone' ? task.primaryMilestoneId === id : milestone?.areaId === id)
+  }).sort((a, b) => Number(pinnedIds.has(b.id)) - Number(pinnedIds.has(a.id)) || b.updatedAt - a.updatedAt)
+
   // Refs to access latest state without stale closures - MUST be defined before handleEscKey
   const stateRef = useRef({
     activeTaskId,
@@ -252,7 +279,7 @@ export function BoardPage() {
     showDropDialog,
     showCancelConfirm,
     showFindBar,
-    tasks,
+    tasks: sortedTasks,
     currentSession,
     lastAfkTime,
     statusFilter,
@@ -275,7 +302,7 @@ export function BoardPage() {
       showDropDialog,
       showCancelConfirm,
       showFindBar,
-      tasks,
+      tasks: sortedTasks,
       currentSession,
       lastAfkTime,
       statusFilter,
@@ -286,6 +313,25 @@ export function BoardPage() {
     }
   })
 
+  const handleSaveDraft = useCallback(async () => {
+    const current = useTaskStore.getState()
+    if (draftSaveInFlight.current || current.activeTaskId !== DRAFT_ID || !current.draftTask?.title.trim()) return
+    // Read the synchronously updated draft, including its project relations.
+    // The ref also guards repeated keys/clicks before React renders disabled.
+    draftSaveInFlight.current = true
+    setDraftSaving(true)
+    setDraftSaveError(null)
+    try {
+      await commitDraft()
+    } catch (err) {
+      setDraftSaveError(err instanceof Error ? err.message : '保存任务失败，请重试。')
+      console.error('Failed to commit draft:', err)
+    } finally {
+      draftSaveInFlight.current = false
+      setDraftSaving(false)
+    }
+  }, [commitDraft])
+
   // Extract ESC handling for reuse
   const handleEscKey = useCallback(async () => {
     const s = stateRef.current
@@ -293,12 +339,7 @@ export function BoardPage() {
       setShowDropDialog(false)
     } else if (s.activeTaskId === DRAFT_ID) {
       if (s.draftTitle.trim()) {
-        startDraft({ title: s.draftTitle, body: s.draftBody, type: s.draftType, priority: s.draftPriority, tags: s.draftTags.split(',').map((x: string) => x.trim()).filter(Boolean), dueDate: s.draftDueDate ? new Date(s.draftDueDate).getTime() : null })
-        try {
-          await commitDraft()
-        } catch (err) {
-          console.error('Failed to commit draft:', err)
-        }
+        await handleSaveDraft()
       } else {
         await handleCancelDraft()
       }
@@ -336,19 +377,18 @@ export function BoardPage() {
     // notEditing = !isEditing && no dialogs && not in search
     const notEditing = () => !isEditing() && !stateRef.current.showDropDialog && !stateRef.current.showCancelConfirm && !stateRef.current.searchMode
 
-    // Ctrl+Enter: Submit entry or commit draft
+    // Platform modifier + Enter: Submit entry or commit draft
     // Original guard: !s.editingEntryId (no isEditing check)
     unregisters.push(registerShortcut({
       id: 'submit-entry',
-      combo: 'ctrl+enter',
+      combo: 'mod+enter',
       label: 'Submit entry',
       scope: 'page',
       context: () => !stateRef.current.editingEntryId,
       handler: () => {
         const s = stateRef.current
         if (s.activeTaskId === DRAFT_ID && s.draftTitle.trim()) {
-          startDraft({ title: s.draftTitle, body: s.draftBody, type: s.draftType, priority: s.draftPriority, tags: s.draftTags.split(',').map((x: string) => x.trim()).filter(Boolean), dueDate: s.draftDueDate ? new Date(s.draftDueDate).getTime() : null })
-          commitDraft().catch((err: Error) => console.error('Failed to commit draft:', err))
+          void handleSaveDraft()
         } else if (s.activeTaskId) {
           const storeLog = useTaskStore.getState().logContentDraft[s.activeTaskId] || ''
           if (!isHtmlEmpty(storeLog)) {
@@ -446,7 +486,7 @@ export function BoardPage() {
         setDraftPriority('MEDIUM')
         setDraftTags('')
         setDraftDueDate('')
-        startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null })
+        startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null, primaryMilestoneId: (new URLSearchParams(window.location.search).get('projectFilter') || '').startsWith('milestone:') ? new URLSearchParams(window.location.search).get('projectFilter')!.slice(10) : null, projectReferences: [] })
         useTaskStore.setState({ previousActiveTaskId: prevTaskId, draftTaskId: taskId })
         setActiveTask(DRAFT_ID)
       },
@@ -520,7 +560,7 @@ export function BoardPage() {
       label: 'Priority: High',
       scope: 'page',
       context: () => useTaskStore.getState().activeTaskId === DRAFT_ID,
-      handler: () => setDraftPriority('HIGH'),
+      handler: () => changeDraftPriority('HIGH'),
     }))
 
     // Cmd+Shift+S: Set priority MEDIUM (in draft)
@@ -530,7 +570,7 @@ export function BoardPage() {
       label: 'Priority: Medium',
       scope: 'page',
       context: () => useTaskStore.getState().activeTaskId === DRAFT_ID,
-      handler: () => setDraftPriority('MEDIUM'),
+      handler: () => changeDraftPriority('MEDIUM'),
     }))
 
     // Cmd+Shift+D: Set priority LOW (in draft)
@@ -540,7 +580,7 @@ export function BoardPage() {
       label: 'Priority: Low',
       scope: 'page',
       context: () => useTaskStore.getState().activeTaskId === DRAFT_ID,
-      handler: () => setDraftPriority('LOW'),
+      handler: () => changeDraftPriority('LOW'),
     }))
 
     // Escape: Handle ESC
@@ -609,7 +649,7 @@ export function BoardPage() {
     setDraftPriority('MEDIUM')
     setDraftTags('')
     setDraftDueDate('')
-    startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null })
+    startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null, primaryMilestoneId: projectFilter.startsWith('milestone:') ? projectFilter.slice(10) : null, projectReferences: [] })
     // Store previous task for restoration
     useTaskStore.setState({ previousActiveTaskId: prevTaskId })
     setActiveTask(DRAFT_ID)
@@ -633,6 +673,8 @@ export function BoardPage() {
       || draftDueDate
       || draftType !== 'TODO'
       || draftPriority !== 'MEDIUM'
+      || draftTask?.primaryMilestoneId
+      || draftTask?.projectReferences?.length
     )
     if (hasDraftChanges) {
       setShowCancelConfirm(true)
@@ -725,12 +767,9 @@ export function BoardPage() {
   // ==================== Task actions ====================
 
   const isDraftActive = activeTaskId === DRAFT_ID
-  const sortedTasks = [...tasks].sort((a, b) => {
-    const aPinned = pinnedIds.has(a.id) ? 1 : 0
-    const bPinned = pinnedIds.has(b.id) ? 1 : 0
-    return bPinned - aPinned || b.updatedAt - a.updatedAt
-  })
-
+  useEffect(() => {
+    if (!isDraftActive) setDraftSaveError(null)
+  }, [isDraftActive])
   const handleTogglePin = async (taskId: string) => {
     await togglePinned(taskId)
     setPinMenu(null)
@@ -783,6 +822,16 @@ export function BoardPage() {
     }
   }
 
+  function changeDraftPriority(priority: 'HIGH' | 'MEDIUM' | 'LOW') {
+    setDraftPriority(priority)
+    const draft = useTaskStore.getState().draftTask
+    if (draft) useTaskStore.getState().startDraft({ ...draft, priority })
+  }
+  function changeDraftType(type: TaskType) {
+    setDraftType(type)
+    const draft = useTaskStore.getState().draftTask
+    if (draft) useTaskStore.getState().startDraft({ ...draft, type })
+  }
   // ==================== Draft sync helpers ====================
 
   const handleDraftTitleChange = (val: string) => {
@@ -1025,6 +1074,12 @@ export function BoardPage() {
         </div>
         )}
         {/* Task list or search results */}
+        <ProjectFeatureBoundary label="项目筛选" resetKey={projectFilter}>
+        <div className="space-y-2 border-b p-2">
+          <ProjectFilter value={projectFilter} onChange={value => { setProjectFilter(value); setBulkIds([]) }} allowUnassigned />
+          <div className="flex flex-wrap gap-2 text-xs"><button className="text-muted-foreground underline" onClick={() => { setBulkSelecting(!bulkSelecting); setBulkIds([]) }}>{bulkSelecting ? '退出批量选择' : '批量归属'}</button>{bulkSelecting && <><button className="underline" onClick={() => setBulkIds(sortedTasks.map(t => t.id))}>选中当前列表</button><button disabled={!bulkIds.length} className="text-primary underline disabled:opacity-40" onClick={() => setAssigning(true)}>调整 {bulkIds.length} 项归属</button></>}</div>
+        </div>
+        </ProjectFeatureBoundary>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {searchMode ? (
             <>
@@ -1110,13 +1165,14 @@ export function BoardPage() {
                 </div>
               )}
               {/* Existing tasks */}
-              {tasks.length === 0 && !draftTask ? (
+              {sortedTasks.length === 0 && !draftTask ? (
                 <div className="text-sm text-muted-foreground text-center py-8">{t('board.empty')}</div>
               ) : (
                 sortedTasks.map((task) => {
                   const isPinned = pinnedIds.has(task.id)
                   return (
-                  <div key={task.id} className="group relative">
+                  <div key={task.id} className="group relative flex items-center gap-2">
+                    {bulkSelecting && <input aria-label={`选择 ${task.title}`} type="checkbox" checked={bulkIds.includes(task.id)} onChange={e => setBulkIds(ids => e.target.checked ? [...ids, task.id] : ids.filter(id => id !== task.id))} />}
                     <TodoItem
                       task={task}
                       isActive={task.id === activeTaskId}
@@ -1224,8 +1280,8 @@ export function BoardPage() {
                 {/* Fixed top section */}
                 <div className="flex-shrink-0">
                   {/* Info bar */}
-                  <div className="h-10 px-[30px] flex items-center justify-between">
-                    <div className="flex items-center gap-3">
+                  <div className="min-h-10 px-[30px] py-1 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
                       <span className="text-xs text-muted-foreground">{t('task.creating')}</span>
                       <div className="flex gap-1">
                         {(['TODO', 'TOREAD', 'DAILY_IMPROVE'] as TaskType[]).map((typeKey) => (
@@ -1234,7 +1290,7 @@ export function BoardPage() {
                             className={`text-xs px-2 py-0.5 rounded transition ${
                               draftType === typeKey ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'
                             }`}
-                            onClick={() => setDraftType(typeKey)}
+                            onClick={() => changeDraftType(typeKey)}
                           >
                             {t(`type.${typeKey.toLowerCase()}`)}
                           </button>
@@ -1247,27 +1303,42 @@ export function BoardPage() {
                             className={`text-xs px-2 py-0.5 rounded transition ${priorityColors[p]} ${
                               draftPriority === p ? 'text-white' : 'opacity-50 hover:opacity-75'
                             }`}
-                            onClick={() => setDraftPriority(p)}
+                            onClick={() => changeDraftPriority(p)}
                           >
                             {t(`priority.${p.toLowerCase()}`)}
                           </button>
                         ))}
                       </div>
                     </div>
-                    <button
-                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition"
-                      onClick={handleCancelDraft}
-                    >
-                      <X className="w-3.5 h-3.5" />
-                      {t('entry.cancel')}
-                    </button>
+                    <div className="flex shrink-0 items-center gap-3">
+                      <button
+                        className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={!draftTitle.trim() || draftSaving}
+                        aria-busy={draftSaving}
+                        onClick={() => void handleSaveDraft()}
+                      >
+                        {draftSaving ? '保存中…' : '保存任务'}
+                      </button>
+                      <button
+                        className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition disabled:opacity-50"
+                        disabled={draftSaving}
+                        onClick={handleCancelDraft}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        {t('entry.cancel')}
+                      </button>
+                    </div>
                   </div>
 
+                  <ProjectFeatureBoundary label="任务项目关联" resetKey={draftTaskId ?? undefined}>
+                    <DraftProjectRelations draft={draftTask} onChange={startDraft} />
+                  </ProjectFeatureBoundary>
                   {/* Title */}
                   <div className="px-[30px] py-2">
                     <input
                       ref={titleInputRef}
                       className="text-xl font-bold w-full bg-transparent border-b border-primary focus:outline-none"
+                      aria-label="任务标题"
                       value={draftTitle}
                       onChange={(e) => handleDraftTitleChange(e.target.value)}
                       onKeyDown={handleDraftTitleKeyDown}
@@ -1297,19 +1368,17 @@ export function BoardPage() {
                           e.preventDefault()
                           e.stopPropagation()
                           handleEscKey()
-                        } else if (e.ctrlKey && e.key === 'Enter') {
+                        } else if ((e.ctrlKey && e.key === 'Enter') || matchesCombo(e, 'mod+enter')) {
                           e.preventDefault()
                           e.stopPropagation()
-                          if (stateRef.current.draftTitle.trim()) {
-                            startDraft({ title: stateRef.current.draftTitle, body: stateRef.current.draftBody, type: stateRef.current.draftType, priority: stateRef.current.draftPriority, tags: stateRef.current.draftTags.split(',').map((x: string) => x.trim()).filter(Boolean), dueDate: stateRef.current.draftDueDate ? new Date(stateRef.current.draftDueDate).getTime() : null })
-                            commitDraft().catch((err: Error) => console.error('Failed to commit draft:', err))
-                          }
+                          void handleSaveDraft()
                         }
                       }}
                     />
                     <div className="text-xs text-muted-foreground">
-                      Ctrl+Enter {t('task.save')}
+                      {draftSaveShortcut} {t('task.save')}
                     </div>
+                    {draftSaveError && <p role="alert" className="text-xs text-destructive">{draftSaveError}</p>}
                   </div>
                 </div>
               </>
@@ -1336,6 +1405,7 @@ export function BoardPage() {
           await setActiveTask(task.id)
         }}
       />
+      {assigning && <ProjectFeatureBoundary label="批量项目归属"><AssignmentDialog tasks={tasks.filter(t => bulkIds.includes(t.id)).map(t => ({ ...t, primaryMilestoneId: t.primaryMilestoneId ?? null, projectRevision: t.projectRevision ?? 0 }))} onClose={() => { setAssigning(false); setBulkIds([]) }} /></ProjectFeatureBoundary>}
       <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
         <DialogContent>
           <DialogHeader>
@@ -1350,6 +1420,23 @@ export function BoardPage() {
       </Dialog>
     </div>
   )
+}
+
+// Keep project rendering inside its error boundary so even malformed optional
+// relationship data cannot unmount the draft title/body editor.
+function DraftProjectRelations({ draft, onChange }: { draft: DraftTask | null; onChange: (draft: DraftTask) => void }) {
+  return <div className="space-y-2 px-[30px] py-2 text-xs">
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-muted-foreground">主归属</span>
+      {draft?.primaryMilestoneId && <EntityReferenceChip targetType="milestone" targetId={draft.primaryMilestoneId} onRemove={() => onChange({ ...draft, primaryMilestoneId: null })} />}
+      <EntityReferencePicker milestoneOnly label="选择主里程碑" onSelect={ref => draft && onChange({ ...draft, primaryMilestoneId: ref.targetId })} />
+    </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-muted-foreground">相关引用</span>
+      {(draft?.projectReferences || []).map((ref, i) => <EntityReferenceChip key={`${ref.targetType}:${ref.targetId}`} targetType={ref.targetType} targetId={ref.targetId} onRemove={() => draft && onChange({ ...draft, projectReferences: draft.projectReferences?.filter((_, index) => index !== i) })} />)}
+      <EntityReferencePicker exclude={draft?.projectReferences} onSelect={ref => draft && onChange({ ...draft, projectReferences: [...(draft.projectReferences || []), ref] })} />
+    </div>
+  </div>
 }
 
 // Tracking status indicator with elapsed working time
