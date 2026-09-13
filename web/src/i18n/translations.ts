@@ -1,3 +1,12 @@
+import { projectOverviewTranslations } from './projectOverview'
+import { projectDetailsTranslations } from './projectDetails'
+import { projectRelationsTranslations } from './projectRelations'
+import { projectShellTranslations } from './projectShell'
+import { projectWorkspaceNavigationTranslations } from './projectWorkspaceNavigation'
+import { projectActivityTranslations } from './projectActivity'
+import { projectReviewWorkflowTranslations } from './projectReviewWorkflow'
+import { projectWorkspaceObjectTranslations } from './projectWorkspaceObject'
+
 export type Locale = 'zh-CN' | 'en'
 
 export interface TranslationEntry {
@@ -6,6 +15,14 @@ export interface TranslationEntry {
 }
 
 export const translations: Record<string, TranslationEntry> = {
+  ...projectOverviewTranslations,
+  ...projectDetailsTranslations,
+  ...projectRelationsTranslations,
+  ...projectShellTranslations,
+  ...projectWorkspaceNavigationTranslations,
+  ...projectActivityTranslations,
+  ...projectReviewWorkflowTranslations,
+  ...projectWorkspaceObjectTranslations,
   // Sidebar
   'sidebar.board': { 'zh-CN': '看板', en: 'Board' },
   'sidebar.today': { 'zh-CN': '今日', en: 'Today' },

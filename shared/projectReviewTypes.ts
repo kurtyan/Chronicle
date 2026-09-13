@@ -1,3 +1,4 @@
+export type ProjectLocale = 'en' | 'zh-CN'
 /** Durable reviews and evidence-backed AI drafts. No model-generated value is a time statistic. */
 export type ReviewTargetType = 'area' | 'milestone'
 export type ProjectReviewKind = 'completion' | 'periodic'
@@ -29,7 +30,7 @@ export interface ReviewEvidence {
   target: Record<string, unknown>
   metrics: Record<string, unknown>
   sources: ReviewEvidenceSource[]
-  analysis?: { batches: Array<{ index: number; status: 'submitted' | 'success' | 'error'; fragments: Array<{ sourceId: string; offset: number; content: string }> }> }
+  analysis?: { locale?: ProjectLocale; batches: Array<{ index: number; status: 'submitted' | 'success' | 'error'; fragments: Array<{ sourceId: string; offset: number; content: string }> }> }
   coverage: { totalSources: number; totalCharacters: number; includedSources: number; includedCharacters: number; complete: boolean; warnings: string[] }
 }
 export interface ProjectReviewVersion {
@@ -55,6 +56,14 @@ export interface ProjectReview extends ReviewScope {
   confirmedAt: number | null
   noteRevision: number | null
   noteChangedSinceConfirmation: boolean
+  /** Readable summaries derived from current Notes and immutable review versions. */
+  targetName?: string | null
+  noteTitle?: string | null
+  notePreview?: string | null
+  confirmedTitle?: string | null
+  confirmedPreview?: string | null
+  confirmedVersion?: number | null
+  insightDraftId?: string | null
   versions?: ProjectReviewVersion[]
 }
 export interface InsightCitation { sourceId: string; quote: string }
@@ -68,6 +77,7 @@ export interface ProjectInsightContent {
 }
 export interface ProjectInsightBudget { inputCharacters: number; maxCalls: number; maxOutputTokens: number }
 export interface ProjectInsightDraft extends ReviewScope {
+  locale?: ProjectLocale
   id: string
   status: 'running' | 'success' | 'error' | 'cancelled'
   evidence: ReviewEvidence

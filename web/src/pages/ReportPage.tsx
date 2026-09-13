@@ -66,24 +66,26 @@ function formatDuration(ms: number): string {
 }
 
 function ProjectWorkDistribution({ statistics, error }: { statistics: WorkStatistics | null; error: string }) {
+  const { t } = useI18n()
   const [grouping, setGrouping] = useState<'area' | 'milestone'>('milestone')
-  return <section className="shrink-0 rounded-lg border p-3" aria-label="方向与里程碑投入">
+  return <section className="shrink-0 rounded-lg border p-3" aria-label={t('projectShell.investmentTitle')}>
     <div className="mb-2 flex flex-wrap items-center gap-3">
-      <label className="text-sm font-medium">投入分布 <select aria-label="投入分组" className="ml-2 rounded border bg-background p-1" value={grouping} onChange={event => setGrouping(event.target.value as 'area' | 'milestone')}>
-        <option value="milestone">里程碑</option><option value="area">方向</option>
-      </select></label>
-      {statistics && <span className="text-xs text-muted-foreground">同本页期间 · 合计 {formatDuration(statistics.totalMs)} · {format(statistics.asOf, 'HH:mm:ss')}</span>}
+      <h2 className="text-sm font-medium">{t('projectShell.distribution')}</h2>
+      <div className="inline-flex rounded-md bg-muted p-0.5" role="group" aria-label={t('projectShell.groupBy')}>
+        {(['milestone', 'area'] as const).map(value => <button key={value} type="button" aria-pressed={grouping === value} className={`rounded px-2 py-1 text-xs transition-colors ${grouping === value ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} onClick={() => setGrouping(value)}>{t(value === 'area' ? 'projectShell.areas' : 'projectShell.milestones')}</button>)}
+      </div>
+      {statistics && <span className="ml-auto text-xs tabular-nums text-muted-foreground">{t('projectShell.periodTotal', { duration: formatDuration(statistics.totalMs) })} · {format(statistics.asOf, 'HH:mm:ss')}</span>}
     </div>
-    {error && <p role="alert" className="text-sm text-destructive">投入分布更新失败：{error}。{statistics ? '以下保留上次结果。' : ''}</p>}
+    {error && <p role="alert" className="text-sm text-destructive">{t('projectShell.distributionFailed', { error })} {statistics ? t('projectShell.lastResult') : ''}</p>}
     {statistics && <div className="max-h-36 overflow-y-auto space-y-1 text-sm">
       {(grouping === 'area' ? statistics.byArea : statistics.byMilestone).map(group => <div key={group.id} className="flex items-center gap-3">
         <Link className="min-w-0 flex-1 truncate underline decoration-dotted" to={entityPath(grouping, group.id)}>{group.name}</Link>
         <span className="tabular-nums">{formatDuration(group.totalMs)}</span>
       </div>)}
-      <div className="flex justify-between text-muted-foreground"><Link to="/?projectFilter=unassigned">未归属</Link><span className="tabular-nums">{formatDuration(statistics.unassignedMs)}</span></div>
-      {statistics.anomalies.length > 0 && <p className="text-amber-600">有 {statistics.anomalies.length} 条时段需要核对，请查看时间明细。</p>}
+      <div className="flex justify-between text-muted-foreground"><Link to="/?projectFilter=unassigned">{t('projectShell.unassigned')}</Link><span className="tabular-nums">{formatDuration(statistics.unassignedMs)}</span></div>
+      {statistics.anomalies.length > 0 && <p className="text-amber-600">{t('projectShell.timeAnomalies', { count: String(statistics.anomalies.length) })}</p>}
     </div>}
-    {!statistics && !error && <p className="text-sm text-muted-foreground">正在读取投入…</p>}
+    {!statistics && !error && <p className="text-sm text-muted-foreground">{t('projectShell.timeLoading')}</p>}
   </section>
 }
 
@@ -646,7 +648,7 @@ export function ReportPage() {
           </div>
         </div>
 
-        <ProjectFeatureBoundary label="方向与里程碑投入" resetKey={projectStatistics}>
+        <ProjectFeatureBoundary label={t('projectShell.investmentTitle')} resetKey={projectStatistics}>
           <ProjectWorkDistribution statistics={projectStatistics} error={projectStatisticsError} />
         </ProjectFeatureBoundary>
 

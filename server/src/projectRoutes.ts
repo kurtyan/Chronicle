@@ -7,6 +7,7 @@ import * as insights from './services/projectInsightService'
 import type { ProjectSourceType, ProjectTargetType, WorkStatisticsRange } from '../../shared/projectTypes'
 import { broadcastEvent } from './services/eventBus'
 import { getBackgroundTask } from './services/backgroundTaskService'
+import { projectActivityRoutes } from './projectActivityRoutes'
 
 async function readBody(c: any, optional = false): Promise<any> {
   const raw = await c.req.text()
@@ -47,6 +48,7 @@ function listOptions(query: Record<string, string>) {
 }
 
 export const projectRoutes = new Hono()
+projectRoutes.route('/', projectActivityRoutes)
 projectRoutes.onError((error: any, c) => {
   const status = [400, 404, 409, 422, 503].includes(error.status) ? error.status
     : /CONFLICT|STALE_|immutable|cannot be deleted/i.test(error.message) ? 409

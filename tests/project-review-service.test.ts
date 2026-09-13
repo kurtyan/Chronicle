@@ -52,6 +52,41 @@ test.describe('Project review service with isolated SQLite and deterministic mod
     return getProjectInsight(id)!
   }
 
+  for (const format of [
+    { name: 'paragraphs', html: '<p>The rehearsal recovered service.</p><p>Repeat it after the next change.</p>', preview: 'The rehearsal recovered service. Repeat it after the next change.' },
+    { name: 'an edited heading block', html: '<h2><em>The rehearsal recovered service.</em> Repeat it after the next change.</h2>', preview: 'The rehearsal recovered service. Repeat it after the next change.' },
+    { name: 'legacy multi-level headings', html: '<h1>Decision log</h1><h2>Separate uncertain inputs</h2><h3>Verify the fallback</h3><p>One example is not enough.</p><h4>Review after a second example.</h4>', preview: 'Decision log Separate uncertain inputs Verify the fallback One example is not enough. Review after a second example.' },
+  ]) test(`review previews preserve ${format.name} across confirmation, later edits and Note deletion`, async () => {
+    const { milestone } = fixture(`Readable ${format.name}`)
+    const review = createProjectReview({ targetType: 'milestone', targetId: milestone.id, kind: 'periodic', locale: 'en', contentHtml: format.html })
+    expect(review.notePreview).toBe(format.preview)
+    const confirmed = confirmProjectReview(review.id, { expectedNoteRevision: review.noteRevision! })!
+    expect(confirmed.confirmedPreview).toBe(format.preview)
+    const originalVersion = confirmed.versions![0]
+    updateNote(review.noteId, { expectedRevision: review.noteRevision!, contentHtml: '<p>A later, unconfirmed idea.</p>' })
+    const response = await projectRoutes.request(`/project-reviews?targetType=milestone&targetId=${milestone.id}`)
+    expect(response.status).toBe(200)
+    const [listed] = await response.json()
+    expect(listed).toMatchObject({ notePreview: 'A later, unconfirmed idea.', confirmedPreview: format.preview, noteChangedSinceConfirmation: true })
+    deleteNote(review.noteId)
+    const afterDeletion = getProjectReview(review.id)!
+    expect(afterDeletion.confirmedPreview).toBe(format.preview)
+    expect(afterDeletion.notePreview).toBeNull()
+    expect(afterDeletion.versions![0]).toEqual(originalVersion)
+  })
+
+  test('empty default templates have no invented conclusion while authored heading text remains readable', () => {
+    const { milestone } = fixture('Empty review templates')
+    for (const locale of ['en', 'zh-CN'] as const) {
+      const review = createProjectReview({ targetType: 'milestone', targetId: milestone.id, kind: 'periodic', locale })
+      expect(review.notePreview).toBeNull()
+      const confirmed = confirmProjectReview(review.id, { expectedNoteRevision: review.noteRevision! })!
+      expect(confirmed.confirmedPreview).toBeNull()
+    }
+    const authored = createProjectReview({ targetType: 'milestone', targetId: milestone.id, kind: 'periodic', contentHtml: '<h2>This unexpected finding changed my approach.</h2>' })
+    expect(authored.notePreview).toBe('This unexpected finding changed my approach.')
+  })
+
   test('confirms Note revisions as immutable evidence snapshots independent from milestone completion', () => {
     const { milestone, entry } = fixture('Stage review')
     const review = createProjectReview({ targetType: 'milestone', targetId: milestone.id, kind: 'completion', contentHtml: '<p>My own reflection.</p>' })

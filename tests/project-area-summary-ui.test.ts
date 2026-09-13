@@ -1,29 +1,33 @@
 import { test, expect, inProcess } from './helpers/projectFixtures'
 
+test.beforeEach(async ({ context }) => {
+  await context.addInitScript(() => Object.defineProperty(navigator, 'language', { configurable: true, get: () => 'zh-CN' }))
+})
+
 const unique = (label: string) => `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 
 test('Area summary saves handwritten progress and next steps, retaining readable history', async ({ page, request }) => {
   const area = await (await request.post('/api/areas', { data: { name: unique('方向摘要') } })).json()
   await page.goto(`/projects/areas/${area.id}`)
-  const summary = page.getByTestId('area-summary')
-  await summary.getByRole('button', { name: '编辑摘要', exact: true }).click()
-  const editor = page.getByRole('dialog')
-  await editor.getByRole('textbox', { name: '方向最新进展', exact: true }).fill('第一版：已厘清边界和判断依据。')
-  await editor.getByRole('textbox', { name: '方向下一步计划', exact: true }).fill('第一版：通过新的案例检验。')
-  await editor.getByRole('button', { name: '保存摘要', exact: true }).click()
+  const summary = page.getByTestId('project-object-progress')
+  await summary.getByRole('button', { name: '更新进展', exact: true }).click()
+  const editor = summary.getByTestId('project-inline-editor')
+  await editor.getByRole('textbox', { name: '最新成果 / 进展', exact: true }).fill('第一版：已厘清边界和判断依据。')
+  await editor.getByRole('textbox', { name: '下一步', exact: true }).fill('第一版：通过新的案例检验。')
+  await editor.getByRole('button', { name: '保存', exact: true }).click()
   await expect(editor).toHaveCount(0)
   await expect(summary).toContainText('第一版：已厘清边界和判断依据。')
   const first = await (await request.get(`/api/areas/${area.id}`)).json()
   expect(first.summarySource).toBe('manual')
   expect(first.summaryUpdatedAt).toBeGreaterThan(0)
 
-  await summary.getByRole('button', { name: '编辑摘要', exact: true }).click()
-  await editor.getByRole('textbox', { name: '方向最新进展', exact: true }).fill('第二版：新案例已验证原判断。')
-  await editor.getByRole('button', { name: '暂存并关闭', exact: true }).click()
+  await summary.getByRole('button', { name: '更新进展', exact: true }).click()
+  await editor.getByRole('textbox', { name: '最新成果 / 进展', exact: true }).fill('第二版：新案例已验证原判断。')
+  await editor.getByRole('button', { name: '保留并关闭', exact: true }).click()
   expect((await (await request.get(`/api/areas/${area.id}`)).json()).latestProgress).toBe(first.latestProgress)
-  await summary.getByRole('button', { name: '编辑摘要', exact: true }).click()
-  await expect(editor.getByRole('textbox', { name: '方向最新进展', exact: true })).toHaveValue('第二版：新案例已验证原判断。')
-  await editor.getByRole('button', { name: '保存摘要', exact: true }).click()
+  await summary.getByRole('button', { name: '更新进展', exact: true }).click()
+  await expect(editor.getByRole('textbox', { name: '最新成果 / 进展', exact: true })).toHaveValue('第二版：新案例已验证原判断。')
+  await editor.getByRole('button', { name: '保存', exact: true }).click()
   await summary.getByRole('button', { name: '摘要历史', exact: true }).click()
   const history = page.getByRole('dialog')
   await expect(history).toContainText('第一版：已厘清边界和判断依据。')
@@ -39,19 +43,19 @@ test('Area summary SSE conflicts preserve unsaved text until the user reviews th
   const area = await (await request.post('/api/areas', { data: { name: unique('并发方向摘要'), latestProgress: '打开前的进展' } })).json()
   await page.goto(`/projects/areas/${area.id}`)
   await expect(page.getByTitle('connected', { exact: true })).toBeVisible()
-  const summary = page.getByTestId('area-summary')
-  await summary.getByRole('button', { name: '编辑摘要', exact: true }).click()
-  const editor = page.getByRole('dialog')
-  const progress = editor.getByRole('textbox', { name: '方向最新进展', exact: true })
+  const summary = page.getByTestId('project-object-progress')
+  await summary.getByRole('button', { name: '更新进展', exact: true }).click()
+  const editor = summary.getByTestId('project-inline-editor')
+  const progress = editor.getByRole('textbox', { name: '最新成果 / 进展', exact: true })
   await progress.fill('我正在编写但还没有保存的判断')
   const remote = await request.patch(`/api/areas/${area.id}`, { data: { expectedRevision: area.revision, latestProgress: '另一个窗口已经保存的新进展', nextStep: '远端下一步' } })
   expect(remote.ok(), await remote.text()).toBe(true)
-  await expect(editor).toContainText('方向在编辑期间有更新，你的文字已保留。')
+  await expect(editor).toContainText('这个对象已有新修改。草稿已保留；请核对当前内容后再决定是否保存。')
   await expect(editor).toContainText('另一个窗口已经保存的新进展')
   await expect(progress).toHaveValue('我正在编写但还没有保存的判断')
-  await expect(editor.getByRole('button', { name: '保存摘要', exact: true })).toBeDisabled()
-  await editor.getByRole('button', { name: '已核对，保留我的编辑继续保存', exact: true }).click()
-  await editor.getByRole('button', { name: '保存摘要', exact: true }).click()
+  await expect(editor.getByRole('button', { name: '保存', exact: true })).toBeDisabled()
+  await editor.getByRole('button', { name: '已核对新内容，继续保存我的草稿', exact: true }).click()
+  await editor.getByRole('button', { name: '保存', exact: true }).click()
   await expect(editor).toHaveCount(0)
   expect((await (await request.get(`/api/areas/${area.id}`)).json()).latestProgress).toBe('我正在编写但还没有保存的判断')
   await summary.getByRole('button', { name: '摘要历史', exact: true }).click()
@@ -84,7 +88,7 @@ test('Area LLM summary remains a draft until edited and adopted, and retry reuse
   let noteCreations = 0
   const applied: any[] = []
   let currentDetail = detail
-  await page.route(`**/api/areas/${area.id}`, async route => {
+  await page.route(url => url.pathname === `/api/areas/${area.id}`, async route => {
     if (route.request().method() === 'GET') await route.fulfill({ json: currentDetail })
     else await route.fallback()
   })
@@ -111,8 +115,8 @@ test('Area LLM summary remains a draft until edited and adopted, and retry reuse
   })
 
   await page.goto(`/projects/areas/${area.id}`)
-  const summary = page.getByTestId('area-summary')
-  await summary.getByRole('button', { name: 'LLM 草稿', exact: true }).click()
+  const summary = page.getByTestId('project-object-progress')
+  await summary.getByRole('button', { name: '用 AI 起草进展', exact: true }).click()
   await page.getByRole('dialog').getByRole('button', { name: '生成进展与下一步草稿', exact: true }).click()
   await page.getByRole('dialog').getByRole('button', { name: '审阅并编辑摘要', exact: true }).click()
   const editor = page.getByRole('dialog')

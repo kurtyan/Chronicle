@@ -13,6 +13,7 @@ import { dailySummarySourceKey, useBackgroundTaskStore } from '@/stores/backgrou
 import { recordAppError } from '@/stores/appErrorStore'
 import { MarkdownView } from '@/components/MarkdownView'
 import { registerShortcut } from '@/shortcuts/registry'
+import { registerNavigationGuard } from '@/lib/navigationGuard'
 
 const TODAY_LEFT_PANE_PERCENT_KEY = 'chronicle_today_left_pane_percent'
 const TODAY_LEFT_PANE_MIN_PERCENT = 12
@@ -1154,21 +1155,26 @@ export function TodayPage() {
         const changedDuringSave = editVersionRef.current !== documentEditVersion
           || Boolean(liveDocument && scriptDirtyRef.current && latestSnapshot !== documentSnapshot)
         const savedCurrentSnapshot = !changedDuringSave
-          if (result.validationErrors.length > 0) {
-            const validationMessage = recordDayScriptValidationError(`PUT /api/day-scripts/${date}`, result.validationErrors)
-            if (savedCurrentSnapshot) {
-              setScript(result.script)
-              setScriptDirty(false)
-              setSaveError(validationMessage)
-              setSaveStatus('invalid')
+        if (result.validationErrors.length > 0) {
+          const validationMessage = recordDayScriptValidationError(`PUT /api/day-scripts/${date}`, result.validationErrors)
+          if (savedCurrentSnapshot) {
+            scriptRef.current = result.script
+            setScript(result.script)
+            setScriptDirty(false)
+            setSaveError(validationMessage)
+            setSaveStatus('invalid')
           } else {
-            setScript((prev) => prev ? {
-              ...prev,
+            // Invalid Focus syntax is still a saved recovery draft, with a new
+            // revision. A following save must use it before React effects run.
+            const nextScript = scriptRef.current ? {
+              ...scriptRef.current,
               ...(latestDocument ? { document: latestDocument } : {}),
               revision: result.script.revision,
               blocks: result.script.blocks,
               updatedAt: result.script.updatedAt,
-            } : prev)
+            } : null
+            scriptRef.current = nextScript
+            setScript(nextScript)
             setSaveStatus('invalid')
           }
           return { ok: true, current: savedCurrentSnapshot, valid: false, validationMessage }
@@ -1232,6 +1238,23 @@ export function TodayPage() {
       saveDraftInFlightRef.current = null
     }
   }, [clearAutosaveTimer, loadTodos, setActiveTask])
+
+  useEffect(() => {
+    let mounted = true
+    const unregister = registerNavigationGuard(async () => {
+      if (!scriptDirtyRef.current && !saveDraftInFlightRef.current) return true
+      while (mounted) {
+        const version = editVersionRef.current
+        const saved = await saveDraft()
+        if (!saved.ok || !mounted) return false
+        // Validation errors do not prevent leaving a draft already persisted.
+        // Also check edits made while the save refreshed the task workspaces.
+        if (saved.current && version === editVersionRef.current) return true
+      }
+      return false
+    })
+    return () => { mounted = false; unregister() }
+  }, [saveDraft])
 
   const scheduleAutosave = useCallback(() => {
     clearAutosaveTimer()

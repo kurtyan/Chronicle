@@ -1,15 +1,17 @@
 import { useLocation } from 'react-router-dom'
+import { ProjectReturnLink } from '@/components/Projects/ProjectReturnLink'
 import { EntityReferenceChip, EntityReferencePicker } from '@/components/Projects/EntityReferencePicker'
 import { ProjectFilter, useProjectLinkedIds } from '@/components/Projects/ProjectFilter'
 import { AssignmentDialog } from '@/components/Projects/AssignmentDialog'
 import { ProjectFeatureBoundary } from '@/components/Projects/ProjectFeatureBoundary'
 import { useProjectStore } from '@/stores/projectStore'
+import type { ProjectTaskSummary } from '@/services/projectApi'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { DRAFT_TASK_ID, useTaskStore, type DraftTask } from '@/stores/taskStore'
 import type { Task, TaskType, SearchResult } from '@/types'
 import { priorityColors } from '@/types'
 import { useI18n } from '@/i18n/context'
-import { X, Search, Pin, PauseCircle } from 'lucide-react'
+import { X, Search, Pin, PauseCircle, ListChecks, Check, ArrowRight } from 'lucide-react'
 import { TodoItem } from '@/components/TodoItem'
 import { RichEditor } from '@/components/RichEditor'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
@@ -38,6 +40,10 @@ function isHtmlEmpty(html: string): boolean {
   return decoded.length === 0
 }
 
+function isProjectSelectionFocused() {
+  return Boolean(document.activeElement?.closest('[data-project-selection]'))
+}
+
 export function BoardPage() {
   const { t } = useI18n()
   const location = useLocation()
@@ -45,6 +51,8 @@ export function BoardPage() {
   const [bulkSelecting, setBulkSelecting] = useState(false)
   const [bulkIds, setBulkIds] = useState<string[]>([])
   const [assigning, setAssigning] = useState(false)
+  const [assignmentTasks, setAssignmentTasks] = useState<ProjectTaskSummary[]>([])
+  const bulkTriggerRef = useRef<HTMLButtonElement>(null)
   const projectMilestones = useProjectStore(s => s.milestones)
   const linkedProjectTaskIds = useProjectLinkedIds(projectFilter, 'task')
   useEffect(() => { setProjectFilter(new URLSearchParams(location.search).get('projectFilter') || '') }, [location.search])
@@ -265,6 +273,33 @@ export function BoardPage() {
     return linkedProjectTaskIds.has(task.id) || (kind === 'milestone' ? task.primaryMilestoneId === id : milestone?.areaId === id)
   }).sort((a, b) => Number(pinnedIds.has(b.id)) - Number(pinnedIds.has(a.id)) || b.updatedAt - a.updatedAt)
 
+  const exitBulkSelection = () => {
+    setBulkSelecting(false)
+    setBulkIds([])
+    requestAnimationFrame(() => bulkTriggerRef.current?.focus())
+  }
+  const visibleTaskIds = sortedTasks.map(task => task.id).join(',')
+  useEffect(() => {
+    const visible = new Set(visibleTaskIds.split(','))
+    setBulkIds(ids => ids.every(id => visible.has(id)) ? ids : ids.filter(id => visible.has(id)))
+  }, [visibleTaskIds])
+  useEffect(() => {
+    if (searchMode) { setBulkSelecting(false); setBulkIds([]) }
+  }, [searchMode])
+  useEffect(() => {
+    if (!bulkSelecting) return
+    const unregisters = [
+      registerShortcut({ id: 'project-selection-exit', combo: 'Escape', label: 'Exit task selection', scope: 'component', context: () => !assigning && isProjectSelectionFocused(), handler: exitBulkSelection }),
+      registerShortcut({ id: 'project-selection-all', combo: 'mod+a', label: 'Select visible tasks', scope: 'component', context: () => Boolean(document.activeElement?.closest('[data-project-selection]')), handler: () => setBulkIds(sortedTasks.map(task => task.id)) }),
+      ...(['ArrowUp', 'ArrowDown'] as const).map(key => registerShortcut({ id: `project-selection-${key}`, combo: key, label: 'Move task selection', scope: 'component', context: () => Boolean(document.activeElement?.closest('[data-project-selection]')), handler: () => {
+        const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-bulk-task]'))
+        const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+        buttons[Math.max(0, Math.min(buttons.length - 1, index + (key === 'ArrowDown' ? 1 : -1)))]?.focus()
+      } })),
+    ]
+    return () => unregisters.forEach(unregister => unregister())
+  }, [bulkSelecting, assigning, visibleTaskIds])
+
   // Refs to access latest state without stale closures - MUST be defined before handleEscKey
   const stateRef = useRef({
     activeTaskId,
@@ -287,6 +322,7 @@ export function BoardPage() {
     searchMode,
     searchInput,
     pinnedIds,
+    projectFilter,
   })
   useEffect(() => {
       stateRef.current = {
@@ -310,6 +346,7 @@ export function BoardPage() {
       searchMode,
       searchInput,
       pinnedIds,
+      projectFilter,
     }
   })
 
@@ -324,13 +361,13 @@ export function BoardPage() {
     try {
       await commitDraft()
     } catch (err) {
-      setDraftSaveError(err instanceof Error ? err.message : '保存任务失败，请重试。')
+      setDraftSaveError(err instanceof Error ? err.message : t('project.draft.saveFailed'))
       console.error('Failed to commit draft:', err)
     } finally {
       draftSaveInFlight.current = false
       setDraftSaving(false)
     }
-  }, [commitDraft])
+  }, [commitDraft, t])
 
   // Extract ESC handling for reuse
   const handleEscKey = useCallback(async () => {
@@ -375,7 +412,7 @@ export function BoardPage() {
       return isInput || isInEditor
     }
     // notEditing = !isEditing && no dialogs && not in search
-    const notEditing = () => !isEditing() && !stateRef.current.showDropDialog && !stateRef.current.showCancelConfirm && !stateRef.current.searchMode
+    const notEditing = () => !isEditing() && !stateRef.current.showDropDialog && !stateRef.current.showCancelConfirm && !stateRef.current.searchMode && !isProjectSelectionFocused()
 
     // Platform modifier + Enter: Submit entry or commit draft
     // Original guard: !s.editingEntryId (no isEditing check)
@@ -384,7 +421,7 @@ export function BoardPage() {
       combo: 'mod+enter',
       label: 'Submit entry',
       scope: 'page',
-      context: () => !stateRef.current.editingEntryId,
+      context: () => !stateRef.current.editingEntryId && !isProjectSelectionFocused(),
       handler: () => {
         const s = stateRef.current
         if (s.activeTaskId === DRAFT_ID && s.draftTitle.trim()) {
@@ -486,7 +523,7 @@ export function BoardPage() {
         setDraftPriority('MEDIUM')
         setDraftTags('')
         setDraftDueDate('')
-        startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null, primaryMilestoneId: (new URLSearchParams(window.location.search).get('projectFilter') || '').startsWith('milestone:') ? new URLSearchParams(window.location.search).get('projectFilter')!.slice(10) : null, projectReferences: [] })
+        startDraft({ title: '', body: '', type: 'TODO', priority: 'MEDIUM', tags: [], dueDate: null, primaryMilestoneId: s.projectFilter.startsWith('milestone:') ? s.projectFilter.slice(10) : null, projectReferences: [] })
         useTaskStore.setState({ previousActiveTaskId: prevTaskId, draftTaskId: taskId })
         setActiveTask(DRAFT_ID)
       },
@@ -510,7 +547,7 @@ export function BoardPage() {
       scope: 'page',
       context: () => {
         const s = stateRef.current
-        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID)
+        return Boolean(!isProjectSelectionFocused() && s.activeTaskId && s.activeTaskId !== DRAFT_ID)
       },
       handler: async () => {
         const s = stateRef.current
@@ -529,7 +566,7 @@ export function BoardPage() {
       scope: 'page',
       context: () => {
         const s = stateRef.current
-        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && s.selectedTask?.status === 'PENDING')
+        return Boolean(!isProjectSelectionFocused() && s.activeTaskId && s.activeTaskId !== DRAFT_ID && s.selectedTask?.status === 'PENDING')
       },
       handler: () => {
         const s = stateRef.current
@@ -545,7 +582,7 @@ export function BoardPage() {
       scope: 'page',
       context: () => {
         const s = stateRef.current
-        return Boolean(s.activeTaskId && s.activeTaskId !== DRAFT_ID && s.selectedTask?.status === 'DOING')
+        return Boolean(!isProjectSelectionFocused() && s.activeTaskId && s.activeTaskId !== DRAFT_ID && s.selectedTask?.status === 'DOING')
       },
       handler: () => {
         const s = stateRef.current
@@ -862,7 +899,9 @@ export function BoardPage() {
   // ==================== Render ====================
 
   return (
-    <div ref={boardContainerRef} className="flex h-full">
+    <div className="flex h-full min-h-0 flex-col">
+    <ProjectReturnLink />
+    <div ref={boardContainerRef} className="flex min-h-0 flex-1">
       {/* Todo List */}
       <div style={{ width: taskListWidth, minWidth: BOARD_TASK_LIST_MIN_WIDTH }} className="relative border-r bg-card flex flex-col flex-shrink-0">
         {/* Resize handle overlay */}
@@ -1074,13 +1113,20 @@ export function BoardPage() {
         </div>
         )}
         {/* Task list or search results */}
-        <ProjectFeatureBoundary label="项目筛选" resetKey={projectFilter}>
-        <div className="space-y-2 border-b p-2">
-          <ProjectFilter value={projectFilter} onChange={value => { setProjectFilter(value); setBulkIds([]) }} allowUnassigned />
-          <div className="flex flex-wrap gap-2 text-xs"><button className="text-muted-foreground underline" onClick={() => { setBulkSelecting(!bulkSelecting); setBulkIds([]) }}>{bulkSelecting ? '退出批量选择' : '批量归属'}</button>{bulkSelecting && <><button className="underline" onClick={() => setBulkIds(sortedTasks.map(t => t.id))}>选中当前列表</button><button disabled={!bulkIds.length} className="text-primary underline disabled:opacity-40" onClick={() => setAssigning(true)}>调整 {bulkIds.length} 项归属</button></>}</div>
-        </div>
-        </ProjectFeatureBoundary>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        {!searchMode && <ProjectFeatureBoundary label={t('project.filter.label')} resetKey={projectFilter}>
+          {bulkSelecting ? <div data-project-selection role="toolbar" aria-label={t('project.bulk.toolbar')} className="flex min-h-10 flex-wrap items-center gap-1 border-b border-primary/15 bg-primary/5 px-2 py-1.5 text-xs">
+            <span role="status" className="mr-1 tabular-nums font-medium">{t('project.bulk.selected', { count: String(bulkIds.length) })}</span>
+            <button type="button" className="rounded px-1.5 py-1 text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-40" disabled={!sortedTasks.length || bulkIds.length === sortedTasks.length} onClick={() => setBulkIds(sortedTasks.map(task => task.id))}>{t('project.bulk.all')}</button>
+            <button type="button" className="rounded px-1.5 py-1 text-muted-foreground hover:bg-background hover:text-foreground disabled:opacity-40" disabled={!bulkIds.length} onClick={() => setBulkIds([])}>{t('project.bulk.clear')}</button>
+            <button type="button" data-project-assignment-trigger className="ml-auto inline-flex items-center gap-1 rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-40" disabled={!bulkIds.length} onClick={() => { setAssignmentTasks(tasks.filter(task => bulkIds.includes(task.id)).map(task => ({ ...task, primaryMilestoneId: task.primaryMilestoneId ?? null, projectRevision: task.projectRevision ?? 0 }))); setAssigning(true) }}>{t('project.bulk.assign')}<ArrowRight aria-hidden className="h-3 w-3" /></button>
+            <button type="button" data-project-selection-exit title={t('project.bulk.exit')} aria-label={t('project.bulk.exit')} className="rounded p-1.5 text-muted-foreground hover:bg-background hover:text-foreground" onClick={exitBulkSelection}><X className="h-3.5 w-3.5" /></button>
+          </div> : <div className="flex h-10 items-center gap-1 border-b border-border/60 px-2">
+            <ProjectFilter value={projectFilter} onChange={value => { setProjectFilter(value); setBulkIds([]) }} allowUnassigned />
+            {projectFilter && <button type="button" title={t('project.filter.clear')} aria-label={t('project.filter.clear')} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted" onClick={() => setProjectFilter('')}><X className="h-3 w-3" /></button>}
+            <button ref={bulkTriggerRef} type="button" aria-label={t('project.bulk.select')} title={t('project.bulk.select')} className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => { setBulkSelecting(true); setBulkIds([]); setPinMenu(null); requestAnimationFrame(() => { const target = document.querySelector<HTMLButtonElement>('[data-bulk-task]') || document.querySelector<HTMLButtonElement>('[data-project-selection-exit]'); target?.focus() }) }}><ListChecks className="h-3.5 w-3.5" /><span>{t('project.bulk.select')}</span></button>
+          </div>}
+        </ProjectFeatureBoundary>}
+        <div data-project-selection={bulkSelecting ? true : undefined} className="flex-1 overflow-y-auto p-2 space-y-1">
           {searchMode ? (
             <>
               {searchResults.length === 0 && searchQuery && (
@@ -1152,7 +1198,7 @@ export function BoardPage() {
                   className={`group relative border-dashed border-2 ${
                     isDraftActive ? 'border-primary/50 bg-primary/5' : 'border-border hover:border-primary/30'
                   } rounded-lg p-3 cursor-pointer transition`}
-                  onClick={() => setActiveTask(DRAFT_ID)}
+                  onClick={() => { if (!bulkSelecting) setActiveTask(DRAFT_ID) }}
                 >
                   <div className="flex items-start gap-2">
                     <span className="mt-1 w-2 h-2 rounded-full flex-shrink-0 bg-primary/50 animate-pulse" />
@@ -1171,9 +1217,11 @@ export function BoardPage() {
                 sortedTasks.map((task) => {
                   const isPinned = pinnedIds.has(task.id)
                   return (
-                  <div key={task.id} className="group relative flex items-center gap-2">
-                    {bulkSelecting && <input aria-label={`选择 ${task.title}`} type="checkbox" checked={bulkIds.includes(task.id)} onChange={e => setBulkIds(ids => e.target.checked ? [...ids, task.id] : ids.filter(id => id !== task.id))} />}
-                    <TodoItem
+                  <div key={task.id} className="group relative">
+                    {bulkSelecting ? <button type="button" data-bulk-task={task.id} role="checkbox" aria-checked={bulkIds.includes(task.id)} aria-label={t('project.bulk.selectTask', { name: task.title })} className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${bulkIds.includes(task.id) ? 'border-primary/30 bg-primary/5' : 'border-border bg-card hover:bg-muted/50'}`} onClick={() => setBulkIds(ids => ids.includes(task.id) ? ids.filter(id => id !== task.id) : [...ids, task.id])}>
+                      <span aria-hidden className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${bulkIds.includes(task.id) ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground/40'}`}>{bulkIds.includes(task.id) && <Check className="h-3 w-3" />}</span>
+                      <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{projectMilestones.find(milestone => milestone.id === task.primaryMilestoneId)?.name || t('project.relations.unassigned')}</span></span>
+                    </button> : <TodoItem
                       task={task}
                       isActive={task.id === activeTaskId}
                       pinned={isPinned}
@@ -1187,7 +1235,7 @@ export function BoardPage() {
                           setPinMenu({ taskId: task.id, x: e.clientX, y: e.clientY })
                         }
                       }}
-                    />
+                    />}
                   </div>
                   )
                 })
@@ -1317,7 +1365,7 @@ export function BoardPage() {
                         aria-busy={draftSaving}
                         onClick={() => void handleSaveDraft()}
                       >
-                        {draftSaving ? '保存中…' : '保存任务'}
+                        {t(draftSaving ? 'project.draft.saving' : 'project.draft.save')}
                       </button>
                       <button
                         className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition disabled:opacity-50"
@@ -1330,7 +1378,7 @@ export function BoardPage() {
                     </div>
                   </div>
 
-                  <ProjectFeatureBoundary label="任务项目关联" resetKey={draftTaskId ?? undefined}>
+                  <ProjectFeatureBoundary label={t('project.relations.boundary')} resetKey={draftTaskId ?? undefined}>
                     <DraftProjectRelations draft={draftTask} onChange={startDraft} />
                   </ProjectFeatureBoundary>
                   {/* Title */}
@@ -1338,7 +1386,7 @@ export function BoardPage() {
                     <input
                       ref={titleInputRef}
                       className="text-xl font-bold w-full bg-transparent border-b border-primary focus:outline-none"
-                      aria-label="任务标题"
+                      aria-label={t('project.draft.title')}
                       value={draftTitle}
                       onChange={(e) => handleDraftTitleChange(e.target.value)}
                       onKeyDown={handleDraftTitleKeyDown}
@@ -1405,7 +1453,7 @@ export function BoardPage() {
           await setActiveTask(task.id)
         }}
       />
-      {assigning && <ProjectFeatureBoundary label="批量项目归属"><AssignmentDialog tasks={tasks.filter(t => bulkIds.includes(t.id)).map(t => ({ ...t, primaryMilestoneId: t.primaryMilestoneId ?? null, projectRevision: t.projectRevision ?? 0 }))} onClose={() => { setAssigning(false); setBulkIds([]) }} /></ProjectFeatureBoundary>}
+      {assigning && <ProjectFeatureBoundary label={t('project.bulk.boundary')}><AssignmentDialog tasks={assignmentTasks} onClose={() => setAssigning(false)} /></ProjectFeatureBoundary>}
       <Dialog open={showCancelConfirm} onOpenChange={setShowCancelConfirm}>
         <DialogContent>
           <DialogHeader>
@@ -1419,20 +1467,22 @@ export function BoardPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </div>
   )
 }
 
 // Keep project rendering inside its error boundary so even malformed optional
 // relationship data cannot unmount the draft title/body editor.
 function DraftProjectRelations({ draft, onChange }: { draft: DraftTask | null; onChange: (draft: DraftTask) => void }) {
+  const { t } = useI18n()
   return <div className="space-y-2 px-[30px] py-2 text-xs">
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-muted-foreground">主归属</span>
+      <span className="w-20 shrink-0 text-muted-foreground">{t('project.relations.primary')}</span>
       {draft?.primaryMilestoneId && <EntityReferenceChip targetType="milestone" targetId={draft.primaryMilestoneId} onRemove={() => onChange({ ...draft, primaryMilestoneId: null })} />}
-      <EntityReferencePicker milestoneOnly label="选择主里程碑" onSelect={ref => draft && onChange({ ...draft, primaryMilestoneId: ref.targetId })} />
+      <EntityReferencePicker milestoneOnly label={t('project.relations.choose')} onSelect={ref => draft && onChange({ ...draft, primaryMilestoneId: ref.targetId })} />
     </div>
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-muted-foreground">相关引用</span>
+      <span className="w-20 shrink-0 text-muted-foreground">{t('project.relations.references')}</span>
       {(draft?.projectReferences || []).map((ref, i) => <EntityReferenceChip key={`${ref.targetType}:${ref.targetId}`} targetType={ref.targetType} targetId={ref.targetId} onRemove={() => draft && onChange({ ...draft, projectReferences: draft.projectReferences?.filter((_, index) => index !== i) })} />)}
       <EntityReferencePicker exclude={draft?.projectReferences} onSelect={ref => draft && onChange({ ...draft, projectReferences: [...(draft.projectReferences || []), ref] })} />
     </div>

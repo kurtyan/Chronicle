@@ -1,7 +1,9 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { zhCN, enUS, type Locale as DateFnsLocale } from 'date-fns/locale'
 import type { Locale } from './translations'
 import { translations } from './translations'
+import { setRuntimeLocale } from './runtime'
+import { systemLocale, urlLocale } from './locale'
 
 const dateLocaleMap: Record<Locale, DateFnsLocale> = {
   'zh-CN': zhCN,
@@ -10,11 +12,7 @@ const dateLocaleMap: Record<Locale, DateFnsLocale> = {
 
 function resolveLocale(): Locale {
   // 1. URL ?lang= param (highest priority)
-  const params = new URLSearchParams(window.location.search)
-  const urlLang = params.get('lang')
-  if (urlLang === 'en' || urlLang === 'zh-CN') return urlLang
-
-  return 'en' // default; will be overridden by Tauri config after mount
+  return urlLocale() || systemLocale()
 }
 
 async function resolveLocaleFromTauri(): Promise<Locale | null> {
@@ -24,8 +22,8 @@ async function resolveLocaleFromTauri(): Promise<Locale | null> {
     const lang: string = await tauri.core.invoke('get_ui_language')
     if (lang === 'zh-CN' || lang === 'zh') return 'zh-CN'
     if (lang === 'en') return 'en'
-    // 'auto' or other -> fall back to navigator.language
-    return null
+    // 'auto' follows the system, matching the initial browser locale.
+    return systemLocale()
   } catch {
     return null
   }
@@ -48,18 +46,22 @@ interface I18nContextValue {
 const I18nContext = createContext<I18nContextValue | null>(null)
 
 export function I18nProvider({ children }: { children: ReactNode }) {
+  const explicitUrlLocale = useRef(urlLocale())
   const [locale, setLocaleState] = useState<Locale>(resolveLocale)
 
   // After mount, try loading language from Tauri config
   useEffect(() => {
+    if (explicitUrlLocale.current) return
     resolveLocaleFromTauri().then(fromConfig => {
       if (fromConfig) {
+        setRuntimeLocale(fromConfig)
         setLocaleState(fromConfig)
       }
     })
   }, [])
 
   useEffect(() => {
+    setRuntimeLocale(locale)
     setLocaleInUrl(locale)
   }, [locale])
 
@@ -74,6 +76,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, [locale])
 
   const setLocale = useCallback((newLocale: Locale) => {
+    setRuntimeLocale(newLocale)
     setLocaleState(newLocale)
   }, [])
 

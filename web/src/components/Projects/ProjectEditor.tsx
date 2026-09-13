@@ -1,74 +1,151 @@
 import { useEffect, useRef, useState } from 'react'
+import { ProjectSelect } from '@/components/ui/ProjectSelect'
+import { useI18n } from '@/i18n/context'
 import { projectApi, projectError } from '@/services/projectApi'
 import type { Area, Milestone, MilestoneKind, MilestoneStatus, AreaStatus, MilestoneDetail, AreaDetail } from '@/services/projectApi'
 import { useProjectStore } from '@/stores/projectStore'
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { button, primaryButton, control, Field, ErrorMessage, statusLabels, dateInputValue } from './common'
+import { button, primaryButton, control, Field, ErrorMessage, dateInputValue, useProjectLabels } from './common'
 
-export function ProjectEditor({ type, value, areaId, onClose, onSaved }: { type: 'area' | 'milestone'; value?: Area | Milestone | MilestoneDetail | AreaDetail; areaId?: string; onClose: () => void; onSaved: (id: string) => void }) {
-  const areas = useProjectStore(s => s.areas)
-  // The form and its concurrency revision must refer to the same edit snapshot.
-  // Incoming SSE props must not silently acknowledge edits the user never saw.
-  const [initialValue] = useState(value)
-  const mounted = useRef(true)
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
-  const milestone = initialValue && 'kind' in initialValue ? initialValue : undefined
-  const area = initialValue && 'focus' in initialValue ? initialValue : undefined
-  const [name, setName] = useState(value?.name || '')
-  const [description, setDescription] = useState(area?.description || '')
-  const [focus, setFocus] = useState(area?.focus || '')
-  const [selectedArea, setSelectedArea] = useState(milestone?.areaId || areaId || areas.find(a => !a.archived)?.id || '')
-  const [kind, setKind] = useState<MilestoneKind>(milestone?.kind || 'stage')
-  const [status, setStatus] = useState(value?.status || 'active')
-  const [goal, setGoal] = useState(milestone?.goal || '')
-  const [criteria, setCriteria] = useState(milestone?.completionCriteria || '')
-  const [progress, setProgress] = useState(milestone?.latestProgress || '')
-  const [next, setNext] = useState(milestone?.nextStep || '')
-  const [blockers, setBlockers] = useState(milestone?.blockers || '')
-  const [priority, setPriority] = useState(milestone?.priority || '')
-  const [targetDate, setTargetDate] = useState(milestone?.targetDate ? dateInputValue(milestone.targetDate) : '')
-  const [startDate, setStartDate] = useState(milestone?.startDate ? dateInputValue(milestone.startDate) : '')
-  const [archived, setArchived] = useState(value?.archived || false)
-  const [confirmed, setConfirmed] = useState(false)
-  const [confirmType, setConfirmType] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const isCompleting = type === 'milestone' && status === 'completed' && milestone?.status !== 'completed'
-  const kindChanged = !!milestone && kind !== milestone.kind
-  const availableStatuses = type === 'area' ? ['active', 'paused', 'ended'] : kind === 'ongoing' ? ['planned', 'active', 'paused', 'ended'] : ['planned', 'active', 'paused', ...(milestone ? ['completed'] : []), 'cancelled']
-  async function save() {
-    setBusy(true); setError('')
-    try {
-      if (!name.trim()) throw new Error('请填写名称')
-      if (isCompleting && !confirmed) throw new Error('请核对成果后勾选确认完成')
-      if (kindChanged && !confirmType) throw new Error('请确认类型调整的影响')
-      if (type === 'milestone' && startDate && targetDate && startDate > targetDate) throw new Error('计划开始日期不能晚于目标日期')
-      if (type === 'area') {
-        const data = { name: name.trim(), description, focus, status: status as AreaStatus }
-        const saved = area ? await projectApi.updateArea(area.id, { ...data, expectedRevision: area.revision, archived }) : await projectApi.createArea(data)
-        if (mounted.current) onSaved(saved.id)
-      } else {
-        const data = { name: name.trim(), areaId: selectedArea, kind, goal, completionCriteria: criteria, status: status as MilestoneStatus, latestProgress: progress, nextStep: next, blockers, priority: priority || null, startDate: startDate ? new Date(`${startDate}T00:00:00`).getTime() : null, targetDate: targetDate ? new Date(`${targetDate}T00:00:00`).getTime() : null }
-        const saved = milestone ? await projectApi.updateMilestone(milestone.id, { ...data, expectedRevision: milestone.revision, archived, confirmCompletion: confirmed, confirmKindChange: confirmType }) : await projectApi.createMilestone(data)
-        if (mounted.current) onSaved(saved.id)
-      }
-    } catch (e) { setError(projectError(e)) } finally { setBusy(false) }
+export type ProjectEditorMode = 'properties' | 'progress' | 'schedule' | 'complete'
+type ProjectValue = Area | Milestone | MilestoneDetail | AreaDetail
+interface EditorFields {
+  name: string; description: string; focus: string; areaId: string; kind: MilestoneKind; status: string
+  goal: string; criteria: string; progress: string; next: string; blockers: string; priority: string
+  startDate: string; targetDate: string; archived: boolean
+}
+interface EditorDraft { values: EditorFields; expectedRevision?: number }
+// A null tombstone keeps an explicit discard effective even if storage is unavailable.
+const draftMemory = new Map<string, EditorDraft | null>()
+function defaults(value: ProjectValue | undefined, areaId: string): EditorDraft {
+  const milestone = value && 'kind' in value ? value : undefined
+  const area = value && 'focus' in value ? value : undefined
+  return { expectedRevision: value?.revision, values: {
+    name: value?.name || '', description: area?.description || '', focus: area?.focus || '', areaId: milestone?.areaId || areaId,
+    kind: milestone?.kind || 'stage', status: value?.status || 'active', goal: milestone?.goal || '', criteria: milestone?.completionCriteria || '',
+    progress: value?.latestProgress || '', next: value?.nextStep || '', blockers: milestone?.blockers || '', priority: milestone?.priority || '',
+    startDate: milestone?.startDate ? dateInputValue(milestone.startDate) : '', targetDate: milestone?.targetDate ? dateInputValue(milestone.targetDate) : '', archived: value?.archived || false,
+  } }
+}
+function readDraft(key: string, fallback: EditorDraft): EditorDraft {
+  if (draftMemory.has(key)) return draftMemory.get(key) || fallback
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || 'null')
+    if (saved?.values && Object.entries(fallback.values).every(([field, value]) => typeof saved.values[field] === typeof value)
+      && (saved.expectedRevision === undefined || Number.isInteger(saved.expectedRevision))) return saved
+  } catch { /* A local cache cannot prevent project editing. */ }
+  return fallback
+}
+function rememberDraft(key: string, draft: EditorDraft) {
+  draftMemory.set(key, draft)
+  try { localStorage.setItem(key, JSON.stringify(draft)) } catch { /* Keep a session fallback when local storage is unavailable. */ }
+}
+function discardDraft(key: string, submitted?: EditorDraft) {
+  if (submitted) {
+    // Another editor may have opened the same object while this save was in flight.
+    // Only retire the snapshot that this request actually saved.
+    const latest = draftMemory.get(key)
+    if (latest && JSON.stringify(latest) !== JSON.stringify(submitted)) return
   }
-  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}><DialogContent className="max-h-[90vh] sm:max-w-2xl"><DialogHeader><DialogTitle>{value ? '编辑' : '新建'}{type === 'area' ? '方向' : '里程碑'}</DialogTitle></DialogHeader><DialogBody className="space-y-4"><Field label="名称"><input className={control} value={name} autoFocus onChange={e => setName(e.target.value)} /></Field>
-    {type === 'area' ? <><Field label="描述 / 关注点"><textarea rows={3} className={control} value={description} onChange={e => setDescription(e.target.value)} /></Field><Field label="当前重点"><textarea rows={2} className={control} value={focus} onChange={e => setFocus(e.target.value)} /></Field></> : <>
-      <div className="grid gap-3 sm:grid-cols-2"><Field label="所属方向"><select className={control} value={selectedArea} disabled={!!milestone} onChange={e => setSelectedArea(e.target.value)}><option value="">请选择方向</option>{areas.filter(a => !a.archived || a.id === selectedArea).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field><Field label="类型"><select className={control} value={kind} onChange={e => { const newKind = e.target.value as MilestoneKind; setKind(newKind); if ((newKind === 'ongoing' && ['completed', 'cancelled'].includes(status)) || (newKind === 'stage' && status === 'ended')) setStatus('paused'); setConfirmType(false) }}><option value="stage">阶段型：有完成条件</option><option value="ongoing">持续型：长期跟踪</option></select></Field></div>
-      {milestone && <p className="text-xs text-muted-foreground">调整所属方向请使用详情页的“调整方向”，先预览历史投入变化。</p>}
-      <div className="grid gap-3 sm:grid-cols-2"><Field label="计划开始日期（可选）"><input type="date" className={control} value={startDate} onChange={e => setStartDate(e.target.value)} /></Field><Field label="目标日期（可选）"><input type="date" className={control} value={targetDate} min={startDate || undefined} onChange={e => setTargetDate(e.target.value)} /></Field></div>
-      <p className="text-xs text-muted-foreground">用于甘特图排期。未填写日期时显示待排期；持续型可以只设开始日期。日期不代表实际投入或自动完成。</p>
-      <Field label="目标"><textarea className={control} rows={3} value={goal} onChange={e => setGoal(e.target.value)} /></Field><Field label={kind === 'stage' ? '完成标准' : '阶段观察标准（可选，不计算总体完成率）'}><textarea className={control} rows={2} value={criteria} onChange={e => setCriteria(e.target.value)} /></Field>
-      <Field label="优先级"><select className={control} value={priority} onChange={e => setPriority(e.target.value)}><option value="">未设定</option><option value="HIGH">高</option><option value="MEDIUM">中</option><option value="LOW">低</option></select></Field>
-      <Field label="最新成果 / 进展"><textarea className={control} rows={2} value={progress} onChange={e => setProgress(e.target.value)} /></Field><Field label="下一步"><textarea className={control} rows={2} value={next} onChange={e => setNext(e.target.value)} /></Field><Field label="阻碍"><textarea className={control} rows={2} value={blockers} onChange={e => setBlockers(e.target.value)} /></Field>
+  draftMemory.set(key, null)
+  try { localStorage.removeItem(key) } catch { /* Session state remains usable. */ }
+}
+
+export function ProjectEditor({ type, value, areaId, mode = 'properties', inline = false, onClose, onSaved }: {
+  type: 'area' | 'milestone'; value?: ProjectValue; areaId?: string; mode?: ProjectEditorMode; inline?: boolean
+  onClose: () => void; onSaved: (id: string) => void
+}) {
+  const { t } = useI18n()
+  const { statusLabels } = useProjectLabels()
+  const areas = useProjectStore(state => state.areas)
+  const key = `chronicle:project-editor:${type}:${value?.id || `new:${areaId || ''}`}:${mode}`
+  const [draft, setDraft] = useState<EditorDraft>(() => readDraft(key, defaults(value, areaId || areas.find(area => !area.archived)?.id || '')))
+  const [initialValues] = useState(() => JSON.stringify(defaults(value, areaId || areas.find(area => !area.archived)?.id || '').values))
+  const [confirmed, setConfirmed] = useState(false)
+  const [confirmKind, setConfirmKind] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
+  const mounted = useRef(true)
+  const [error, setError] = useState('')
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  const fields = draft.values
+  const milestone = value && 'kind' in value ? value : undefined
+  const dirty = JSON.stringify(fields) !== initialValues
+  const conflict = value && draft.expectedRevision !== value.revision
+  const kindChanged = mode === 'properties' && !!milestone && fields.kind !== milestone.kind
+  const completing = mode === 'complete' || (type === 'milestone' && fields.status === 'completed' && milestone?.status !== 'completed')
+  const availableStatuses = type === 'area' ? ['active', 'paused', 'ended'] : fields.kind === 'ongoing' ? ['planned', 'active', 'paused', 'ended'] : ['planned', 'active', 'paused', ...(milestone?.status === 'completed' ? ['completed'] : []), 'cancelled']
+  const change = (changes: Partial<EditorFields>) => {
+    const next = { ...draft, values: { ...fields, ...changes } }
+    setDraft(next); rememberDraft(key, next)
+  }
+  const close = () => { if (!busyRef.current) onClose() }
+  const save = async () => {
+    if (busyRef.current || conflict) return
+    const submitted = draft
+    busyRef.current = true; setBusy(true); setError('')
+    try {
+      if (!fields.name.trim()) throw new Error(t('project.editor.nameRequired'))
+      if (completing && !confirmed) throw new Error(t('project.editor.confirmRequired'))
+      if (kindChanged && !confirmKind) throw new Error(t('project.editor.kindConfirmationRequired'))
+      if (mode === 'schedule' && fields.startDate && fields.targetDate && fields.startDate > fields.targetDate) throw new Error(t('project.editor.invalidDates'))
+      const revision = { expectedRevision: draft.expectedRevision! }
+      let saved: Area | Milestone
+      if (type === 'area') {
+        const values = mode === 'progress' ? { latestProgress: fields.progress, nextStep: fields.next }
+          : { name: fields.name.trim(), description: fields.description, focus: fields.focus, status: fields.status as AreaStatus, archived: fields.archived }
+        saved = value ? await projectApi.updateArea(value.id, { ...values, ...revision }) : await projectApi.createArea({ name: fields.name.trim(), ...values })
+      } else if (value) {
+        const values = mode === 'progress' ? { latestProgress: fields.progress, nextStep: fields.next, blockers: fields.blockers }
+          : mode === 'schedule' ? { startDate: fields.startDate ? new Date(`${fields.startDate}T00:00:00`).getTime() : null, targetDate: fields.targetDate ? new Date(`${fields.targetDate}T00:00:00`).getTime() : null }
+          : mode === 'complete' ? { status: 'completed' as const, confirmCompletion: confirmed }
+          : { name: fields.name.trim(), kind: fields.kind, goal: fields.goal, completionCriteria: fields.criteria, priority: fields.priority || null, status: fields.status as MilestoneStatus, archived: fields.archived, confirmKindChange: confirmKind }
+        saved = await projectApi.updateMilestone(value.id, { ...values, ...revision })
+      } else {
+        saved = await projectApi.createMilestone({ areaId: fields.areaId, name: fields.name.trim(), kind: fields.kind, goal: fields.goal, completionCriteria: fields.criteria, priority: fields.priority || null })
+      }
+      discardDraft(key, submitted)
+      if (mounted.current) onSaved(saved.id)
+    } catch (error) { if (mounted.current) setError(projectError(error)) }
+    finally { busyRef.current = false; if (mounted.current) setBusy(false) }
+  }
+  const title = t(mode === 'properties' ? type === 'area' ? value ? 'project.editor.editArea' : 'project.editor.newArea' : value ? 'project.editor.editMilestone' : 'project.editor.newMilestone' : `project.object.editor.${mode}`)
+  const content = <fieldset disabled={busy} className="min-w-0 space-y-4">
+    {mode === 'properties' && <>
+      <Field label={t('project.editor.name')}><input autoFocus className={control} value={fields.name} onChange={event => change({ name: event.target.value })} /></Field>
+      {type === 'area' ? <><Field label={t('project.editor.description')}><textarea rows={3} className={control} value={fields.description} onChange={event => change({ description: event.target.value })} /></Field><Field label={t('project.editor.focus')}><textarea rows={2} className={control} value={fields.focus} onChange={event => change({ focus: event.target.value })} /></Field></> : <>
+        {!value && <Field label={t('project.editor.area')}><ProjectSelect className="w-full" label={t('project.editor.area')} value={fields.areaId} onChange={areaId => change({ areaId })} options={areas.filter(area => !area.archived).map(area => ({ value: area.id, label: area.name }))} /></Field>}
+        <Field label={t('project.editor.goal')}><textarea className={control} rows={3} value={fields.goal} onChange={event => change({ goal: event.target.value })} /></Field>
+        <Field label={fields.kind === 'stage' ? t('project.editor.criteria') : t('project.editor.observationCriteria')}><textarea className={control} rows={2} value={fields.criteria} onChange={event => change({ criteria: event.target.value })} /></Field>
+        <details><summary className="cursor-pointer text-xs text-muted-foreground">{t('project.object.moreProperties')}</summary><div className="mt-3 space-y-3">
+          <Field label={t('project.editor.kind')}><ProjectSelect className="w-full" label={t('project.editor.kind')} value={fields.kind} onChange={kind => { change({ kind: kind as MilestoneKind, status: (kind === 'ongoing' && ['completed', 'cancelled'].includes(fields.status)) || (kind === 'stage' && fields.status === 'ended') ? 'paused' : fields.status }); setConfirmKind(false) }} options={[{ value: 'stage', label: t('project.editor.stage') }, { value: 'ongoing', label: t('project.editor.ongoing') }]} /></Field>
+          <Field label={t('project.editor.priority')}><ProjectSelect className="w-full" label={t('project.editor.priority')} value={fields.priority} onChange={priority => change({ priority })} options={[{ value: '', label: t('project.editor.notSet') }, ...['HIGH', 'MEDIUM', 'LOW'].map(value => ({ value, label: t(`project.editor.${value.toLowerCase()}`) }))]} /></Field>
+        </div></details>
+      </>}
+      {value && <><Field label={t('project.editor.status')}><ProjectSelect className="w-full" label={t('project.editor.status')} value={fields.status} onChange={status => change({ status })} options={availableStatuses.map(status => ({ value: status, label: statusLabels[status] }))} /></Field><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={fields.archived} onChange={event => change({ archived: event.target.checked })} />{t('project.editor.archive')}</label></>}
+      {kindChanged && <label className="flex items-start gap-2 rounded border border-amber-400/40 p-3 text-sm"><input type="checkbox" checked={confirmKind} onChange={event => setConfirmKind(event.target.checked)} />{t('project.editor.confirmKind')}</label>}
     </>}
-    <Field label="状态"><select className={control} value={status} onChange={e => { setStatus(e.target.value as typeof status); setConfirmed(false) }}>{availableStatuses.map(s => <option key={s} value={s}>{statusLabels[s]}</option>)}</select></Field>
-    {kindChanged && <label className="flex gap-2 rounded border border-amber-400 p-3 text-sm"><input type="checkbox" checked={confirmType} onChange={e => setConfirmType(e.target.checked)} />确认调整类型。已有标准和历史复盘保留，持续型不计算阶段达成。</label>}
-    {isCompleting && <div className="space-y-2 rounded-lg border border-primary/40 p-3 text-sm"><p className="font-medium">完成核对</p><p>目标：{goal || '尚未填写'}</p><p>完成标准：{criteria || '尚未填写，请先明确本次完成的依据。'}</p>{value && 'tasks' in value && <p>当前未完成 Task：{value.tasks.filter(t => !['DONE', 'DROPPED'].includes(t.status)).length}。任务状态不会自动改变。</p>}<label className="flex gap-2"><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />我已核对成果，确认里程碑完成。复盘可以稍后补充。</label></div>}
-    {value && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={archived} onChange={e => setArchived(e.target.checked)} />归档（保留历史投入与引用）</label>}
-    {type === 'area' && (archived || status === 'ended' || status === 'paused') && <p className="text-sm text-amber-600">{value && 'milestones' in value ? `当前有 ${value.milestones.filter(m => !m.archived && ['planned', 'active', 'paused'].includes(m.status)).length} 个未结束的下属里程碑。` : ''}下属里程碑和 Task 的状态不会随方向自动改变，历史投入仍保留。</p>}
+    {mode === 'progress' && <>
+      <Field label={t('project.editor.progress')}><textarea autoFocus className={`${control} min-h-24`} value={fields.progress} onChange={event => change({ progress: event.target.value })} /></Field>
+      <Field label={t('project.editor.nextStep')}><textarea className={control} rows={3} value={fields.next} onChange={event => change({ next: event.target.value })} /></Field>
+      {type === 'milestone' && <details open={!!fields.blockers}><summary className="cursor-pointer text-xs text-muted-foreground">{t('project.editor.blockers')}</summary><textarea aria-label={t('project.editor.blockers')} className={`${control} mt-2 w-full`} value={fields.blockers} onChange={event => change({ blockers: event.target.value })} /></details>}
+    </>}
+    {mode === 'schedule' && <div className="grid gap-3 sm:grid-cols-2"><Field label={t('project.editor.startDate')}><input autoFocus type="date" className={control} value={fields.startDate} onChange={event => change({ startDate: event.target.value })} /></Field><Field label={t('project.editor.targetDate')}><input type="date" className={control} value={fields.targetDate} min={fields.startDate || undefined} onChange={event => change({ targetDate: event.target.value })} /></Field></div>}
+    {mode === 'complete' && <>
+      <p className="text-sm font-medium">{value?.name}</p><p className="whitespace-pre-wrap text-sm leading-relaxed">{milestone?.goal || t('project.details.noGoal')}</p>
+      <div className="rounded-md bg-muted/50 p-3 text-sm"><p className="mb-1 text-xs font-medium text-muted-foreground">{t('project.editor.criteria')}</p><p className="whitespace-pre-wrap">{milestone?.completionCriteria || t('project.editor.criteriaMissing')}</p></div>
+      {value && 'tasks' in value && <div className="text-sm"><p>{t('project.editor.openTasks', { count: String(value.tasks.filter(task => !['DONE', 'DROPPED'].includes(task.status)).length) })}</p><ul className="mt-2 max-h-32 space-y-1 overflow-auto text-xs text-muted-foreground">{value.tasks.filter(task => !['DONE', 'DROPPED'].includes(task.status)).map(task => <li key={task.id}>{task.title}</li>)}</ul></div>}
+      <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />{t('project.editor.confirmComplete')}</label>
+    </>}
+    {conflict && <div role="alert" className="space-y-2 rounded border border-amber-500/40 bg-amber-500/5 p-3 text-sm"><p>{t('project.object.conflict')}</p><p className="whitespace-pre-wrap text-xs text-muted-foreground">{mode === 'progress' ? `${t('project.editor.progress')}: ${value.latestProgress}\n${t('project.editor.nextStep')}: ${value.nextStep}` : `${value.name} · ${statusLabels[value.status]}`}</p><button type="button" className={button} onClick={() => { const next = { ...draft, expectedRevision: value.revision }; setDraft(next); rememberDraft(key, next); setConfirmed(false) }}>{t('project.object.keepDraftLatest')}</button></div>}
     <ErrorMessage>{error}</ErrorMessage>
-  </DialogBody><DialogFooter><button className={button} disabled={busy} onClick={onClose}>取消</button><button className={primaryButton} disabled={busy || !name.trim() || (type === 'milestone' && !selectedArea)} onClick={() => void save()}>{busy ? '保存中…' : isCompleting ? '确认完成并保存' : '保存'}</button></DialogFooter></DialogContent></Dialog>
+    {mode !== 'complete' && <p className="text-xs text-muted-foreground">{t('project.object.draftHint')}</p>}
+  </fieldset>
+  const footer = <>
+    {dirty && <button type="button" className={`${button} sm:mr-auto`} disabled={busy} onClick={() => { discardDraft(key); onClose() }}>{t('project.object.discard')}</button>}
+    <button type="button" className={button} disabled={busy} onClick={close}>{t(mode === 'complete' ? 'project.details.cancel' : dirty ? 'project.object.keepClose' : 'project.details.close')}</button>
+    <button type="button" className={primaryButton} disabled={busy || !!conflict || !fields.name.trim() || (type === 'milestone' && !value && !fields.areaId) || (completing && !confirmed)} onClick={() => void save()}>{t(busy ? 'project.details.saving' : completing ? 'project.editor.completeAndSave' : 'project.details.save')}</button>
+  </>
+  if (inline) return <div data-testid="project-inline-editor" className="space-y-4 rounded-lg border border-primary/20 bg-muted/20 p-4" onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close() } }}><div className="text-sm font-medium">{title}</div>{content}<div className="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-3">{footer}</div></div>
+  return <Dialog open onOpenChange={open => { if (!open) close() }}><DialogContent onEscapeKeyDown={event => { if (busy) event.preventDefault() }} className="max-h-[90vh] sm:max-w-xl"><DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader><DialogBody>{content}</DialogBody><DialogFooter>{footer}</DialogFooter></DialogContent></Dialog>
 }

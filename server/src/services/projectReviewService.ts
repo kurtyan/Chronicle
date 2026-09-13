@@ -1,12 +1,15 @@
+import { projectLocale, projectLocaleCopy } from './projectLocale'
 import { randomUUID } from 'crypto'
 import { getDb } from '../db'
+import { htmlToPlainText } from './searchText'
 import { createNote, getNoteById } from './noteService'
 import { addProjectReference } from './projectReferenceService'
 import { buildReviewEvidence, getInsightOutputNoteIds, getReviewTarget, isReviewEvidenceStale, validateReviewScope } from './reviewEvidenceService'
-import type { ProjectReview, ProjectReviewKind, ProjectReviewVersion, ReviewEvidence, ReviewScope } from '../../../shared/projectReviewTypes'
+import type { ProjectLocale, ProjectReview, ProjectReviewKind, ProjectReviewVersion, ReviewEvidence, ReviewScope } from '../../../shared/projectReviewTypes'
 
 export interface CreateProjectReviewInput extends ReviewScope {
   kind: ProjectReviewKind
+  locale?: ProjectLocale
   noteId?: string
   title?: string
   contentHtml?: string
@@ -27,14 +30,31 @@ function mapVersion(row: any): ProjectReviewVersion {
   return { id: row.id, reviewId: row.review_id, version: row.version, noteId: row.note_id, noteRevision: row.note_revision, title: row.title, contentHtml: row.content_html, evidence: JSON.parse(row.evidence_json), completionEventId: row.completion_event_id, confirmedAt: row.confirmed_at }
 }
 
+const emptyReviewTemplates = new Set(Object.values(projectLocaleCopy).flatMap(copy => [
+  copy.completionHeadings.join(' '), copy.periodicHeadings.join(' '),
+]))
+
+function reviewPreview(html: string | null | undefined): string | null {
+  if (!html) return null
+  // A heading is valid authored content, including text entered into the first
+  // block of a review template. Only an entirely untouched template is empty;
+  // neither the heading level nor a special section title identifies a lesson.
+  const text = htmlToPlainText(html)
+  return text && !emptyReviewTemplates.has(text) ? text.slice(0, 280) : null
+}
+
 function mapReview(row: any): ProjectReview {
-  const latest = getDb().prepare('SELECT note_id, note_revision FROM project_review_versions WHERE review_id = ? ORDER BY version DESC LIMIT 1').get(row.id) as any
+  const latest = getDb().prepare('SELECT note_id, note_revision, version, title, content_html FROM project_review_versions WHERE review_id = ? ORDER BY version DESC LIMIT 1').get(row.id) as any
   const note = getNoteById(row.note_id)
+  const target = getDb().prepare(`SELECT name FROM ${row.target_type === 'area' ? 'areas' : 'milestones'} WHERE id = ?`).get(row.target_id) as { name: string } | undefined
   return {
     id: row.id, targetType: row.target_type, targetId: row.target_id, kind: row.kind, noteId: row.note_id,
     periodStart: row.period_start, periodEnd: row.period_end, status: row.status, completionEventId: row.completion_event_id,
     createdAt: row.created_at, updatedAt: row.updated_at, confirmedAt: row.confirmed_at,
     noteRevision: note?.revision ?? null,
+    targetName: target?.name ?? null, noteTitle: note?.title ?? latest?.title ?? null, notePreview: reviewPreview(note?.contentHtml),
+    insightDraftId: row.insight_draft_id ?? null,
+    confirmedTitle: latest?.title ?? null, confirmedPreview: reviewPreview(latest?.content_html), confirmedVersion: latest?.version ?? null,
     noteChangedSinceConfirmation: Boolean(latest && (!note || latest.note_id !== note.id || latest.note_revision !== note.revision)),
   }
 }
@@ -70,6 +90,7 @@ function resolveCompletionEvent(scope: ReviewScope, target: Record<string, any>,
 
 export function createProjectReview(input: CreateProjectReviewInput): ProjectReview {
   const scope = validateReviewScope(input)
+  const copy = projectLocaleCopy[projectLocale(input.locale)]
   if ((input.title !== undefined && typeof input.title !== 'string') || (input.contentHtml !== undefined && typeof input.contentHtml !== 'string')) throw new Error('Invalid review title or content')
   const target = getReviewTarget(scope)
   if (!['completion', 'periodic'].includes(input.kind)) throw new Error('Invalid review kind')
@@ -92,11 +113,9 @@ export function createProjectReview(input: CreateProjectReviewInput): ProjectRev
       if (existing) return getProjectReview(existing.id)!
     }
     const note = input.noteId ? getNoteById(input.noteId)! : createNote({
-      title: input.title?.trim() || `${target.name} · ${input.kind === 'completion' ? '复盘' : '阶段回顾'}`,
-      contentHtml: input.contentHtml ?? (input.kind === 'completion'
-        ? '<h2>结果与完成标准</h2><p></p><h2>关键判断与转折</h2><p></p><h2>有效做法与失误</h2><p></p><h2>感悟与可复用认识</h2><p></p><h2>适用边界与下一次验证</h2><p></p>'
-        : '<h2>过去与现在的变化</h2><p></p><h2>具体案例与个人贡献</h2><p></p><h2>感悟与尚未验证的认识</h2><p></p><h2>下一次验证</h2><p></p>'),
-      tags: ['复盘'],
+      title: input.title?.trim() || `${target.name} · ${input.kind === 'completion' ? copy.completionTitle : copy.periodicTitle}`,
+      contentHtml: input.contentHtml ?? (input.kind === 'completion' ? copy.completionHeadings : copy.periodicHeadings).map(heading => `<h2>${escapeReviewHtml(heading)}</h2><p></p>`).join(''),
+      tags: [copy.reviewTag],
     })
     linkReviewNote(note.id, scope)
     const id = randomUUID(), now = Date.now()

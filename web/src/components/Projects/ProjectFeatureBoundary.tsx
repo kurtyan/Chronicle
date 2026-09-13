@@ -1,4 +1,13 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { useI18n } from '@/i18n/context'
+
+function ProjectFeatureFallback({ label, retry }: { label?: string; retry: () => void }) {
+  const { t } = useI18n()
+  return <div role="alert" data-testid="project-feature-error" className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+    {t('projectShell.unavailable', { feature: label || t('projectShell.information') })}
+    <button type="button" className="ml-2 underline" onClick={retry}>{t('projectShell.retry')}</button>
+  </div>
+}
 
 interface ProjectFeatureBoundaryProps {
   children: ReactNode
@@ -24,9 +33,6 @@ export class ProjectFeatureBoundary extends Component<ProjectFeatureBoundaryProp
   render() {
     if (!this.state.failed) return this.props.children
     if (this.props.fallback !== undefined) return this.props.fallback
-    return <div role="alert" data-testid="project-feature-error" className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-      {this.props.label || '项目信息'}暂时不可用。
-      <button type="button" className="ml-2 underline" onClick={() => this.setState({ failed: false })}>重试</button>
-    </div>
+    return <ProjectFeatureFallback label={this.props.label} retry={() => this.setState({ failed: false })} />
   }
 }

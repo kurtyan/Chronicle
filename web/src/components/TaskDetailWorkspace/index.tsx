@@ -623,7 +623,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
             </div>
           </div>
         </div>
-        {activeTaskId && !isDraftActive && <div className="px-[30px] pb-2"><ProjectFeatureBoundary resetKey={activeTaskId} label="项目关联"><ProjectRelations key={activeTaskId} sourceType="task" sourceId={activeTaskId} task={selectedTask} /></ProjectFeatureBoundary></div>}
+        {activeTaskId && !isDraftActive && <div className="px-[30px] pb-2"><ProjectFeatureBoundary resetKey={activeTaskId} label={t('projectShell.references')}><ProjectRelations key={activeTaskId} sourceType="task" sourceId={activeTaskId} task={selectedTask} /></ProjectFeatureBoundary></div>}
         {activeTaskId && !isDraftActive && (
           <div className="px-[30px] pb-2">
             <TaskSummaryWidget context={activeSummaryContext} updating={activeSummaryUpdating} />

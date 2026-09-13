@@ -149,7 +149,7 @@ function rewriteAttachmentPaths(databasePath: string, sourceAttachmentDir: strin
         const update = database.prepare('UPDATE project_insight_drafts SET request_key=? WHERE id=?')
         for (const row of database.prepare('SELECT id,evidence_json,model,prompt_version,budget_json FROM project_insight_drafts').all() as any[]) {
           const evidence = JSON.parse(row.evidence_json)
-          update.run(evidenceFingerprint({ scope: evidence.scope, fingerprint: evidence.fingerprint, model: row.model, budget: JSON.parse(row.budget_json), promptVersion: row.prompt_version }), row.id)
+          update.run(evidenceFingerprint({ scope: evidence.scope, fingerprint: evidence.fingerprint, model: row.model, budget: JSON.parse(row.budget_json), promptVersion: row.prompt_version, ...(evidence.analysis?.locale ? { locale: evidence.analysis.locale } : {}) }), row.id)
         }
       }
     })()

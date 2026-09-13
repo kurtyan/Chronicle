@@ -1,3 +1,5 @@
+import { ProjectReviewContext } from '@/components/Projects/ProjectReviewContext'
+import { readProjectNavigation } from '@/lib/projectNavigation'
 import { NotesTagSearch } from '@/components/Notes/NotesTagSearch'
 import { notesSearchParams, parseNotesSearchInput, readNotesSearch, rememberNotesSearch, type NotesSearchValue } from '@/components/Notes/notesSearchState'
 import { useNotesSearchResults } from '@/components/Notes/useNotesSearchResults'
@@ -16,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { formatTaskTime } from '@/lib/time'
 import { consumeSearchJumpIntent } from '@/lib/searchJump'
 import type { Note } from '@/types'
+import { useI18n } from '@/i18n/context'
 
 const NOTES_LIST_PERCENT_KEY = 'chronicle_notes_list_pct'
 const NOTES_LIST_MIN_WIDTH = 180
@@ -35,6 +38,7 @@ function stripLeadingEmptyParagraphs(html: string): string {
 }
 
 export function NotesPage() {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const location = useLocation()
   const {
@@ -48,12 +52,19 @@ export function NotesPage() {
   const query = parseNotesSearchInput(notesSearch.input).text
   const { notes, loading, error: searchError, loadNotes } = useNotesSearchResults(notesSearch.filters, query, includeArchived, storedNotes)
   const urlNoteId = new URLSearchParams(location.search).get('id')
+  const reviewId = new URLSearchParams(location.search).get('projectReview')
+  const projectNavigation = useMemo(() => readProjectNavigation(location.state, location.search), [location.state, location.search])
   const updateNotesSearch = useCallback((value: NotesSearchValue) => {
     setNotesSearch(value)
     rememberNotesSearch(value)
     navigate(`/notes?${notesSearchParams(location.search, value)}`, { replace: true })
   }, [location.search, navigate])
-  const noteUrl = useCallback((id: string) => `/notes?${notesSearchParams(location.search, notesSearch, id)}`, [location.search, notesSearch])
+  const noteUrl = useCallback((id: string) => {
+    const params = new URLSearchParams(notesSearchParams(location.search, notesSearch, id))
+    // A review belongs to one Note. Selecting another Note must not carry its confirmation action along.
+    if (id !== urlNoteId) params.delete('projectReview')
+    return `/notes?${params}`
+  }, [location.search, notesSearch, urlNoteId])
   useEffect(() => { setNotesSearch(readNotesSearch(location.search)) }, [location.search])
   const [draftTitle, setDraftTitle] = useState('')
   const [draftContent, setDraftContent] = useState('')
@@ -412,6 +423,34 @@ export function NotesPage() {
     flushSaveRef.current = flushSave
   })
 
+  const isCurrentProjectNote = (note: Note) => note.id === draftNoteIdRef.current
+    && note.id === activeNoteIdRef.current && !draftDirtyRef.current
+    && note.revision === draftServerRevisionRef.current
+
+  async function saveProjectNote(): Promise<Note> {
+    const noteId = draftNoteIdRef.current
+    if (!noteId || noteId !== activeNoteIdRef.current) throw new Error(t('project.reviewWorkflow.switchedNote'))
+    // Use the existing serialized Note drain, including edits typed during an in-flight save.
+    for (;;) {
+      await flushSaveRef.current()
+      if (saveInFlightRef.current) await saveInFlightRef.current
+      if (draftNoteIdRef.current !== noteId || activeNoteIdRef.current !== noteId) throw new Error(t('project.reviewWorkflow.switchedNote'))
+      // The dirty flag belongs to this draft and is retained after every failed
+      // save. The store's global conflict flag may refer to a previously opened
+      // Note, or remain set after the user explicitly reloads the server version.
+      if (draftDirtyRef.current) throw new Error(t('project.reviewWorkflow.saveFailed'))
+      const localVersion = localRevisionRef.current
+      const saved = await api.getNoteById(noteId)
+      if (draftNoteIdRef.current !== noteId || activeNoteIdRef.current !== noteId) throw new Error(t('project.reviewWorkflow.switchedNote'))
+      if (localRevisionRef.current !== localVersion || draftDirtyRef.current) continue
+      if (!saved || saved.revision !== draftServerRevisionRef.current) {
+        setSaveConflict({ noteId, draft: { ...latestDraftRef.current } })
+        throw new Error(t('project.reviewWorkflow.changedElsewhere'))
+      }
+      return saved
+    }
+  }
+
   const handleCreateNote = useCallback(async () => {
     const run = noteSwitchRef.current.then(async () => {
       await flushSaveRef.current()
@@ -468,12 +507,12 @@ export function NotesPage() {
     if (!fresh) return
     localStorage.removeItem(`chronicle:note_draft:${conflict.noteId}`)
     draftNoteIdRef.current = null
-    navigate(`/notes?id=${encodeURIComponent(conflict.noteId)}`)
+    navigate(reviewId ? noteUrl(conflict.noteId) : `/notes?id=${encodeURIComponent(conflict.noteId)}`)
     await setActiveNote(conflict.noteId)
     const active = useNoteStore.getState().activeNote
     if (active?.id === conflict.noteId) applyNoteDraft(active)
     setSaveConflict(null)
-  }, [applyNoteDraft, navigate, saveConflict, setActiveNote])
+  }, [applyNoteDraft, navigate, noteUrl, reviewId, saveConflict, setActiveNote])
 
   const handleKeepConflictCopy = useCallback(async () => {
     const conflict = saveConflict
@@ -596,10 +635,10 @@ export function NotesPage() {
               <FilePlus2 className="h-4 w-4" />
             </button>
           </div>
-          <ProjectFeatureBoundary label="标签筛选" fallback={<div className="space-y-2">
-            <p role="alert" className="text-xs text-muted-foreground">标签建议暂时不可用，可以继续搜索笔记文字。</p>
-            <input aria-label="搜索 Notes 或输入 # 标签" className="w-full rounded border border-border bg-background p-2 text-sm" placeholder="搜索笔记文字" value={notesSearch.input} onChange={event => updateNotesSearch({ ...notesSearch, input: event.target.value })} />
-            {notesSearch.filters.length > 0 && <button type="button" className="text-xs underline" onClick={() => updateNotesSearch({ ...notesSearch, filters: [] })}>清除标签筛选</button>}
+          <ProjectFeatureBoundary label={t('projectShell.tagFilters')} fallback={<div className="space-y-2">
+            <p role="alert" className="text-xs text-muted-foreground">{t('projectShell.tagFiltersUnavailable')}</p>
+            <input aria-label={t('projectShell.notesSearch')} className="w-full rounded border border-border bg-background p-2 text-sm" placeholder={t('projectShell.searchNoteText')} value={notesSearch.input} onChange={event => updateNotesSearch({ ...notesSearch, input: event.target.value })} />
+            {notesSearch.filters.length > 0 && <button type="button" className="text-xs underline" onClick={() => updateNotesSearch({ ...notesSearch, filters: [] })}>{t('projectShell.clearTagFilters')}</button>}
           </div>}><NotesTagSearch value={notesSearch} onChange={updateNotesSearch} /></ProjectFeatureBoundary>
           <label className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
             <input
@@ -702,6 +741,7 @@ export function NotesPage() {
                 </button>
               </div>
             </div>
+            {(reviewId || projectNavigation) && activeNote.id === urlNoteId && <ProjectFeatureBoundary resetKey={`${activeNote.id}:${reviewId || ''}`} label={t('project.reviewWorkflow.context')}><ProjectReviewContext key={`${activeNote.id}:${reviewId || ''}`} noteId={activeNote.id} reviewId={reviewId} navigation={projectNavigation} onSave={saveProjectNote} isCurrent={isCurrentProjectNote} dirty={draftDirtyRef.current} currentRevision={draftServerRevisionRef.current} /></ProjectFeatureBoundary>}
             <div className="flex shrink-0 items-start gap-3 border-b border-border bg-background px-[30px] py-2">
 	              <input
 	                ref={titleInputRef}
@@ -716,7 +756,7 @@ export function NotesPage() {
                 placeholder="Untitled note"
               />
             </div>
-            <div className="px-[30px] pb-2"><ProjectFeatureBoundary resetKey={activeNote.id} label="项目关联"><ProjectRelations key={activeNote.id} sourceType="note" sourceId={activeNote.id} /></ProjectFeatureBoundary></div>
+            <div className="px-[30px] pb-2"><ProjectFeatureBoundary resetKey={activeNote.id} label={t('projectShell.references')}><ProjectRelations key={activeNote.id} sourceType="note" sourceId={activeNote.id} /></ProjectFeatureBoundary></div>
             {linkedTasks.length > 0 && (
               <div className="px-[30px] pb-2">
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/80 px-3 py-2 text-xs">

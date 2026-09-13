@@ -1,4 +1,12 @@
 import type { Area, Milestone, ProjectReferencesResult, ProjectSourceType } from '../../../shared/projectTypes'
+import { translateCurrent } from '../i18n/runtime'
+
+class ProjectResponseError extends Error {
+  constructor(readonly translationKey: string) {
+    super(translateCurrent(translationKey))
+    this.name = 'ProjectResponseError'
+  }
+}
 
 type JsonRecord = Record<string, unknown>
 const record = (value: unknown): value is JsonRecord => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -32,7 +40,7 @@ function isMilestone(value: unknown): value is Milestone {
 export function validateProjectCatalog(value: unknown): { areas: Area[]; milestones: Milestone[] } {
   if (!record(value) || !Array.isArray(value.areas) || !value.areas.every(isArea)
     || !Array.isArray(value.milestones) || !value.milestones.every(isMilestone)) {
-    throw new Error('方向与里程碑数据格式异常，请重试。')
+    throw new ProjectResponseError('projectShell.invalidCatalog')
   }
   // Return only known fields; response metadata must never replace store actions.
   return { areas: value.areas, milestones: value.milestones }
@@ -48,12 +56,13 @@ export function validateProjectReferences(value: unknown, sourceType: ProjectSou
       && (ref.origin === 'manual' || ref.origin === 'mention')
       && nullableText(ref.areaId) && nullableText(ref.areaName)
       && typeof ref.archived === 'boolean' && finite(ref.createdAt))) {
-    throw new Error('关联项目信息格式异常，请重新加载后重试。')
+    throw new ProjectResponseError('projectShell.invalidReferences')
   }
   return { sourceType, sourceId, projectRevision: value.projectRevision as number, references: value.references as ProjectReferencesResult['references'] }
 }
 
 export function projectErrorMessage(error: unknown): string {
+  if (error instanceof ProjectResponseError) return translateCurrent(error.translationKey)
   if (record(error)) {
     const response = record(error.response) ? error.response : null
     const data = response && record(response.data) ? response.data : null
@@ -61,5 +70,5 @@ export function projectErrorMessage(error: unknown): string {
       if (text(candidate) && candidate.trim()) return candidate
     }
   }
-  return '操作未成功，请重试。'
+  return translateCurrent('projectShell.operationFailed')
 }

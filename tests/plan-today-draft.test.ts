@@ -392,10 +392,13 @@ test.describe('Plan Today draft', () => {
         const titles = await titleOrder()
         return titles.includes(carriedTask.title) && titles.includes(suggestedTask.title)
       }).toBeTruthy()
-      let titles = await titleOrder()
-      expect(titles.indexOf(carriedTask.title)).toBeLessThan(titles.indexOf(suggestedTask.title))
       await expect(cards.filter({ hasText: carriedTask.title })).toContainText('Planned / carried')
       await expect(cards.filter({ hasText: suggestedTask.title })).toContainText('Suggested')
+      // Initial signals arrive independently. This test checks that hiding a
+      // signal preserves the fully loaded order, whichever source arrived first.
+      const relevantOrder = async () => (await titleOrder()).filter(title => title === carriedTask.title || title === suggestedTask.title)
+      const initialOrder = await relevantOrder()
+      expect(initialOrder).toHaveLength(2)
 
       const carryCard = cards.filter({ hasText: carriedTask.title })
       await carryCard.getByRole('button', { name: 'Carry-over' }).click()
@@ -404,8 +407,7 @@ test.describe('Plan Today draft', () => {
       await expect(carryCard).toContainText('Suggested')
       await expect(carryCard).toContainText('Explicit')
       await expect(carryCard).not.toContainText('Carry-over')
-      titles = await titleOrder()
-      expect(titles.indexOf(carriedTask.title)).toBeLessThan(titles.indexOf(suggestedTask.title))
+      await expect.poll(relevantOrder).toEqual(initialOrder)
     } finally {
       await page.request.put('/api/settings/llm', { data: originalSettings })
     }

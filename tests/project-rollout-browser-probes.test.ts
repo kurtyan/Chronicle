@@ -141,7 +141,7 @@ test('periodic project statistics failure leaves original Report work time ticki
   })
   await page.goto('/report?lang=zh-CN')
   await expect.poll(() => successful).toBeGreaterThan(0)
-  await expect(page.getByText(/同本页期间 · 合计/)).toBeVisible()
+  await expect(page.getByText(/本期合计/)).toBeVisible()
   const work = page.getByText('工作时长', { exact: true }).locator('..').getByRole('button')
   const duty = page.getByText('在岗时长', { exact: true }).locator('..').getByRole('button')
   await expect(work).toBeVisible()

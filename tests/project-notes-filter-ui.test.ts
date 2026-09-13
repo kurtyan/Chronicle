@@ -1,5 +1,7 @@
 import { test, expect } from './helpers/projectFixtures'
 
+test.use({ locale: 'zh-CN' })
+
 const unique = (label: string) => `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 
 async function fixture(request: any) {
@@ -32,7 +34,7 @@ test('Notes typed project tags combine with AND and full text, without duplicate
   await expect(page.getByTestId('notes-tag-options').getByRole('option')).toHaveCount(1)
   await input.press('Enter')
   await expect(page.getByTestId('notes-filter-token')).toHaveCount(2)
-  await expect(page.getByText('同时匹配全部 2 个标签（AND）', { exact: false })).toBeVisible()
+  await expect(page.getByText('匹配全部 2 个标签', { exact: true })).toBeVisible()
   await expect(page.locator(`[data-note-id="${data.both.id}"]`)).toHaveCount(1)
   await expect(page.locator(`[data-note-id="${data.direct.id}"]`)).toHaveCount(0)
   await input.fill('判断证据')
@@ -65,7 +67,7 @@ test('Notes tag chooser respects Chinese composition, keyboard choice, Escape an
   await input.press('Enter')
   await expect(page.getByTestId('notes-filter-token')).toHaveCount(1)
   await input.fill('判断证据 #不存在的标签')
-  await expect(page.getByText('没有匹配的方向或里程碑；修改 # 后的文字，或删除 # 恢复全文搜索。', { exact: true })).toBeVisible()
+  await expect(page.getByText('没有匹配的方向或里程碑', { exact: true })).toBeVisible()
   await input.press('Enter')
   await expect(input).toHaveValue('判断证据 #不存在的标签')
   await expect(page.getByTestId('notes-filter-token')).toHaveCount(1)

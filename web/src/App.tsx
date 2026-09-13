@@ -30,14 +30,26 @@ import { setSearchJumpIntent } from '@/lib/searchJump'
 import { highlightText } from '@/lib/highlight'
 import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 import { useSearchPersistStore, isSearchPersistValid } from '@/stores/searchPersistStore'
+import { navigateWithGuard } from '@/lib/navigationGuard'
 
 const ProjectsPage = lazy(() => import('@/pages/ProjectsPage').then(module => ({ default: module.ProjectsPage })))
 const AreaDetailPage = lazy(() => import('@/pages/ProjectDetailPage').then(module => ({ default: module.AreaDetailPage })))
 const MilestoneDetailPage = lazy(() => import('@/pages/ProjectDetailPage').then(module => ({ default: module.MilestoneDetailPage })))
 
+// The sidebar order is the source of truth for numbered navigation shortcuts.
+const sidebarNavigation = [
+  { id: 'board', path: '/', icon: ListTodo, labelKey: 'sidebar.board' },
+  { id: 'today', path: '/today', icon: Calendar, labelKey: 'sidebar.today' },
+  { id: 'notes', path: '/notes', icon: FileText, labelKey: 'sidebar.notes' },
+  { id: 'report', path: '/report', icon: BarChart3, labelKey: 'sidebar.report' },
+  { id: 'projects', path: '/projects', icon: FolderKanban, labelKey: 'sidebar.projects' },
+  { id: 'settings', path: '/settings', icon: Settings, labelKey: 'sidebar.settings' },
+] as const
+
 function ProjectRoute({ children }: { children: React.ReactNode }) {
   const location = useLocation()
-  return <ProjectFeatureBoundary resetKey={location.pathname} label="方向与里程碑页面"><Suspense fallback={<div className="p-6 text-sm text-muted-foreground">正在加载方向与里程碑…</div>}>{children}</Suspense></ProjectFeatureBoundary>
+  const { t } = useI18n()
+  return <ProjectFeatureBoundary resetKey={location.pathname} label={t('sidebar.projects')}><Suspense fallback={<div className="p-6 text-sm text-muted-foreground">{t('projectShell.loading')}</div>}>{children}</Suspense></ProjectFeatureBoundary>
 }
 
 function safeProjectSearchResults(value: unknown, kind: 'area' | 'milestone'): ProjectSearchResult[] {
@@ -200,14 +212,7 @@ function Sidebar() {
   const runningCount = tasks.filter((task) => task.status === 'running').length
   const hasErrors = tasks.some((task) => task.status === 'error')
 
-  const navItems = [
-    { path: '/', icon: <ListTodo className="w-5 h-5" />, label: t('sidebar.board') },
-    { path: '/today', icon: <Calendar className="w-5 h-5" />, label: t('sidebar.today') },
-    { path: '/notes', icon: <FileText className="w-5 h-5" />, label: t('sidebar.notes') },
-    { path: '/report', icon: <BarChart3 className="w-5 h-5" />, label: t('sidebar.report') },
-    { path: '/projects', icon: <FolderKanban className="w-5 h-5" />, label: '方向与里程碑' },
-    { path: '/settings', icon: <Settings className="w-5 h-5" />, label: t('sidebar.settings') },
-  ]
+  const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
   return (
     <aside className="w-16 border-r bg-card h-screen flex flex-col items-center py-4 gap-1 flex-shrink-0">
@@ -224,7 +229,7 @@ function Sidebar() {
         </svg>
       </div>
       <nav className="flex flex-col gap-3">
-        {navItems.map((item) => (
+        {sidebarNavigation.map((item, index) => (
           <button
             key={item.path}
             className={`w-8 h-8 rounded-md flex items-center justify-center transition ${
@@ -232,10 +237,13 @@ function Sidebar() {
                 ? 'bg-primary text-primary-foreground'
                 : 'hover:bg-muted text-muted-foreground'
             }`}
-            onClick={() => navigate(item.path)}
-            title={item.label}
+            onClick={() => { void navigateWithGuard(() => navigate(item.path)) }}
+            title={`${t(item.labelKey)} (${isMac ? '⌘' : 'Ctrl+'}${index + 1})`}
+            aria-label={t(item.labelKey)}
+            aria-keyshortcuts={`${isMac ? 'Meta' : 'Control'}+${index + 1}`}
+            aria-current={location.pathname === item.path || (item.path === '/projects' && location.pathname.startsWith('/projects/')) ? 'page' : undefined}
           >
-            {item.icon}
+            <item.icon className="w-5 h-5" />
           </button>
         ))}
       </nav>
@@ -785,6 +793,7 @@ function plainText(html: string): string {
 }
 
 function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [result, setResult] = useState<GlobalSearchResponse | null>(null)
@@ -1000,7 +1009,7 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
 
   function renderProjectResult(item: ProjectSearchResult, flatIdx: number) {
     const isSelected = flatIdx === selectedIndex
-    return <button key={item.id} data-search-idx={flatIdx} type="button" tabIndex={isSelected ? 0 : -1} className={`w-full rounded-md border px-3 py-2 text-left transition ${isSelected ? 'border-primary/50 bg-primary/10 ring-1 ring-primary/30' : 'border-border bg-background hover:bg-muted'}`} onClick={() => { persistSearchState(); onOpenChange(false); navigate(entityPath(item.kind, item.id)) }} onKeyDown={event => handleResultKeyDown(event, flatIdx)}><div className="text-sm font-medium">{highlightText(item.title, result?.tokens || [])}</div><div className="text-xs text-muted-foreground">{item.kind === 'area' ? '方向' : `${item.areaTitle || ''} › 里程碑`}{item.archived ? ' · 已归档' : ''}</div>{item.snippet && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{highlightText(item.snippet, result?.tokens || [])}</p>}</button>
+    return <button key={item.id} data-search-idx={flatIdx} type="button" tabIndex={isSelected ? 0 : -1} className={`w-full rounded-md border px-3 py-2 text-left transition ${isSelected ? 'border-primary/50 bg-primary/10 ring-1 ring-primary/30' : 'border-border bg-background hover:bg-muted'}`} onClick={() => { persistSearchState(); onOpenChange(false); navigate(entityPath(item.kind, item.id)) }} onKeyDown={event => handleResultKeyDown(event, flatIdx)}><div className="text-sm font-medium">{highlightText(item.title, result?.tokens || [])}</div><div className="text-xs text-muted-foreground">{item.kind === 'area' ? t('projectShell.area') : `${item.areaTitle ? `${item.areaTitle} › ` : ''}${t('projectShell.milestone')}`}{item.archived ? ` · ${t('projectShell.archived')}` : ''}</div>{item.snippet && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{highlightText(item.snippet, result?.tokens || [])}</p>}</button>
   }
   const sections = result?.results
   const counts = result?.counts
@@ -1018,7 +1027,7 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
       >
         <DialogHeader>
           <DialogTitle className="text-base">Search</DialogTitle>
-          <DialogDescription>Tasks、日志、Notes、方向与里程碑</DialogDescription>
+          <DialogDescription>{t('projectShell.searchDescription')}</DialogDescription>
         </DialogHeader>
         <DialogBody className="p-4">
           <div className="mb-4 flex items-center gap-2 rounded-md border border-border px-3">
@@ -1071,8 +1080,8 @@ function GlobalSearchDialog({ open, onOpenChange }: { open: boolean; onOpenChang
                   </div>
                 </section>
               )}
-              {projectSections.areas.length > 0 && <section><div className="mb-2 text-xs font-semibold text-muted-foreground">方向（{projectSections.areas.length}）</div><div className="space-y-2">{projectSections.areas.map((item, i) => renderProjectResult(item, sections.tasks.length + sections.taskEntries.length + sections.notes.length + i))}</div></section>}
-              {projectSections.milestones.length > 0 && <section><div className="mb-2 text-xs font-semibold text-muted-foreground">里程碑（{projectSections.milestones.length}）</div><div className="space-y-2">{projectSections.milestones.map((item, i) => renderProjectResult(item, sections.tasks.length + sections.taskEntries.length + sections.notes.length + projectSections.areas.length + i))}</div></section>}
+              {projectSections.areas.length > 0 && <section><div className="mb-2 text-xs font-semibold text-muted-foreground">{t('projectShell.areas')} ({projectSections.areas.length})</div><div className="space-y-2">{projectSections.areas.map((item, i) => renderProjectResult(item, sections.tasks.length + sections.taskEntries.length + sections.notes.length + i))}</div></section>}
+              {projectSections.milestones.length > 0 && <section><div className="mb-2 text-xs font-semibold text-muted-foreground">{t('projectShell.milestones')} ({projectSections.milestones.length})</div><div className="space-y-2">{projectSections.milestones.map((item, i) => renderProjectResult(item, sections.tasks.length + sections.taskEntries.length + sections.notes.length + projectSections.areas.length + i))}</div></section>}
             </div>
           )}
         </DialogBody>
@@ -1224,6 +1233,7 @@ function useAutoAfk() {
 }
 
 function Layout() {
+  const { t } = useI18n()
   useSystemBrowserLinks()
   useTauriZoom()
   const afkDialog = useAutoAfk()
@@ -1259,6 +1269,18 @@ function Layout() {
   useEffect(() => {
     globalSearchOpenRef.current = globalSearchOpen
   }, [globalSearchOpen])
+
+  // Re-register labels when language changes; routes use the same ordered items as the sidebar.
+  useEffect(() => {
+    const unregisters = sidebarNavigation.map((item, index) => registerShortcut({
+      id: `nav-${item.id}`,
+      combo: `mod+${index + 1}`,
+      label: t('projectShell.goTo', { page: t(item.labelKey) }),
+      scope: 'app',
+      handler: () => { void navigateWithGuard(() => navigateRef.current(item.path)) },
+    }))
+    return () => unregisters.forEach(unregister => unregister())
+  }, [t])
 
   // Central keyboard shortcut dispatcher
   // Registered once on mount — uses refs for navigate and setSearchMode
@@ -1312,42 +1334,6 @@ function Layout() {
       handler: () => setGlobalSearchOpenRef.current(true),
     }))
 
-    // Cmd+1/2/3/4/5: Sidebar navigation
-    unregisters.push(registerShortcut({
-      id: 'nav-board',
-      combo: 'mod+1',
-      label: 'Go to Board',
-      scope: 'app',
-      handler: () => navigateRef.current('/'),
-    }))
-    unregisters.push(registerShortcut({
-      id: 'nav-today',
-      combo: 'mod+2',
-      label: 'Go to Today',
-      scope: 'app',
-      handler: () => navigateRef.current('/today'),
-    }))
-    unregisters.push(registerShortcut({
-      id: 'nav-notes',
-      combo: 'mod+3',
-      label: 'Go to Notes',
-      scope: 'app',
-      handler: () => navigateRef.current('/notes'),
-    }))
-    unregisters.push(registerShortcut({
-      id: 'nav-report',
-      combo: 'mod+4',
-      label: 'Go to Report',
-      scope: 'app',
-      handler: () => navigateRef.current('/report'),
-    }))
-    unregisters.push(registerShortcut({
-      id: 'nav-settings',
-      combo: 'mod+5',
-      label: 'Go to Settings',
-      scope: 'app',
-      handler: () => navigateRef.current('/settings'),
-    }))
     unregisters.push(registerShortcut({
       id: 'new-note-global',
       combo: 'mod+shift+n',

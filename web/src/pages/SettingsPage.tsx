@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useI18n } from '../i18n/context'
+import { systemLocale } from '../i18n/locale'
 import DOMPurify from 'dompurify'
 import { withCodeFirstListMarkers } from '@/lib/proseHtml'
 import {
@@ -1533,6 +1534,7 @@ export function SettingsPage() {
     setUiLanguage(lang)
     if (lang === 'zh-CN' || lang === 'zh') setLocale('zh-CN')
     else if (lang === 'en') setLocale('en')
+    else setLocale(systemLocale())
     if (isTauriEnv) {
       try {
         await (window as any).__TAURI__.core.invoke('set_ui_language', { language: lang })

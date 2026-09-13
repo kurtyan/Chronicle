@@ -1,5 +1,7 @@
 import type { APIRequestContext } from '@playwright/test'
 import { test, expect, inProcess } from './helpers/projectFixtures'
+
+test.use({ locale: 'zh-CN' })
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
@@ -157,16 +159,24 @@ test('MCP discovers and uses the same Area and primary milestone model', async (
 test('project page creates an Area and opens a stage milestone with navigable references', async ({ page, request }) => {
   const { milestone, task } = await setup(request)
   await page.goto('/projects')
-  await expect(page.getByRole('heading', { name: '项目总览' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '方向与里程碑' })).toBeVisible()
   await page.getByRole('button', { name: '新建方向', exact: true }).click()
   const dialog = page.getByRole('dialog')
   const name = unique('界面创建方向')
   await dialog.getByLabel('名称', { exact: true }).fill(name)
+  const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/areas')
   await dialog.getByRole('button', { name: '保存', exact: true }).click()
-  await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
+  const createdArea = await (await created).json()
+  const panel = page.getByTestId('project-context-panel')
+  await expect(panel.getByRole('heading', { name, exact: true })).toBeVisible()
+  expect(new URL(page.url()).pathname).toBe('/projects')
+  expect(new URL(page.url()).searchParams.get('selected')).toBe(`area:${createdArea.id}`)
+  expect((await get(request, `/api/areas/${createdArea.id}`)).name).toBe(name)
+  await panel.getByRole('button', { name: '关闭详情', exact: true }).click()
+  await expect(panel).toHaveCount(0)
   await page.goto(`/projects/milestones/${milestone.id}`)
   await expect(page.getByRole('heading', { name: milestone.name, exact: true })).toBeVisible()
-  await expect(page.getByText(task.title, { exact: true })).toBeVisible()
+  await expect(page.getByTestId('project-object-tasks').getByText(task.title, { exact: true })).toBeVisible()
 })
 
 test('invalid project requests fail without mutations', async ({ request }) => {

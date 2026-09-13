@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test'
 import { projectErrorMessage, validateProjectCatalog, validateProjectReferences } from '../web/src/services/projectResponseValidation'
 import type { Area, Milestone, ProjectReferencesResult } from '../shared/projectTypes'
+import { setRuntimeLocale } from '../web/src/i18n/runtime'
+
+test.beforeEach(() => setRuntimeLocale('zh-CN'))
+test.afterEach(() => setRuntimeLocale('en'))
 
 const area: Area = {
   id: 'A-test', name: '方向', description: '', focus: '', status: 'active',

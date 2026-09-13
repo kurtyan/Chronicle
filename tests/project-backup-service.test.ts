@@ -9,7 +9,7 @@ import { createTask, createTaskEntry, getTaskEntries } from '../server/src/servi
 import { createNote, getNoteById, updateNote } from '../server/src/services/noteService'
 import { createProjectReview, confirmProjectReview, getProjectReview } from '../server/src/services/projectReviewService'
 import { buildReviewEvidence, evidenceFingerprint, isReviewEvidenceStale } from '../server/src/services/reviewEvidenceService'
-import { getProjectInsight } from '../server/src/services/projectInsightService'
+import { acceptProjectInsight, getProjectInsight } from '../server/src/services/projectInsightService'
 
 test.describe.configure({ mode: 'serial' })
 let dir: string
@@ -116,4 +116,37 @@ test('malformed snapshot JSON rejects before live database or attachments are re
   expect(getNoteById(live.id)?.title).toBe('Live data must survive')
   expect(fs.readFileSync(path.join(target, 'preserve.txt'), 'utf8')).toBe('keep')
   expect(fs.readdirSync(dir).filter(name => name.startsWith('.import-') || name.startsWith('.attachments-import-'))).toEqual([])
+})
+
+
+test('bundle restore retains generation locale and recomputes distinct English and legacy request keys', async () => {
+  const data = fixture(path.join(dir, 'source-localized'))
+  const row = getDb().prepare("SELECT * FROM project_insight_drafts WHERE id = 'backup-draft'").get() as any
+  const columns = Object.keys(row)
+  getDb().prepare(`INSERT INTO project_insight_drafts(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`).run(...columns.map(column => column === 'id' ? 'legacy-draft' : row[column]))
+  const evidence = { ...data.evidence, analysis: { locale: 'en' as const, batches: [] } }
+  const keyInput = { scope: evidence.scope, fingerprint: evidence.fingerprint, model: row.model, budget: JSON.parse(row.budget_json), promptVersion: row.prompt_version }
+  getDb().prepare("UPDATE project_insight_drafts SET evidence_json = ?, request_key = ? WHERE id = 'backup-draft'").run(JSON.stringify(evidence), evidenceFingerprint({ ...keyInput, locale: 'en' }))
+  const exported = await exportDatabase()
+  closeDb()
+  process.env.CHRONICLE_DB_PATH = path.join(dir, 'restored-localized.db')
+  process.env.CHRONICLE_ATTACHMENT_DIR = path.join(dir, 'restored-attachments')
+  initDb()
+  await importDatabase(exported.data)
+  const english = getProjectInsight('backup-draft')!, legacy = getProjectInsight('legacy-draft')!
+  expect(english.locale).toBe('en')
+  expect(english.evidence.analysis?.locale).toBe('en')
+  expect(legacy.locale).toBe('zh-CN')
+  expect(legacy.evidence.analysis?.locale).toBeUndefined()
+  expect(english.stale).toBe(false)
+  expect(legacy.stale).toBe(false)
+  const restored = getDb().prepare('SELECT id,request_key FROM project_insight_drafts').all() as Array<{ id: string; request_key: string }>
+  const expected = { ...keyInput, fingerprint: english.evidence.fingerprint }
+  expect(restored.find(draft => draft.id === english.id)?.request_key).toBe(evidenceFingerprint({ ...expected, locale: 'en' }))
+  expect(restored.find(draft => draft.id === legacy.id)?.request_key).toBe(evidenceFingerprint(expected))
+  expect(new Set(restored.map(draft => draft.request_key)).size).toBe(2)
+  const adopted = acceptProjectInsight(english.id, {})!
+  expect(adopted.note.tags).toEqual(['Review', 'AI draft'])
+  expect(adopted.note.contentHtml).toContain('AI review draft')
+  expect(adopted.note.contentHtml).not.toMatch(/[\u4e00-\u9fff]/)
 })
