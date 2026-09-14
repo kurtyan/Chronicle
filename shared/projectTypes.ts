@@ -8,6 +8,7 @@ export type ProjectReferenceRole = 'related' | 'outcome' | 'review' | 'growth'
 
 export interface Area {
   id: string; name: string; description: string; focus: string; status: AreaStatus
+  sortOrder: number
   latestProgress: string; nextStep: string; summaryUpdatedAt: number | null
   summarySource: 'manual' | 'insight' | null
   summarySourceNoteId: string | null; summarySourceInsightId: string | null; summarySourceNoteRevision: number | null
@@ -22,6 +23,7 @@ export interface Milestone {
 }
 export interface CreateAreaInput { name: string; description?: string; focus?: string; status?: AreaStatus; latestProgress?: string; nextStep?: string }
 export interface UpdateAreaInput extends Partial<CreateAreaInput> { expectedRevision: number; archived?: boolean }
+export interface ReorderAreasInput { areaIds: string[] }
 /** User-reviewed summary text from an already accepted Area insight; never an automatic overwrite. */
 export interface ApplyAreaInsightSummaryInput {
   insightDraftId: string; expectedRevision: number; expectedNoteRevision: number

@@ -882,7 +882,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     await page.keyboard.press('Enter')
     await page.keyboard.type(progress)
 
-    await page.getByLabel('Plan Today with LLM task context').click()
+    await page.getByLabel('Plan Today from task context').click()
     await expect(page.getByRole('dialog').getByRole('heading', { name: 'Plan Today' })).toBeVisible()
     await expect.poll(async () => {
       const res = await page.request.get(`/api/day-scripts/${date}`)
@@ -1175,6 +1175,7 @@ test.describe('Focus rich editor and meeting task mentions', () => {
     const previousDateButton = page.locator('section').first().locator('button').first()
     for (let i = 0; i < 8; i += 1) {
       await previousDateButton.click()
+      await expect.poll(() => new URL(page.url()).searchParams.get('date')).toBe(uniqueScriptDate(89 - i))
       await expect(page.locator('.day-script-editor.ProseMirror')).toBeVisible()
     }
 

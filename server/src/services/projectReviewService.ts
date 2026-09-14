@@ -99,7 +99,7 @@ export function createProjectReview(input: CreateProjectReviewInput): ProjectRev
   validateCompletionEvent(scope, completionEventId)
   if (input.insightDraftId) {
     const draft = getDb().prepare('SELECT * FROM project_insight_drafts WHERE id = ?').get(input.insightDraftId) as any
-    if (!draft || draft.status !== 'success' || draft.target_type !== scope.targetType || draft.target_id !== scope.targetId) throw new Error('Insight draft does not match review target')
+    if (!draft || draft.status !== 'success' || draft.purpose !== 'periodic_review' || draft.target_type !== scope.targetType || draft.target_id !== scope.targetId) throw new Error('Periodic Review draft does not match review target')
     if (input.periodStart === undefined) scope.periodStart = draft.period_start
     if (input.periodEnd === undefined) scope.periodEnd = draft.period_end
     if (scope.periodStart !== draft.period_start || scope.periodEnd !== draft.period_end) throw new Error('Insight evidence period does not match review period')

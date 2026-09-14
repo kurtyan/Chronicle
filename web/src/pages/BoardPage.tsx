@@ -54,6 +54,7 @@ export function BoardPage() {
   const [assignmentTasks, setAssignmentTasks] = useState<ProjectTaskSummary[]>([])
   const bulkTriggerRef = useRef<HTMLButtonElement>(null)
   const projectMilestones = useProjectStore(s => s.milestones)
+  const projectAreas = useProjectStore(s => s.areas)
   const linkedProjectTaskIds = useProjectLinkedIds(projectFilter, 'task')
   useEffect(() => { setProjectFilter(new URLSearchParams(location.search).get('projectFilter') || '') }, [location.search])
 
@@ -1220,7 +1221,7 @@ export function BoardPage() {
                   <div key={task.id} className="group relative">
                     {bulkSelecting ? <button type="button" data-bulk-task={task.id} role="checkbox" aria-checked={bulkIds.includes(task.id)} aria-label={t('project.bulk.selectTask', { name: task.title })} className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 ${bulkIds.includes(task.id) ? 'border-primary/30 bg-primary/5' : 'border-border bg-card hover:bg-muted/50'}`} onClick={() => setBulkIds(ids => ids.includes(task.id) ? ids.filter(id => id !== task.id) : [...ids, task.id])}>
                       <span aria-hidden className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${bulkIds.includes(task.id) ? 'border-primary bg-primary text-primary-foreground' : 'border-muted-foreground/40'}`}>{bulkIds.includes(task.id) && <Check className="h-3 w-3" />}</span>
-                      <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{projectMilestones.find(milestone => milestone.id === task.primaryMilestoneId)?.name || t('project.relations.unassigned')}</span></span>
+                      <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{task.title}</span><span className="mt-0.5 block truncate text-xs text-muted-foreground">{(() => { const milestone = projectMilestones.find(item => item.id === task.primaryMilestoneId); const area = milestone ? projectAreas.find(item => item.id === milestone.areaId) : null; return milestone ? `${area ? `${area.name} / ` : ''}${milestone.name}` : t('project.relations.unassigned') })()}</span></span>
                     </button> : <TodoItem
                       task={task}
                       isActive={task.id === activeTaskId}

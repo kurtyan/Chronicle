@@ -28,9 +28,13 @@ export interface ChronicleConfig {
     meetingExtractionMaxTokens: number
     taskSummaryMaxTokens: number
     dailySummaryMaxTokens: number
+    areaProgressMaxTokens: number
+    projectInsightMaxTokens: number
     meetingExtractionPrompt: string
     taskSummaryPrompt: string
     dailySummaryPrompt: string
+    areaProgressPrompt: string
+    projectInsightPrompt: string
   }
 }
 
@@ -61,9 +65,13 @@ const defaultConfig: ChronicleConfig = {
     meetingExtractionMaxTokens: 4000,
     taskSummaryMaxTokens: 1200,
     dailySummaryMaxTokens: 4000,
+    areaProgressMaxTokens: 4000,
+    projectInsightMaxTokens: 4000,
     meetingExtractionPrompt: '',
     taskSummaryPrompt: '',
     dailySummaryPrompt: '',
+    areaProgressPrompt: '',
+    projectInsightPrompt: '',
   },
 }
 
@@ -129,9 +137,13 @@ export function getConfig(): ChronicleConfig {
       meetingExtractionMaxTokens: fileConfig.llm?.meetingExtractionMaxTokens ?? defaultConfig.llm.meetingExtractionMaxTokens,
       taskSummaryMaxTokens: fileConfig.llm?.taskSummaryMaxTokens ?? defaultConfig.llm.taskSummaryMaxTokens,
       dailySummaryMaxTokens: fileConfig.llm?.dailySummaryMaxTokens ?? defaultConfig.llm.dailySummaryMaxTokens,
+      areaProgressMaxTokens: fileConfig.llm?.areaProgressMaxTokens ?? defaultConfig.llm.areaProgressMaxTokens,
+      projectInsightMaxTokens: fileConfig.llm?.projectInsightMaxTokens ?? defaultConfig.llm.projectInsightMaxTokens,
       meetingExtractionPrompt: fileConfig.llm?.meetingExtractionPrompt ?? defaultConfig.llm.meetingExtractionPrompt,
       taskSummaryPrompt: fileConfig.llm?.taskSummaryPrompt ?? defaultConfig.llm.taskSummaryPrompt,
       dailySummaryPrompt: fileConfig.llm?.dailySummaryPrompt ?? defaultConfig.llm.dailySummaryPrompt,
+      areaProgressPrompt: fileConfig.llm?.areaProgressPrompt ?? defaultConfig.llm.areaProgressPrompt,
+      projectInsightPrompt: fileConfig.llm?.projectInsightPrompt ?? defaultConfig.llm.projectInsightPrompt,
     },
   }
 }

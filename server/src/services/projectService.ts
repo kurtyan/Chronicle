@@ -3,7 +3,7 @@ import { getDb } from '../db'
 import { getBacklinks } from './projectReferenceService'
 import { getWorkStatistics } from './workStatisticsService'
 import { broadcastEvent } from './eventBus'
-import type { Area, AreaDetail, ApplyAreaInsightSummaryInput, AssignmentPreview, AssignmentPreviewInput, AssignmentResult, CreateAreaInput, CreateMilestoneInput, Milestone, MilestoneDetail, MilestoneOverview, ProjectEvent, ProjectListOptions, ProjectOverview, UpdateAreaInput, UpdateMilestoneInput, WorkStatisticsRange } from '../../../shared/projectTypes'
+import type { Area, AreaDetail, ApplyAreaInsightSummaryInput, AssignmentPreview, AssignmentPreviewInput, AssignmentResult, CreateAreaInput, CreateMilestoneInput, Milestone, MilestoneDetail, MilestoneOverview, ProjectEvent, ProjectListOptions, ProjectOverview, ReorderAreasInput, UpdateAreaInput, UpdateMilestoneInput, WorkStatisticsRange } from '../../../shared/projectTypes'
 
 export class ProjectError extends Error {
   constructor(message: string, public status = 400, public code = 'INVALID_PROJECT_INPUT') { super(message) }
@@ -33,7 +33,7 @@ function requireMilestone(id: string): Milestone {
   return milestone
 }
 function rowToArea(row: any): Area {
-  return { id: row.id, name: row.name, description: row.description, focus: row.focus, status: row.status,
+  return { id: row.id, name: row.name, description: row.description, focus: row.focus, status: row.status, sortOrder: row.sort_order,
     latestProgress: row.latest_progress, nextStep: row.next_step, summaryUpdatedAt: row.summary_updated_at,
     summarySource: row.summary_source, summarySourceNoteId: row.summary_source_note_id,
     summarySourceInsightId: row.summary_source_insight_id, summarySourceNoteRevision: row.summary_source_note_revision,
@@ -83,7 +83,8 @@ function list(table: 'areas' | 'milestones', options: ProjectListOptions): any[]
   const limit = options.limit === undefined ? 10000 : Math.min(Math.max(Math.floor(options.limit), 1), 10000)
   const offset = Math.max(Math.floor(options.offset ?? 0), 0)
   if (![limit, offset].every(Number.isFinite)) throw new ProjectError('Invalid pagination')
-  return getDb().prepare(`SELECT * FROM ${table} ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY updated_at DESC,id LIMIT ? OFFSET ?`).all(...params, limit, offset)
+  const order = table === 'areas' ? 'sort_order ASC,id' : 'updated_at DESC,id'
+  return getDb().prepare(`SELECT * FROM ${table} ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY ${order} LIMIT ? OFFSET ?`).all(...params, limit, offset)
 }
 export function listAreas(options: ProjectListOptions = {}): Area[] { return list('areas', options).map(rowToArea) }
 export function listMilestones(options: ProjectListOptions = {}): Milestone[] { return list('milestones', options).map(rowToMilestone) }
@@ -97,9 +98,26 @@ export function createArea(input: CreateAreaInput): Area {
   return getDb().transaction(() => {
     const id = `A${randomUUID()}`, now = Date.now()
     const hasSummary = Boolean(latestProgress || nextStep)
-    getDb().prepare('INSERT INTO areas(id,name,description,focus,status,latest_progress,next_step,summary_updated_at,summary_source,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)')
-      .run(id, name, description, focus, status, latestProgress, nextStep, hasSummary ? now : null, hasSummary ? 'manual' : null, now, now)
+    const sortOrder = ((getDb().prepare('SELECT MAX(sort_order) AS value FROM areas').get() as { value: number | null }).value ?? 0) + 1000
+    getDb().prepare('INSERT INTO areas(id,name,description,focus,status,sort_order,latest_progress,next_step,summary_updated_at,summary_source,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(id, name, description, focus, status, sortOrder, latestProgress, nextStep, hasSummary ? now : null, hasSummary ? 'manual' : null, now, now)
     const area = requireArea(id); recordEvent('area', id, 'created', null, area); return area
+  })()
+}
+
+export function reorderAreas(input: ReorderAreasInput): Area[] {
+  if (!Array.isArray(input?.areaIds) || !input.areaIds.length || input.areaIds.some(id => typeof id !== 'string') || new Set(input.areaIds).size !== input.areaIds.length) throw new ProjectError('Provide unique Area IDs in display order')
+  return getDb().transaction(() => {
+    const current = listAreas({ includeArchived: true })
+    const byId = new Map(current.map(area => [area.id, area]))
+    if (input.areaIds.some(id => !byId.has(id))) throw new ProjectError('Area order contains an unknown Area', 404, 'AREA_NOT_FOUND')
+    const requested = input.areaIds.map(id => byId.get(id)!)
+    let index = 0
+    const next = current.map(area => input.areaIds.includes(area.id) ? requested[index++] : area)
+    const update = getDb().prepare('UPDATE areas SET sort_order=? WHERE id=?')
+    next.forEach((area, position) => update.run((position + 1) * 1000, area.id))
+    recordEvent('area_order', 'all', 'reordered', current.map(area => area.id), next.map(area => area.id))
+    return listAreas({ includeArchived: true })
   })()
 }
 export function updateArea(id: string, input: UpdateAreaInput): Area {
@@ -123,8 +141,8 @@ export function applyAreaInsightSummary(id: string, input: ApplyAreaInsightSumma
     const before = requireArea(id); checkRevision(before.revision, input.expectedRevision)
     const latestProgress = text(input.latestProgress, 'Latest progress'), nextStep = text(input.nextStep, 'Next step')
     if (typeof input.insightDraftId !== 'string' || !input.insightDraftId.trim()) throw new ProjectError('insightDraftId is required')
-    const draft = getDb().prepare('SELECT target_type,target_id,status,accepted_note_id FROM project_insight_drafts WHERE id=?').get(input.insightDraftId) as any
-    if (!draft || draft.target_type !== 'area' || draft.target_id !== id) throw new ProjectError('Insight does not match this Area')
+    const draft = getDb().prepare('SELECT target_type,target_id,purpose,status,accepted_note_id FROM project_insight_drafts WHERE id=?').get(input.insightDraftId) as any
+    if (!draft || draft.target_type !== 'area' || draft.target_id !== id || draft.purpose !== 'area_progress') throw new ProjectError('Area progress draft does not match this Area')
     if (draft.status !== 'success' || !draft.accepted_note_id) throw new ProjectError('Accept the successful insight as a Note before applying its summary', 409, 'INSIGHT_NOT_ACCEPTED')
     const note = getDb().prepare('SELECT revision FROM notes WHERE id=?').get(draft.accepted_note_id) as { revision: number } | undefined
     if (!note) throw new ProjectError('Accepted Note was deleted', 409, 'INSIGHT_ACCEPTED_NOTE_DELETED')

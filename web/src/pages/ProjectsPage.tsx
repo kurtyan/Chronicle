@@ -1,13 +1,14 @@
 import { fetchStartOfDayOffset } from '@/services/api'
 import { getWorkPeriodRange } from '@/lib/workPeriod'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, RefreshCw, Search, SlidersHorizontal, Rows, GanttChart } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Search, SlidersHorizontal, Rows, GanttChart } from 'lucide-react'
 import { projectApi, projectError, entityPath } from '@/services/projectApi'
 import type { ProjectOverview, MilestoneOverview } from '@/services/projectApi'
 import { useProjectStore } from '@/stores/projectStore'
 import { ProjectEditor } from '@/components/Projects/ProjectEditor'
-import { ProjectGantt } from '@/components/Projects/ProjectGantt'
+import { getGanttTimeWindow, ProjectGantt } from '@/components/Projects/ProjectGantt'
+import type { TimelineScale } from '@/components/Projects/ProjectGantt'
 import { ProjectNotesPanel } from '@/components/Projects/ProjectNotesPanel'
 import type { ProjectSelection } from '@/components/Projects/ProjectNotesPanel'
 import { useI18n } from '@/i18n/context'
@@ -41,8 +42,11 @@ export function ProjectsPage() {
   const listScrollOwner = useRef<{ key: string; element: HTMLDivElement } | null>(null)
   const { areas, load } = useProjectStore()
   const [data, setData] = useState<ProjectOverview | null>(null)
-  const [dataPeriod, setDataPeriod] = useState('week')
+  const [dataPeriodLabel, setDataPeriodLabel] = useState('')
   const [loadedDataScope, setLoadedDataScope] = useState('')
+  const [cancelledDataScope, setCancelledDataScope] = useState('')
+  const [failedDataScope, setFailedDataScope] = useState('')
+  const cancelOverviewCalculation = useRef<(() => void) | null>(null)
   const [error, setError] = useState('')
   const query = params.get('q') || ''
   const areaId = params.get('area') || ''
@@ -55,7 +59,31 @@ export function ProjectsPage() {
   const [preferredView] = useState(() => { try { return localStorage.getItem('chronicle:project-view') === 'list' ? 'list' : 'gantt' } catch { return 'gantt' } })
   const view = params.get('view') === 'list' ? 'list' : params.get('view') === 'gantt' ? 'gantt' : preferredView
   const [workDayOffset, setWorkDayOffset] = useState(5)
-  const dataScope = JSON.stringify([query, areaId, status, archived, range, customStart, customEnd, workDayOffset])
+  const defaultTimelineAnchor = useRef(Date.now()).current
+  const rawTimelineAnchor = Number(params.get('anchor'))
+  const timelineAnchor = rawTimelineAnchor > 0 && rawTimelineAnchor < 8.64e15 ? rawTimelineAnchor : defaultTimelineAnchor
+  const timelineScale = ['year', 'month', 'week', 'day'].includes(params.get('scale') || '') ? params.get('scale') as TimelineScale : 'week'
+  const timelineWindow = useMemo(() => getGanttTimeWindow(timelineAnchor, timelineScale), [timelineAnchor, timelineScale])
+  const requestedRange = useMemo(() => {
+    const now = Date.now()
+    if (view === 'gantt') {
+      const start = getWorkPeriodRange('day', new Date(timelineWindow.start + 12 * 60 * 60 * 1000), workDayOffset).start
+      const end = getWorkPeriodRange('day', new Date(timelineWindow.end - 12 * 60 * 60 * 1000), workDayOffset).end
+      return { start, end, asOf: now }
+    }
+    const normal = getWorkPeriodRange(range === 'month' ? 'month' : 'week', new Date(), workDayOffset)
+    const start = range === 'all' ? 0 : range === 'custom' ? (customStart ? getWorkPeriodRange('day', new Date(`${customStart}T12:00:00`), workDayOffset).start : 0) : normal.start
+    const end = range === 'custom' && customEnd ? getWorkPeriodRange('day', new Date(`${customEnd}T12:00:00`), workDayOffset).end : range === 'all' ? now : normal.end
+    return { start, end, asOf: now }
+  }, [view, timelineWindow.start, timelineWindow.end, workDayOffset, range, customStart, customEnd])
+  const requestedPeriodLabel = view === 'gantt'
+    ? `${dateLabel(timelineWindow.start)} — ${dateLabel(timelineWindow.end - 1)}`
+    : t(range === 'week' ? 'project.overview.week' : range === 'month' ? 'project.overview.month' : range === 'all' ? 'project.overview.totalShort' : 'project.overview.periodShort')
+  const dataScope = JSON.stringify([query, areaId, status, archived, view, requestedRange.start, requestedRange.end, workDayOffset])
+  const timelineDateValue = (value: number) => {
+    const date = new Date(value)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  }
   const [creating, setCreating] = useState<'area' | 'milestone' | null>(null)
   const [editingSchedule, setEditingSchedule] = useState<MilestoneOverview | null>(null)
   const selected = params.get('selected') || ''
@@ -101,16 +129,25 @@ export function ProjectsPage() {
   useEffect(() => { const timer = window.setInterval(() => setTick(n => n + 1), 60_000); return () => window.clearInterval(timer) }, [])
   useEffect(() => {
     let active = true
-    const now = Date.now()
-    const normal = getWorkPeriodRange(range === 'month' ? 'month' : 'week', new Date(), workDayOffset)
-    const start = range === 'all' ? 0 : range === 'custom' ? (customStart ? getWorkPeriodRange('day', new Date(`${customStart}T12:00:00`), workDayOffset).start : 0) : normal.start
-    const end = range === 'custom' && customEnd ? getWorkPeriodRange('day', new Date(`${customEnd}T12:00:00`), workDayOffset).end : range === 'all' ? now : normal.end
-    const timer = window.setTimeout(() => { projectApi.overview({ start, end, asOf: now, query: query || undefined, areaId: areaId || undefined, status: status || undefined, includeArchived: archived, limit: 1000 }).then(result => { if (active) { setData(result); setDataPeriod(range); setLoadedDataScope(dataScope); setError('') } }).catch(e => { if (active) setError(projectError(e)) }) }, query ? 180 : 0)
-    return () => { active = false; window.clearTimeout(timer) }
-  }, [query, areaId, status, archived, range, customStart, customEnd, workDayOffset, dataScope, refresh, tick])
+    let controller: AbortController | null = null
+    setCancelledDataScope(current => current === dataScope ? '' : current)
+    setFailedDataScope(current => current === dataScope ? '' : current)
+    const stop = () => { active = false; window.clearTimeout(timer); controller?.abort() }
+    const cancel = () => { if (!active) return; stop(); setCancelledDataScope(dataScope) }
+    const timer = window.setTimeout(() => {
+      if (!active) return
+      controller = new AbortController()
+      projectApi.overview({ start: requestedRange.start, end: requestedRange.end, asOf: Date.now(), query: query || undefined, areaId: areaId || undefined, status: status || undefined, includeArchived: archived, limit: 1000 }, controller.signal).then(result => {
+        if (active) { setData(result); setDataPeriodLabel(requestedPeriodLabel); setLoadedDataScope(dataScope); setError('') }
+      }).catch(e => {
+        if (active && !controller?.signal.aborted) { setFailedDataScope(dataScope); setError(projectError(e)) }
+      })
+    }, view === 'gantt' ? 280 : query ? 180 : 0)
+    cancelOverviewCalculation.current = cancel
+    return () => { stop(); if (cancelOverviewCalculation.current === cancel) cancelOverviewCalculation.current = null }
+  }, [query, areaId, status, archived, view, requestedRange.start, requestedRange.end, requestedPeriodLabel, dataScope, refresh, tick])
   // A pending filter cannot relabel the last successful statistics snapshot.
-  const shownPeriod = data ? dataPeriod : range
-  const periodLabel = t(shownPeriod === 'week' ? 'project.overview.week' : shownPeriod === 'month' ? 'project.overview.month' : shownPeriod === 'all' ? 'project.overview.totalShort' : 'project.overview.periodShort')
+  const periodLabel = data ? dataPeriodLabel : requestedPeriodLabel
   const compactControl = 'h-8 rounded-md border border-border/70 bg-background px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/30'
   const visibleAreas = areas.filter(a => (archived || !a.archived) && (!areaId || a.id === areaId) && (!query || a.name.toLowerCase().includes(query.toLowerCase()) || data?.milestones.some(m => m.areaId === a.id)))
   const rangeContext = data ? { start: data.statistics.start, end: data.statistics.end, asOf: data.statistics.asOf } : {}
@@ -119,6 +156,9 @@ export function ProjectsPage() {
   // The retained rows belong to their successful request, not a pending filter.
   // Restore only after the matching rows have their full scrollable height.
   const listDataReady = Boolean(data) && loadedDataScope === dataScope
+  const recalculationOutdated = Boolean(data) && loadedDataScope !== dataScope
+  const recalculationCancelled = recalculationOutdated && cancelledDataScope === dataScope
+  const recalculationFailed = recalculationOutdated && failedDataScope === dataScope
   useLayoutEffect(() => {
     if (view !== 'list' || !listDataReady || !listRef.current) return
     const element = listRef.current
@@ -134,7 +174,7 @@ export function ProjectsPage() {
   }, [view, listKey, listDataReady, dataScope])
   return <div className="flex h-full min-h-0 flex-col" data-testid="projects-page">
     <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
-      <div><h1 className="text-xl font-semibold tracking-tight">{t('project.overview.title')}</h1>{data && <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t('project.overview.effort', { period: periodLabel })} <strong className="ml-1 font-semibold tabular-nums text-foreground">{duration(data.statistics.totalMs)}</strong></span><span className="text-border">/</span><span>{t('project.overview.visible', { count: String(data.milestones.length) })}</span><span>{t('project.overview.completed', { count: String(data.milestones.filter(m => m.status === 'completed').length) })}</span>{data.milestones.some(m => m.reviewStatus === 'pending') && <span className="text-amber-700 dark:text-amber-400">{t('project.overview.reviewDue', { count: String(data.milestones.filter(m => m.reviewStatus === 'pending').length) })}</span>}</div>}</div>
+      <div><h1 className="text-xl font-semibold tracking-tight">{t('project.overview.title')}</h1>{data && <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{t('project.overview.effort', { period: recalculationOutdated ? requestedPeriodLabel : periodLabel })} <strong className="ml-1 font-semibold tabular-nums text-foreground">{recalculationOutdated ? '—' : duration(data.statistics.totalMs)}</strong></span><span className="text-border">/</span><span>{t('project.overview.visible', { count: String(data.milestones.length) })}</span><span>{t('project.overview.completed', { count: String(data.milestones.filter(m => m.status === 'completed').length) })}</span>{data.milestones.some(m => m.reviewStatus === 'pending') && <span className="text-amber-700 dark:text-amber-400">{t('project.overview.reviewDue', { count: String(data.milestones.filter(m => m.reviewStatus === 'pending').length) })}</span>}</div>}</div>
       <div className="flex gap-2"><button className={`${compactControl} inline-flex items-center gap-1.5 hover:bg-muted`} aria-label={t('project.overview.newArea')} onClick={() => setCreating('area')}><Plus className="h-3.5 w-3.5" />{t('project.overview.area')}</button><button className={`${compactControl} inline-flex items-center gap-1.5 border-primary bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40`} disabled={!areas.some(a => !a.archived)} aria-label={t('project.overview.newMilestone')} title={`${t('project.overview.newMilestone')} (⌘N)`} onClick={() => setCreating('milestone')}><Plus className="h-3.5 w-3.5" />{t('project.overview.milestone')}</button></div>
     </header>
     <div className="shrink-0 space-y-2 px-5 py-3">
@@ -142,16 +182,28 @@ export function ProjectsPage() {
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <label className="relative"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-3 w-3 text-muted-foreground" /><input ref={searchRef} className={`${compactControl} w-52 pl-7 pr-10`} placeholder={t('project.overview.searchHint')} aria-label={t('project.overview.search')} value={query} onChange={e => update({ q: e.target.value })} /><kbd className="pointer-events-none absolute right-2.5 top-2 text-[10px] text-muted-foreground/70">⌘F</kbd></label>
           <ProjectSelect compact className="max-w-48" label={t('project.overview.areaFilter')} value={areaId} onChange={value => update({ area: value })} options={[{ value: '', label: t('project.overview.allAreas') }, ...areas.map(a => ({ value: a.id, label: a.name, description: a.archived ? t('project.overview.archived') : undefined }))]} />
-          <ProjectSelect compact label={t('project.overview.period')} value={range} onChange={value => update({ period: value })} options={['week', 'month', 'all', 'custom'].map(value => ({ value, label: t(`project.overview.${value === 'all' ? 'allTime' : value}`) }))} />
+          {view === 'gantt' ? <span className={`${compactControl} inline-flex items-center text-muted-foreground`} role="status">{t('project.overview.timelinePeriod')}</span> : <ProjectSelect compact label={t('project.overview.period')} value={range} onChange={value => update({ period: value })} options={['week', 'month', 'all', 'custom'].map(value => ({ value, label: t(`project.overview.${value === 'all' ? 'allTime' : value}`) }))} />}
           <button className={`${compactControl} inline-flex items-center gap-1.5 border-transparent hover:bg-muted ${filtersOpen || status || archived ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} aria-expanded={filtersOpen} onClick={() => update({ filters: filtersOpen ? null : '1' })}><SlidersHorizontal className="h-3 w-3" />{t('project.overview.filters')}{(status || archived) && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}</button>
         </div>
-        <div className="flex items-center gap-2"><div className="flex rounded-md bg-muted/70 p-0.5" aria-label={t('project.overview.view')}>{(['gantt', 'list'] as const).map(value => { const Icon = value === 'gantt' ? GanttChart : Rows; return <button key={value} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs ${view === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} aria-pressed={view === value} onClick={() => { update({ view: value }); try { localStorage.setItem('chronicle:project-view', value) } catch { /* Optional preference. */ } }}><Icon className="h-3 w-3" />{t(value === 'gantt' ? 'project.overview.timeline' : 'project.workspace.effortView')}</button> })}</div><button className="rounded-md p-2 text-muted-foreground hover:bg-muted" onClick={() => { setTick(n => n + 1); void load() }} aria-label={t('project.overview.refresh')}><RefreshCw className="h-3.5 w-3.5" /></button></div>
+        <div className="flex items-center gap-2"><div className="flex rounded-md bg-muted/70 p-0.5" aria-label={t('project.overview.view')}>{(['gantt', 'list'] as const).map(value => { const Icon = value === 'gantt' ? GanttChart : Rows; return <button key={value} className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs ${view === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} aria-pressed={view === value} onClick={() => { update(value === 'list' && view === 'gantt' ? { view: value, period: 'custom', start: timelineDateValue(timelineWindow.start), end: timelineDateValue(timelineWindow.end - 1) } : { view: value }); try { localStorage.setItem('chronicle:project-view', value) } catch { /* Optional preference. */ } }}><Icon className="h-3 w-3" />{t(value === 'gantt' ? 'project.overview.timeline' : 'project.workspace.effortView')}</button> })}</div><button className="rounded-md p-2 text-muted-foreground hover:bg-muted" onClick={() => { setTick(n => n + 1); void load() }} aria-label={t('project.overview.refresh')}><RefreshCw className="h-3.5 w-3.5" /></button></div>
       </div>
       {filtersOpen && <div className="flex flex-wrap items-center gap-3 border-t border-border/50 pt-2 text-xs"><ProjectSelect compact label={t('project.overview.statusFilter')} value={status} onChange={value => update({ status: value })} options={[{ value: '', label: t('project.overview.allStatuses') }, ...['planned', 'active', 'paused', 'completed', 'cancelled', 'ended'].map(value => ({ value, label: statusLabels[value] }))]} /><label className="flex items-center gap-2"><input type="checkbox" checked={archived} onChange={e => update({ archived: e.target.checked ? '1' : null })} />{t('project.overview.showArchived')}</label>{(status || archived) && <button className="text-muted-foreground hover:text-foreground" onClick={() => update({ status: null, archived: null })}>{t('project.overview.reset')}</button>}</div>}
-      {range === 'custom' && <div className="flex flex-wrap items-center gap-2 text-xs"><input type="date" aria-label={t('project.overview.start')} className={compactControl} value={customStart} onChange={e => update({ start: e.target.value })} /><span>{t('project.overview.to')}</span><input type="date" aria-label={t('project.overview.end')} className={compactControl} value={customEnd} onChange={e => update({ end: e.target.value })} /></div>}
+      {view !== 'gantt' && range === 'custom' && <div className="flex flex-wrap items-center gap-2 text-xs"><input type="date" aria-label={t('project.overview.start')} className={compactControl} value={customStart} onChange={e => update({ start: e.target.value })} /><span>{t('project.overview.to')}</span><input type="date" aria-label={t('project.overview.end')} className={compactControl} value={customEnd} onChange={e => update({ end: e.target.value })} /></div>}
       <ErrorMessage>{error}</ErrorMessage>
     </div>
     <div className="relative mx-5 mb-3 flex min-h-0 flex-1 gap-3" data-testid="project-workspace">
+      {recalculationOutdated && <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-lg bg-background/70 backdrop-blur-[1px]" data-testid="project-statistics-mask" role="status" aria-live="polite">
+        <div className="pointer-events-auto max-w-sm rounded-xl border bg-popover px-5 py-4 text-center shadow-lg">
+          {!recalculationCancelled && !recalculationFailed && <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-primary" />}
+          <p className="text-sm font-medium">{t(recalculationCancelled ? 'project.overview.calculationCancelled' : recalculationFailed ? 'project.overview.calculationFailed' : 'project.overview.recalculating')}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{requestedPeriodLabel}</p>
+          {!recalculationCancelled && !recalculationFailed && <p className="mt-2 text-xs text-muted-foreground">{t('project.overview.recalculatingHint')}</p>}
+          <button className="mt-3 rounded-md border px-3 py-1.5 text-xs hover:bg-muted" onClick={() => {
+            if (recalculationCancelled || recalculationFailed) { setCancelledDataScope(''); setFailedDataScope(''); setTick(value => value + 1) }
+            else cancelOverviewCalculation.current?.()
+          }}>{t(recalculationCancelled || recalculationFailed ? 'project.overview.retryCalculation' : 'project.overview.cancelCalculation')}</button>
+        </div>
+      </div>}
       <div className="min-w-0 flex-1" onKeyDown={event => {
         if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || !['ArrowDown', 'ArrowUp', 'j', 'k'].includes(event.key)) return
         if (!(event.target instanceof Element) || !event.target.closest('[data-project-object]')) return
@@ -160,7 +212,7 @@ export function ProjectsPage() {
         const next = objects[Math.max(0, Math.min(objects.length - 1, index + (['j', 'ArrowDown'].includes(event.key) ? 1 : -1)))]
         if (next) { event.preventDefault(); next.focus(); next.click() }
       }}>
-        {data && (!areas.length ? <div className="flex h-full flex-col items-center justify-center rounded-lg border border-dashed px-6 text-center"><GanttChart className="mb-4 h-8 w-8 text-muted-foreground/50" /><h2 className="text-base font-medium">{t('project.overview.empty')}</h2><p className="mb-5 mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">{t('project.overview.emptyHint')}</p><button className={`${compactControl} bg-primary text-primary-foreground`} onClick={() => setCreating('area')}>{t('project.overview.newArea')}</button></div> : view === 'gantt' ? <ProjectGantt areas={visibleAreas} milestones={data.milestones} statistics={data.statistics} onSelect={select} onSchedule={setEditingSchedule} periodLabel={periodLabel} /> : <div ref={listRef} className="h-full overflow-auto rounded-lg border border-border/70 bg-card" onScroll={event => {
+        {data && (!areas.length ? <div className="flex h-full flex-col items-center justify-center rounded-lg border border-dashed px-6 text-center"><GanttChart className="mb-4 h-8 w-8 text-muted-foreground/50" /><h2 className="text-base font-medium">{t('project.overview.empty')}</h2><p className="mb-5 mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">{t('project.overview.emptyHint')}</p><button className={`${compactControl} bg-primary text-primary-foreground`} onClick={() => setCreating('area')}>{t('project.overview.newArea')}</button></div> : view === 'gantt' ? <ProjectGantt areas={visibleAreas} milestones={data.milestones} statistics={data.statistics} onSelect={select} onSchedule={setEditingSchedule} onReorderAreas={async areaIds => { try { await projectApi.reorderAreas(areaIds); await load() } catch (error) { setError(projectError(error)); throw error } }} periodLabel={periodLabel} /> : <div ref={listRef} className="h-full overflow-auto rounded-lg border border-border/70 bg-card" onScroll={event => {
           const owner = listScrollOwner.current
           if (listDataReady && owner?.key === listKey && owner.element === event.currentTarget) saveProjectScroll(owner.key, owner.element)
         }} data-testid="project-effort-list">
@@ -178,7 +230,7 @@ export function ProjectsPage() {
       </div>
       {selection && data && <ProjectNotesPanel target={selection} onClose={() => update({ selected: null })} onSelect={select} range={rangeContext} periodLabel={periodLabel} />}
     </div>
-    {data && <footer className="relative flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-2 text-[11px] text-muted-foreground"><div className="flex flex-wrap gap-3">{(areaId || query || status) && <span>{t('project.overview.filteredEffort', { duration: duration(data.milestones.reduce((sum, m) => sum + m.periodMs, 0)) })}</span>}<button className="hover:text-foreground hover:underline" onClick={() => navigate(withProjectNavigation('/?projectFilter=unassigned', navigationContext), { state: projectNavigationState(navigationContext) })}>{t('project.overview.unassignedEffort', { duration: duration(data.statistics.unassignedMs) })}</button>{!!data.statistics.anomalies.length && <span className="text-amber-600">{t('project.overview.anomalies', { count: String(data.statistics.anomalies.length) })}</span>}</div><details className="group text-right"><summary className="cursor-pointer hover:text-foreground">{t('project.overview.accounting')}</summary><p className="absolute bottom-full right-5 z-30 mb-2 w-80 rounded-lg border bg-popover p-4 text-left leading-5 text-popover-foreground shadow-lg">{t('project.overview.accountingHint')}<span className="mt-2 block text-muted-foreground">{t('project.overview.asOf', { date: dateLabel(data.statistics.asOf) })}</span></p></details></footer>}
+    {data && !recalculationOutdated && <footer className="relative flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-2 text-[11px] text-muted-foreground"><div className="flex flex-wrap gap-3">{(areaId || query || status) && <span>{t('project.overview.filteredEffort', { duration: duration(data.milestones.reduce((sum, m) => sum + m.periodMs, 0)) })}</span>}<button className="hover:text-foreground hover:underline" onClick={() => navigate(withProjectNavigation('/?projectFilter=unassigned', navigationContext), { state: projectNavigationState(navigationContext) })}>{t('project.overview.unassignedEffort', { duration: duration(data.statistics.unassignedMs) })}</button>{!!data.statistics.anomalies.length && <span className="text-amber-600">{t('project.overview.anomalies', { count: String(data.statistics.anomalies.length) })}</span>}</div><details className="group text-right"><summary className="cursor-pointer hover:text-foreground">{t('project.overview.accounting')}</summary><p className="absolute bottom-full right-5 z-30 mb-2 w-80 rounded-lg border bg-popover p-4 text-left leading-5 text-popover-foreground shadow-lg">{t('project.overview.accountingHint')}<span className="mt-2 block text-muted-foreground">{t('project.overview.asOf', { date: dateLabel(data.statistics.asOf) })}</span></p></details></footer>}
     {creating && <ProjectEditor type={creating} areaId={areaId || undefined} onClose={() => setCreating(null)} onSaved={id => { const type = creating; setCreating(null); update({ selected: `${type}:${id}` }) }} />}
     {editingSchedule && <ProjectEditor type="milestone" mode="schedule" value={editingSchedule} onClose={() => setEditingSchedule(null)} onSaved={() => setEditingSchedule(null)} />}
   </div>

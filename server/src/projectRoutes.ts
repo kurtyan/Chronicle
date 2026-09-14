@@ -72,6 +72,7 @@ insights.setProjectInsightEventListener(draft => {
 
 projectRoutes.get('/areas', c => c.json(projects.listAreas(listOptions(c.req.query()))))
 projectRoutes.post('/areas', async c => c.json(projects.createArea(await readBody(c)), 201))
+projectRoutes.post('/areas/reorder', async c => c.json(projects.reorderAreas(await readBody(c))))
 projectRoutes.get('/areas/:id', c => c.json(projects.getAreaDetail(c.req.param('id'), range(c.req.query()))))
 projectRoutes.patch('/areas/:id', async c => c.json(projects.updateArea(c.req.param('id'), await readBody(c))))
 projectRoutes.put('/areas/:id', async c => c.json(projects.updateArea(c.req.param('id'), await readBody(c))))
@@ -109,7 +110,7 @@ projectRoutes.get('/project-reviews/:id', c => c.json(found(reviews.getProjectRe
 projectRoutes.patch('/project-reviews/:id', async c => c.json(found(reviews.updateProjectReview(c.req.param('id'), await readBody(c)))))
 projectRoutes.post('/project-reviews/:id/confirm', async c => c.json(found(reviews.confirmProjectReview(c.req.param('id'), await readBody(c)))))
 projectRoutes.delete('/project-reviews/:id', c => { if (!reviews.deleteProjectReview(c.req.param('id'))) found(null); return c.body(null, 204) })
-projectRoutes.get('/project-insights', c => c.json(insights.listProjectInsights(target(c.req.query('targetType')), required(c.req.query('targetId'), 'targetId'))))
+projectRoutes.get('/project-insights', c => c.json(insights.listProjectInsights(target(c.req.query('targetType')), required(c.req.query('targetId'), 'targetId'), c.req.query('purpose'))))
 projectRoutes.post('/project-insights', async c => c.json(await insights.createProjectInsight(await readBody(c)), 202))
 projectRoutes.get('/project-insights/:id', c => c.json(found(insights.getProjectInsight(c.req.param('id')))))
 projectRoutes.post('/project-insights/:id/cancel', c => c.json(found(insights.cancelProjectInsight(c.req.param('id')))))

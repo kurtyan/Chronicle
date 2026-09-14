@@ -22,11 +22,10 @@ async function seed(request: APIRequestContext) {
   return { area, milestones, note }
 }
 
-test('compare objects without dismissing the inspector, switch representations, and return from a note to the same month and schedule', async ({ page, request }) => {
+test('compare objects without dismissing the inspector, switch representations, and return from a note to the same visible range and schedule', async ({ page, request }) => {
   const { area, milestones, note } = await seed(request)
   await page.goto('/projects?lang=en')
   await selectProjectOption(page, 'Filter by area', area.name)
-  await selectProjectOption(page, 'Effort period', 'This month')
   await page.getByRole('button', { name: 'Months', exact: true }).click()
   await page.getByRole('button', { name: 'Next time window', exact: true }).click()
   const timeline = page.getByTestId('project-gantt')
@@ -42,6 +41,9 @@ test('compare objects without dismissing the inspector, switch representations, 
   const original = new URL(page.url())
   const originalAnchor = original.searchParams.get('anchor')
   await page.getByRole('button', { name: 'Effort & outcomes', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('period')).toBe('custom')
+  const inheritedRange = new URL(page.url())
+  expect(inheritedRange.searchParams.get('period')).toBe('custom')
   await expect(panel.getByRole('heading', { name: milestones[0].name, exact: true })).toBeVisible()
   const list = page.getByTestId('project-effort-list')
   await list.locator(`button[data-project-object="milestone:${milestones[1].id}"]`).click()
@@ -56,7 +58,9 @@ test('compare objects without dismissing the inspector, switch representations, 
   await expect(panel.getByRole('heading', { name: milestones[0].name, exact: true })).toBeVisible()
   const returned = new URL(page.url())
   expect(returned.searchParams.get('area')).toBe(area.id)
-  expect(returned.searchParams.get('period')).toBe('month')
+  expect(returned.searchParams.get('period')).toBe('custom')
+  expect(returned.searchParams.get('start')).toBe(inheritedRange.searchParams.get('start'))
+  expect(returned.searchParams.get('end')).toBe(inheritedRange.searchParams.get('end'))
   expect(returned.searchParams.get('selected')).toBe(`milestone:${milestones[0].id}`)
   expect(returned.searchParams.get('anchor')).toBe(originalAnchor)
   expect(returned.searchParams.get('scale')).toBe('month')

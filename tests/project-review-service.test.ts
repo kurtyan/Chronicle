@@ -11,6 +11,7 @@ import { addProjectReference } from '../server/src/services/projectReferenceServ
 import { buildReviewEvidence, isReviewEvidenceStale } from '../server/src/services/reviewEvidenceService'
 import { createProjectReview, confirmProjectReview, getProjectReview, deleteProjectReview } from '../server/src/services/projectReviewService'
 import { createProjectInsight, getProjectInsight, cancelProjectInsight, retryProjectInsight, acceptProjectInsight, validateProjectInsightOutput } from '../server/src/services/projectInsightService'
+import { getLlmSettings, saveLlmSettings } from '../server/src/services/llmService'
 import { projectRoutes } from '../server/src/projectRoutes'
 
 test.describe('Project review service with isolated SQLite and deterministic model responses', () => {
@@ -119,7 +120,7 @@ test.describe('Project review service with isolated SQLite and deterministic mod
   test('Area insight summaries require explicit adoption and matching Note/Area revisions while retaining source history', async () => {
     const { area, milestone } = fixture('Area summary')
     fakeProvider()
-    const draft = await finish(createProjectInsight({ targetType: 'area', targetId: area.id }).id)
+    const draft = await finish(createProjectInsight({ targetType: 'area', targetId: area.id, purpose: 'area_progress' }).id)
     const input = { insightDraftId: draft.id, expectedRevision: area.revision, expectedNoteRevision: 1, latestProgress: '已梳理判断依据。', nextStep: '用新案例检验。' }
     expect(() => applyAreaInsightSummary(area.id, input)).toThrow(/Accept/)
     const adopted = acceptProjectInsight(draft.id, {})!
@@ -199,6 +200,62 @@ test.describe('Project review service with isolated SQLite and deterministic mod
     const review = createProjectReview({ targetType: 'milestone', targetId: milestone.id, noteId: note.id, kind: 'periodic', insightDraftId: draft.id })
     expect(getProjectInsight(draft.id)!.stale).toBeFalsy()
     expect(confirmProjectReview(review.id, { expectedNoteRevision: result.note.revision })!.status).toBe('confirmed')
+  })
+
+  test('Periodic Review uses its own configured prompt and default output budget snapshot', async () => {
+    const { milestone } = fixture('Configured periodic review')
+    const originalSettings = getLlmSettings()
+    const requests: any[] = []
+    const prompt = 'Periodic Review only. Write in {{language}} and return evidence-backed JSON.'
+    try {
+      saveLlmSettings({ ...originalSettings, projectInsightMaxTokens: 777, projectInsightPrompt: prompt })
+      globalThis.fetch = (async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)))
+        return providerReply(String(init?.body))
+      }) as typeof fetch
+      const created = createProjectInsight({ targetType: 'milestone', targetId: milestone.id, locale: 'en' })
+      expect(created.budget.maxOutputTokens).toBe(777)
+      expect(created.promptVersion).toMatch(/^project-review-custom-/)
+      const finished = await finish(created.id)
+      expect(finished.status).toBe('success')
+      expect(requests).toHaveLength(1)
+      expect(requests[0].max_tokens).toBe(777)
+      expect(requests[0].messages[0]).toEqual({ role: 'system', content: 'Periodic Review only. Write in English and return evidence-backed JSON.' })
+      expect((getDb().prepare('SELECT prompt_text FROM project_insight_drafts WHERE id = ?').get(created.id) as any).prompt_text).toBe(requests[0].messages[0].content)
+    } finally {
+      saveLlmSettings(originalSettings)
+    }
+  })
+
+  test('Area progress drafting uses settings and logs that are independent from Periodic Review', async () => {
+    const { area } = fixture('Configured Area progress')
+    const originalSettings = getLlmSettings()
+    const requests: any[] = []
+    const prompt = 'Area progress only. Write in {{language}} and return evidence-backed JSON.'
+    try {
+      saveLlmSettings({
+        ...originalSettings,
+        areaProgressMaxTokens: 888,
+        areaProgressPrompt: prompt,
+        projectInsightMaxTokens: 777,
+        projectInsightPrompt: 'Periodic Review should not be used.',
+      })
+      globalThis.fetch = (async (_url, init) => {
+        requests.push(JSON.parse(String(init?.body)))
+        return providerReply(String(init?.body))
+      }) as typeof fetch
+      const created = createProjectInsight({ targetType: 'area', targetId: area.id, purpose: 'area_progress', locale: 'en' })
+      expect(created.purpose).toBe('area_progress')
+      expect(created.budget.maxOutputTokens).toBe(888)
+      expect(created.promptVersion).toMatch(/^area-progress-custom-/)
+      const finished = await finish(created.id)
+      expect(finished.status).toBe('success')
+      expect(requests[0].max_tokens).toBe(888)
+      expect(requests[0].messages[0]).toEqual({ role: 'system', content: 'Area progress only. Write in English and return evidence-backed JSON.' })
+      expect((getDb().prepare('SELECT feature FROM llm_call_logs WHERE request_input LIKE ?').get(`%${created.id}%`) as any).feature).toBe('area_progress')
+    } finally {
+      saveLlmSettings(originalSettings)
+    }
   })
 
   test('rejects nonexistent citations and invented statistics', () => {
@@ -338,7 +395,7 @@ test.describe('Project review service with isolated SQLite and deterministic mod
     expect(failed.error).toContain('输出预算耗尽')
     expect(failed.error).toContain('4000 tokens')
     expect(failed.content).toBeNull()
-    expect(() => retryProjectInsight(failed.id, { budget: { maxOutputTokens: 16001 } })).toThrow('Invalid insight budget')
+    expect(() => retryProjectInsight(failed.id, { budget: { maxOutputTokens: 32001 } })).toThrow('Invalid insight budget')
     const retry = retryProjectInsight(failed.id, { budget: { maxOutputTokens: 8000 } })!
     expect(retry.id).not.toBe(failed.id)
     expect(retry.previousDraftId).toBe(failed.id)

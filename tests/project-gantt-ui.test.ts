@@ -13,6 +13,72 @@ const unique = (value: string) => `${value}-${Date.now()}-${Math.random().toStri
 const relative = (offset: number) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + offset); return d.getTime() }
 const dateValue = (value: number) => { const d = new Date(value); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
 
+test('Gantt persists Area order and supports timeline zoom and drag panning', async ({ page, request }) => {
+  const prefix = unique('可调整方向')
+  const first = await (await request.post('/api/areas', { data: { name: `${prefix}-第一` } })).json()
+  const second = await (await request.post('/api/areas', { data: { name: `${prefix}-第二` } })).json()
+  await page.goto('/projects?view=gantt&scale=week&lang=zh-CN')
+  await page.getByRole('textbox', { name: '搜索里程碑', exact: true }).fill(prefix)
+  const chart = page.getByTestId('project-gantt')
+  const laneIds = () => chart.getByTestId('gantt-area-lane').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-area-id')))
+  await expect.poll(laneIds).toEqual([first.id, second.id])
+
+  const reordered = page.waitForResponse(response => new URL(response.url()).pathname === '/api/areas/reorder' && response.request().method() === 'POST')
+  await chart.getByRole('button', { name: `上移方向 ${second.name}`, exact: true }).click()
+  expect((await reordered).ok()).toBe(true)
+  await expect.poll(laneIds).toEqual([second.id, first.id])
+  const catalog = await (await request.get('/api/projects/catalog?includeArchived=true')).json()
+  const persisted = catalog.areas.filter((area: any) => area.id === first.id || area.id === second.id).map((area: any) => area.id)
+  expect(persisted).toEqual([second.id, first.id])
+
+  await chart.getByRole('button', { name: '放大时间范围', exact: true }).click()
+  await expect.poll(() => new URL(page.url()).searchParams.get('scale')).toBe('day')
+  const beforeAnchor = new URL(page.url()).searchParams.get('anchor')
+  const axis = chart.getByTestId('gantt-axis')
+  const box = await axis.boundingBox()
+  expect(box).not.toBeNull()
+  await page.mouse.move(box!.x + box!.width * 0.75, box!.y + box!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box!.x + box!.width * 0.25, box!.y + box!.height / 2, { steps: 5 })
+  await page.mouse.up()
+  await expect.poll(() => new URL(page.url()).searchParams.get('anchor')).not.toBe(beforeAnchor)
+  expect(Number(new URL(page.url()).searchParams.get('anchor'))).toBeGreaterThan(0)
+})
+
+test('Gantt visible range recalculates recorded work behind a cancellable mask', async ({ page, request }) => {
+  const area = await (await request.post('/api/areas', { data: { name: unique('联动统计方向') } })).json()
+  let delayOverview = false
+  const requestedRanges: Array<{ start: string | null; end: string | null }> = []
+  await page.route('**/api/projects/overview?**', async route => {
+    const url = new URL(route.request().url())
+    requestedRanges.push({ start: url.searchParams.get('start'), end: url.searchParams.get('end') })
+    if (delayOverview) await new Promise(resolve => setTimeout(resolve, 800))
+    await route.continue().catch(() => {})
+  })
+
+  await page.goto('/projects?view=gantt&scale=week&lang=zh-CN')
+  await filterArea(page, area.name)
+  await expect(page.getByTestId('project-gantt')).toBeVisible()
+  await expect(page.getByText('投入随可见时间轴联动', { exact: true })).toBeVisible()
+  const initialRange = requestedRanges.at(-1)
+
+  delayOverview = true
+  const requestCount = requestedRanges.length
+  await page.getByRole('button', { name: '放大时间范围', exact: true }).click()
+  const mask = page.getByTestId('project-statistics-mask')
+  await expect(mask).toContainText('正在重新计算投入')
+  await expect.poll(() => requestedRanges.length).toBeGreaterThan(requestCount)
+  await expect(page.getByText('—', { exact: true }).first()).toBeVisible()
+  await mask.getByRole('button', { name: '取消计算', exact: true }).click()
+  await expect(mask).toContainText('已取消这段时间的投入计算')
+
+  delayOverview = false
+  await mask.getByRole('button', { name: '重新计算', exact: true }).click()
+  await expect(mask).toHaveCount(0)
+  const recalculatedRange = requestedRanges.at(-1)
+  expect(recalculatedRange).not.toEqual(initialRange)
+})
+
 test('Gantt uses explicit schedules, distinguishes undated, target-only and open-ended milestones, and opens inherited Notes', async ({ page, request }) => {
   const area = await (await request.post('/api/areas', { data: { name: unique('时间规划方向'), latestProgress: '已厘清本期交付边界', nextStep: '验证一条完整使用路径' } })).json()
   const milestones: any[] = []
@@ -370,16 +436,19 @@ test('Gantt shows cumulative effort once and explains a status filter with no ma
     const url = new URL(response.url())
     return url.pathname === '/api/projects/overview' && url.searchParams.get('start') === '0'
   })
+  await page.getByRole('button', { name: '投入与成果', exact: true }).click()
   await page.getByRole('button', { name: '统计期间', exact: true }).click()
   await page.locator('[data-project-select-popup]').getByRole('option', { name: '全部时间', exact: true }).click()
   expect((await allPeriod).ok()).toBe(true)
-  await row.getByRole('button', { name: /关联笔记/ }).click()
+  await page.getByTestId('project-effort-list').getByTestId('milestone-card').filter({ hasText: milestone.name }).click()
   const panel = page.getByTestId('project-context-panel')
   const effort = panel.getByTestId('project-object-effort')
   await expect(effort.getByRole('heading', { name: '累计的实际投入', exact: true })).toHaveCount(1)
   await expect(effort.getByText('0 分钟', { exact: true })).toHaveCount(1)
   await expect(effort.getByText('本期 0 分钟 · 0 个任务', { exact: true })).toBeVisible()
   await panel.getByRole('button', { name: '关闭详情', exact: true }).click()
+
+  await page.getByRole('button', { name: '甘特图', exact: true }).click()
 
   await page.getByRole('button', { name: '筛选', exact: true }).click()
   await page.getByRole('button', { name: '里程碑状态筛选', exact: true }).click()

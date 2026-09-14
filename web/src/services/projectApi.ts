@@ -5,9 +5,9 @@ export * from '../../../shared/projectTypes'
 
 export function notifyProjectsChanged() { window.dispatchEvent(new Event('chronicle:projects-changed')) }
 export const projectError = projectErrorMessage
-export async function projectRequest<T>(method: 'get' | 'post' | 'patch' | 'put' | 'delete', url: string, body?: unknown): Promise<T> {
+export async function projectRequest<T>(method: 'get' | 'post' | 'patch' | 'put' | 'delete', url: string, body?: unknown, options?: { signal?: AbortSignal }): Promise<T> {
   const client = await withClientId()
-  const { data } = await client.request<T>({ method, url, ...(method === 'get' ? { params: body } : { data: body }) })
+  const { data } = await client.request<T>({ method, url, signal: options?.signal, ...(method === 'get' ? { params: body } : { data: body }) })
   if (method !== 'get' && !url.endsWith('/preview')) notifyProjectsChanged()
   return data
 }
@@ -18,11 +18,12 @@ export const projectApi = {
   area: (id: string, range?: WorkStatisticsRange) => projectRequest<AreaDetail>('get', `/api/areas/${encodeURIComponent(id)}`, range),
   milestone: (id: string, range?: WorkStatisticsRange) => projectRequest<MilestoneDetail>('get', `/api/milestones/${encodeURIComponent(id)}`, range),
   createArea: (body: CreateAreaInput) => projectRequest<Area>('post', '/api/areas', body),
+  reorderAreas: (areaIds: string[]) => projectRequest<Area[]>('post', '/api/areas/reorder', { areaIds }),
   updateArea: (id: string, body: UpdateAreaInput) => projectRequest<Area>('patch', `/api/areas/${encodeURIComponent(id)}`, body),
   applyAreaInsightSummary: (id: string, body: ApplyAreaInsightSummaryInput) => projectRequest<Area>('post', `/api/areas/${encodeURIComponent(id)}/summary-from-insight`, body),
   createMilestone: (body: CreateMilestoneInput) => projectRequest<Milestone>('post', '/api/milestones', body),
   updateMilestone: (id: string, body: UpdateMilestoneInput) => projectRequest<Milestone>('patch', `/api/milestones/${encodeURIComponent(id)}`, body),
-  overview: (params?: ProjectListOptions & WorkStatisticsRange) => projectRequest<ProjectOverview>('get', '/api/projects/overview', params),
+  overview: (params?: ProjectListOptions & WorkStatisticsRange, signal?: AbortSignal) => projectRequest<ProjectOverview>('get', '/api/projects/overview', params, { signal }),
   statistics: (params?: WorkStatisticsRange) => projectRequest<WorkStatistics>('get', '/api/projects/statistics', params),
   references: async (sourceType: ProjectSourceType, sourceId: string) => validateProjectReferences(await projectRequest<unknown>('get', '/api/project-references', { sourceType, sourceId }), sourceType, sourceId),
   setReferences: async (sourceType: ProjectSourceType, sourceId: string, expectedRevision: number, references: ProjectReferenceInput[]) => validateProjectReferences(await projectRequest<unknown>('put', '/api/project-references', { sourceType, sourceId, expectedRevision, references }), sourceType, sourceId),

@@ -203,12 +203,18 @@ export interface LlmSettings {
   meetingExtractionMaxTokens: number
   taskSummaryMaxTokens: number
   dailySummaryMaxTokens: number
+  areaProgressMaxTokens: number
+  projectInsightMaxTokens: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string
   defaultTaskSummaryPrompt: string
   dailySummaryPrompt: string
   defaultDailySummaryPrompt: string
+  areaProgressPrompt: string
+  defaultAreaProgressPrompt: string
+  projectInsightPrompt: string
+  defaultProjectInsightPrompt: string
 }
 
 export interface MeetingExtractionResult {
@@ -328,7 +334,7 @@ export interface DailySummaryCacheResult extends DailySummaryResult {
   fingerprintStatus: 'fresh' | 'stale'
 }
 
-export type BackgroundTaskType = 'daily_summary' | 'task_summary' | 'meeting_extract'
+export type BackgroundTaskType = 'daily_summary' | 'task_summary' | 'meeting_extract' | 'project_insight'
 export type BackgroundTaskStatus = 'running' | 'success' | 'error'
 
 export interface BackgroundTask {
@@ -337,7 +343,7 @@ export interface BackgroundTask {
   sourceKey: string
   title: string
   status: BackgroundTaskStatus
-  result: DailySummaryResult | TaskSummaryTestResult | Omit<MeetingExtractionResult, 'rawContent'> | MeetingExtractionResult | null
+  result: DailySummaryResult | TaskSummaryTestResult | Omit<MeetingExtractionResult, 'rawContent'> | MeetingExtractionResult | { draftId: string; targetType: 'area' | 'milestone'; targetId: string } | null
   error: string | null
   meta: Record<string, any>
   readAt: number | null

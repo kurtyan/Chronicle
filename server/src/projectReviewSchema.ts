@@ -35,6 +35,7 @@ export function initProjectReviewSchema(db: Database.Database): void {
       id TEXT PRIMARY KEY,
       target_type TEXT NOT NULL CHECK(target_type IN ('area', 'milestone')),
       target_id TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'periodic_review' CHECK(purpose IN ('area_progress', 'periodic_review')),
       period_start INTEGER,
       period_end INTEGER,
       request_key TEXT NOT NULL,
@@ -43,6 +44,7 @@ export function initProjectReviewSchema(db: Database.Database): void {
       content_json TEXT,
       model TEXT NOT NULL,
       prompt_version TEXT NOT NULL,
+      prompt_text TEXT,
       budget_json TEXT NOT NULL,
       background_task_id TEXT,
       error_message TEXT,
@@ -58,6 +60,9 @@ export function initProjectReviewSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_project_insights_target ON project_insight_drafts(target_type, target_id, created_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_project_insights_running_request ON project_insight_drafts(request_key) WHERE status = 'running';
   `)
+  const insightColumns = db.prepare('PRAGMA table_info(project_insight_drafts)').all() as Array<{ name: string }>
+  if (!insightColumns.some(column => column.name === 'prompt_text')) db.exec('ALTER TABLE project_insight_drafts ADD COLUMN prompt_text TEXT')
+  if (!insightColumns.some(column => column.name === 'purpose')) db.exec("ALTER TABLE project_insight_drafts ADD COLUMN purpose TEXT NOT NULL DEFAULT 'periodic_review'")
   // Execution ownership cannot survive a process restart. Keep durable evidence/results.
   const now = Date.now()
   db.prepare(`UPDATE project_insight_drafts SET status = 'error', error_message = 'Generation interrupted by server restart; retry to create a new draft', updated_at = ?, completed_at = ? WHERE status = 'running'`).run(now, now)

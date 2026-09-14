@@ -22,6 +22,7 @@ function isArea(value: unknown): value is Area {
     && ['active', 'paused', 'ended'].includes(String(value.status))
     && typeof value.archived === 'boolean' && revision(value.revision)
     && finite(value.createdAt) && finite(value.updatedAt) && nullableNumber(value.summaryUpdatedAt)
+    && finite(value.sortOrder)
     && (value.summarySource === null || value.summarySource === 'manual' || value.summarySource === 'insight')
     && nullableText(value.summarySourceNoteId) && nullableText(value.summarySourceInsightId)
     && nullableNumber(value.summarySourceNoteRevision)

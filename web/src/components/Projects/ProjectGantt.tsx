@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '@/i18n/context'
 import { translations } from '@/i18n/translations'
 import type { Locale } from '@/i18n/translations'
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Pause, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronLeft, ChevronRight, Pause, X, ZoomIn, ZoomOut } from 'lucide-react'
 import type { Area, MilestoneOverview, WorkStatistics } from '@/services/projectApi'
 import type { ProjectSelection } from './ProjectNotesPanel'
 import { MilestonePeek } from './MilestonePeek'
@@ -29,25 +29,46 @@ export function milestoneSchedule(m: Pick<MilestoneOverview, 'startDate' | 'targ
   return text('project.gantt.unscheduled')
 }
 
-export function ProjectGantt({ areas, milestones, statistics, onSelect, onSchedule, periodLabel }: {
+export type TimelineScale = 'year' | 'month' | 'week' | 'day'
+const scaleOrder: TimelineScale[] = ['year', 'month', 'week', 'day']
+
+export function getGanttTimeWindow(anchor: number, scale: TimelineScale) {
+  const d = new Date(anchor)
+  if (scale === 'year') {
+    const start = new Date(d.getFullYear(), d.getMonth() - 3, 1).getTime()
+    return { start, end: new Date(d.getFullYear(), d.getMonth() + 9, 1).getTime(), ticks: Array.from({ length: 12 }, (_, i) => new Date(d.getFullYear(), d.getMonth() - 3 + i, 1).getTime()), tickKind: 'month' as const }
+  }
+  if (scale === 'month') {
+    const start = new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime()
+    return { start, end: new Date(d.getFullYear(), d.getMonth() + 5, 1).getTime(), ticks: Array.from({ length: 6 }, (_, i) => new Date(d.getFullYear(), d.getMonth() - 1 + i, 1).getTime()), tickKind: 'month' as const }
+  }
+  const monday = addDays(day(anchor), -((d.getDay() + 6) % 7))
+  const days = scale === 'day' ? 35 : 70
+  const start = addDays(monday, scale === 'day' ? -7 : -14)
+  return { start, end: addDays(start, days), ticks: Array.from({ length: days / 7 }, (_, i) => addDays(start, i * 7)), tickKind: 'week' as const }
+}
+
+export function ProjectGantt({ areas, milestones, statistics, onSelect, onSchedule, onReorderAreas, periodLabel }: {
   areas: Area[]; milestones: MilestoneOverview[]; statistics: WorkStatistics
-  onSelect: (target: ProjectSelection) => void; onSchedule: (milestone: MilestoneOverview) => void; periodLabel: string
+  onSelect: (target: ProjectSelection) => void; onSchedule: (milestone: MilestoneOverview) => void
+  onReorderAreas?: (areaIds: string[]) => Promise<void>; periodLabel: string
 }) {
   const { t, locale } = useI18n()
   const { params, update, location } = useProjectViewQuery()
   const dateLocale = locale === 'en' ? 'en-US' : 'zh-CN'
   const label = (value: number) => new Date(value).toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' })
   const fullLabel = (value: number) => new Date(value).toLocaleDateString(dateLocale, { year: 'numeric', month: 'short', day: 'numeric' })
-  const scale = params.get('scale') === 'month' ? 'month' : 'week'
+  const scale = scaleOrder.includes(params.get('scale') as TimelineScale) ? params.get('scale') as TimelineScale : 'week'
   const defaultAnchor = useRef(Date.now()).current
   const rawAnchor = Number(params.get('anchor'))
   const anchor = rawAnchor > 0 && rawAnchor < 8.64e15 ? rawAnchor : defaultAnchor
-  const setScale = (value: 'week' | 'month') => update({ scale: value })
+  const setScale = (value: TimelineScale) => update({ scale: value })
   const setAnchor = (value: number | ((previous: number) => number)) => update({ anchor: String(typeof value === 'function' ? value(anchor) : value) })
   const collapsed = new Set((params.get('collapsed') || '').split(',').filter(Boolean))
   const setCollapsed = (value: (previous: Set<string>) => Set<string>) => update({ collapsed: [...value(collapsed)].join(',') })
   const selected = params.get('selected') || ''
   const [shelves, setShelves] = useState<Record<string, 'undated' | 'outside' | undefined>>({})
+  const [reorderingArea, setReorderingArea] = useState<string | null>(null)
   const [peek, setPeek] = useState<MilestonePeekTarget | null>(null)
   const peekTimer = useRef<ReturnType<typeof setTimeout>>()
   const clearPeekTimer = () => { clearTimeout(peekTimer.current) }
@@ -88,43 +109,50 @@ export function ProjectGantt({ areas, milestones, statistics, onSelect, onSchedu
     observer.observe(axis.current)
     return () => observer.disconnect()
   }, [])
-  const timeWindow = useMemo(() => {
-    const d = new Date(anchor)
-    if (scale === 'month') {
-      const start = new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime()
-      return { start, end: new Date(d.getFullYear(), d.getMonth() + 5, 1).getTime(), ticks: Array.from({ length: 6 }, (_, i) => new Date(d.getFullYear(), d.getMonth() - 1 + i, 1).getTime()) }
-    }
-    const monday = addDays(day(anchor), -((d.getDay() + 6) % 7))
-    const start = addDays(monday, -14)
-    return { start, end: addDays(start, 70), ticks: Array.from({ length: 10 }, (_, i) => addDays(start, i * 7)) }
-  }, [anchor, scale])
+  const timeWindow = useMemo(() => getGanttTimeWindow(anchor, scale), [anchor, scale])
   const position = (date: number) => (date - timeWindow.start) / (timeWindow.end - timeWindow.start) * 100
   const todayPosition = position(day(Date.now()))
   const move = (direction: number) => setAnchor(value => {
-    const date = new Date(value)
-    if (scale === 'month') { date.setDate(1); date.setMonth(date.getMonth() + direction * 3) }
-    else date.setDate(date.getDate() + direction * 35)
-    return date.getTime()
+    const span = timeWindow.end - timeWindow.start
+    return value + direction * span * 0.5
   })
+  const zoom = (direction: number) => {
+    const index = scaleOrder.indexOf(scale)
+    setScale(scaleOrder[Math.max(0, Math.min(scaleOrder.length - 1, index + direction))])
+  }
+  const pan = (pixels: number) => {
+    if (!trackWidth || !pixels) return
+    setAnchor(value => value + pixels / trackWidth * (timeWindow.end - timeWindow.start))
+  }
+  const drag = useRef<{ pointerId: number; x: number; anchor: number } | null>(null)
+  const reorderArea = async (areaId: string, direction: -1 | 1) => {
+    const index = areas.findIndex(area => area.id === areaId)
+    const nextIndex = index + direction
+    if (!onReorderAreas || index < 0 || nextIndex < 0 || nextIndex >= areas.length || reorderingArea) return
+    const next = areas.map(area => area.id)
+    ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
+    setReorderingArea(areaId)
+    try { await onReorderAreas(next) } finally { setReorderingArea(null) }
+  }
   const selectMilestone = (m: MilestoneOverview) => { closePeek(); onSelect({ type: 'milestone', id: m.id, name: m.name }) }
   return <section data-testid="project-gantt" className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card">
     <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
       <div className="flex items-center gap-1"><span className="mr-2 hidden text-[11px] text-muted-foreground sm:inline">{t('project.workspace.timelineScope')}</span><button className={iconButton} aria-label={t('project.gantt.previous')} onClick={() => move(-1)}><ChevronLeft className="h-4 w-4" /></button><span className="min-w-[174px] text-center text-[13px] font-medium tabular-nums">{fullLabel(timeWindow.start)} — {label(addDays(timeWindow.end, -1))}</span><button className={iconButton} aria-label={t('project.gantt.next')} onClick={() => move(1)}><ChevronRight className="h-4 w-4" /></button><button className="ml-2 rounded-md px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setAnchor(Date.now())}>{t('project.gantt.today')}</button></div>
-      <div className="flex rounded-lg bg-muted/70 p-0.5">{(['week', 'month'] as const).map(value => <button key={value} className={`rounded-md px-3 py-1 text-xs transition ${scale === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} aria-pressed={scale === value} onClick={() => setScale(value)}>{t(value === 'week' ? 'project.gantt.weeks' : 'project.gantt.months')}</button>)}</div>
+      <div className="flex items-center gap-1"><button className={iconButton} aria-label={t('project.gantt.zoomOut')} disabled={scale === 'year'} onClick={() => zoom(-1)}><ZoomOut className="h-4 w-4" /></button><div className="flex rounded-lg bg-muted/70 p-0.5">{(['week', 'month'] as const).map(value => <button key={value} className={`rounded-md px-3 py-1 text-xs transition ${scale === value ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground'}`} aria-pressed={scale === value} onClick={() => setScale(value)}>{t(value === 'week' ? 'project.gantt.weeks' : 'project.gantt.months')}</button>)}</div><button className={iconButton} aria-label={t('project.gantt.zoomIn')} disabled={scale === 'day'} onClick={() => zoom(1)}><ZoomIn className="h-4 w-4" /></button></div>
     </div>
-    <div ref={scroller} onScroll={event => saveProjectScroll(scrollKey, event.currentTarget)} className="min-h-0 flex-1 overflow-auto" role="region" aria-label={t('project.gantt.region')} tabIndex={0}>
+    <div ref={scroller} onScroll={event => saveProjectScroll(scrollKey, event.currentTarget)} onWheel={event => { if (Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.shiftKey) { event.preventDefault(); pan(event.shiftKey ? event.deltaY : event.deltaX) } }} className="min-h-0 flex-1 overflow-auto" role="region" aria-label={t('project.gantt.region')} tabIndex={0}>
       <div className="min-h-full min-w-[920px]" style={{ gridTemplateRows: `40px repeat(${Math.max(areas.length, 1)}, min-content) 1fr`, display: 'grid', gridTemplateColumns: '220px minmax(700px, 1fr)' }}>
         <div className="sticky left-0 top-0 z-30 flex h-10 items-center justify-between border-b border-r border-t border-border/60 bg-muted px-4 text-[11px] text-muted-foreground"><span>{t('project.overview.area')}</span><span>{t('project.overview.effort', { period: periodLabel })}</span></div>
-        <div ref={axis} className="sticky top-0 z-20 h-10 border-b border-t border-border/60 bg-muted" data-testid="gantt-axis">{timeWindow.ticks.map(tick => <span key={tick} className="absolute top-3 pl-2 text-[11px] tabular-nums text-muted-foreground" style={{ left: `${position(tick)}%` }}>{scale === 'month' ? new Date(tick).toLocaleDateString(dateLocale, { month: 'short' }) : label(tick)}</span>)}{todayPosition >= 0 && todayPosition < 100 && <span className="absolute top-0 border-l border-rose-400 px-1 text-[9px] font-medium text-rose-500" style={{ left: `${todayPosition}%` }}>{t('project.gantt.today')}</span>}</div>
+        <div ref={axis} className="sticky top-0 z-20 h-10 cursor-grab select-none touch-pan-y border-b border-t border-border/60 bg-muted active:cursor-grabbing" data-testid="gantt-axis" title={t('project.gantt.panHint')} onPointerDown={event => { drag.current = { pointerId: event.pointerId, x: event.clientX, anchor }; event.currentTarget.setPointerCapture(event.pointerId) }} onPointerMove={event => { const state = drag.current; if (!state || state.pointerId !== event.pointerId) return; const pixels = state.x - event.clientX; setAnchor(state.anchor + pixels / Math.max(trackWidth, 1) * (timeWindow.end - timeWindow.start)) }} onPointerUp={event => { if (drag.current?.pointerId === event.pointerId) drag.current = null; event.currentTarget.releasePointerCapture(event.pointerId) }} onPointerCancel={() => { drag.current = null }}>{timeWindow.ticks.map(tick => <span key={tick} className="pointer-events-none absolute top-3 pl-2 text-[11px] tabular-nums text-muted-foreground" style={{ left: `${position(tick)}%` }}>{timeWindow.tickKind === 'month' ? new Date(tick).toLocaleDateString(dateLocale, { month: 'short' }) : label(tick)}</span>)}{todayPosition >= 0 && todayPosition < 100 && <span className="pointer-events-none absolute top-0 border-l border-rose-400 px-1 text-[9px] font-medium text-rose-500" style={{ left: `${todayPosition}%` }}>{t('project.gantt.today')}</span>}</div>
         {!areas.length && <p role="status" className="col-span-2 px-5 py-10 text-center text-sm text-muted-foreground">{t('project.gantt.empty')}</p>}
-        {areas.map(area => {
+        {areas.map((area, areaIndex) => {
           const children = milestones.filter(m => m.areaId === area.id)
           const hidden = collapsed.has(area.id)
           const layout = layoutMilestones(children, timeWindow.start, timeWindow.end, trackWidth)
           const shelf = shelves[area.id]
           return <div key={area.id} className="contents" data-testid="gantt-area-lane" data-area-id={area.id}>
             <div className="group sticky left-0 z-10 border-b border-r border-border/60 bg-card px-3 py-3" data-testid="gantt-area-label">
-              <div className="flex h-5 items-center gap-1"><button aria-label={t(hidden ? 'project.gantt.expand' : 'project.gantt.collapse', { name: area.name })} aria-expanded={!hidden} className="shrink-0 rounded text-muted-foreground/60 hover:text-foreground" onClick={() => setCollapsed(previous => { const next = new Set(previous); if (hidden) next.delete(area.id); else next.add(area.id); return next })}><ChevronDown className={`h-3 w-3 transition ${hidden ? '-rotate-90' : ''}`} /></button><button data-project-object={`area:${area.id}`} aria-pressed={selected === `area:${area.id}`} className={`min-w-0 truncate rounded text-left text-[13px] font-semibold hover:text-primary ${selected === `area:${area.id}` ? "text-primary underline decoration-primary/30 underline-offset-4" : ""}`} title={area.name} onClick={event => { event.currentTarget.focus(); closePeek(); onSelect({ type: 'area', id: area.id, name: area.name }) }}>{area.name}</button><span className="ml-auto pl-2 text-xs font-medium tabular-nums text-muted-foreground">{compactDuration(statistics.byArea.find(g => g.id === area.id)?.totalMs || 0)}</span></div>
+              <div className="flex h-5 items-center gap-1"><button aria-label={t(hidden ? 'project.gantt.expand' : 'project.gantt.collapse', { name: area.name })} aria-expanded={!hidden} className="shrink-0 rounded text-muted-foreground/60 hover:text-foreground" onClick={() => setCollapsed(previous => { const next = new Set(previous); if (hidden) next.delete(area.id); else next.add(area.id); return next })}><ChevronDown className={`h-3 w-3 transition ${hidden ? '-rotate-90' : ''}`} /></button><button data-project-object={`area:${area.id}`} aria-pressed={selected === `area:${area.id}`} className={`min-w-0 truncate rounded text-left text-[13px] font-semibold hover:text-primary ${selected === `area:${area.id}` ? "text-primary underline decoration-primary/30 underline-offset-4" : ""}`} title={area.name} onClick={event => { event.currentTarget.focus(); closePeek(); onSelect({ type: 'area', id: area.id, name: area.name }) }}>{area.name}</button>{onReorderAreas && <span className="ml-auto flex shrink-0 opacity-40 transition group-hover:opacity-100 group-focus-within:opacity-100"><button className={iconButton} disabled={areaIndex === 0 || !!reorderingArea} aria-label={t('project.gantt.moveAreaUp', { name: area.name })} onClick={() => void reorderArea(area.id, -1)}><ArrowUp className="h-3 w-3" /></button><button className={iconButton} disabled={areaIndex === areas.length - 1 || !!reorderingArea} aria-label={t('project.gantt.moveAreaDown', { name: area.name })} onClick={() => void reorderArea(area.id, 1)}><ArrowDown className="h-3 w-3" /></button></span>}<span className={`${onReorderAreas ? '' : 'ml-auto'} pl-2 text-xs font-medium tabular-nums text-muted-foreground`}>{compactDuration(statistics.byArea.find(g => g.id === area.id)?.totalMs || 0)}</span></div>
               <p className="ml-4 mt-1 truncate text-[11px] text-muted-foreground">{area.archived ? `${t('project.overview.archived')} · ` : ''}{area.latestProgress || t('project.gantt.count', { count: String(children.length) })}</p>
             </div>
             <div className="relative flex min-h-[72px] flex-col border-b border-border/60 bg-card" data-testid="gantt-track">

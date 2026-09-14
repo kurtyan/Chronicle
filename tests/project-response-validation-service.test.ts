@@ -7,7 +7,7 @@ test.beforeEach(() => setRuntimeLocale('zh-CN'))
 test.afterEach(() => setRuntimeLocale('en'))
 
 const area: Area = {
-  id: 'A-test', name: '方向', description: '', focus: '', status: 'active',
+  id: 'A-test', name: '方向', description: '', focus: '', status: 'active', sortOrder: 1000,
   latestProgress: '', nextStep: '', summaryUpdatedAt: null, summarySource: null,
   summarySourceNoteId: null, summarySourceInsightId: null, summarySourceNoteRevision: null,
   archived: false, revision: 1, createdAt: 1, updatedAt: 1,

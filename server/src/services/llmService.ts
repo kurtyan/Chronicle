@@ -5,6 +5,8 @@ import {
   DEFAULT_DAILY_SUMMARY_PROMPT,
   DEFAULT_MEETING_EXTRACTION_PROMPT,
   DEFAULT_TASK_SUMMARY_PROMPT,
+  DEFAULT_AREA_PROGRESS_PROMPT,
+  DEFAULT_PROJECT_INSIGHT_PROMPT,
   TASK_SUMMARY_DEFAULT_PROMPT_VERSION,
 } from '../../../shared/llmPrompts'
 
@@ -12,6 +14,8 @@ export {
   DEFAULT_DAILY_SUMMARY_PROMPT,
   DEFAULT_MEETING_EXTRACTION_PROMPT,
   DEFAULT_TASK_SUMMARY_PROMPT,
+  DEFAULT_AREA_PROGRESS_PROMPT,
+  DEFAULT_PROJECT_INSIGHT_PROMPT,
   TASK_SUMMARY_DEFAULT_PROMPT_VERSION,
 }
 
@@ -23,12 +27,18 @@ export interface LlmSettings {
   meetingExtractionMaxTokens: number
   taskSummaryMaxTokens: number
   dailySummaryMaxTokens: number
+  areaProgressMaxTokens: number
+  projectInsightMaxTokens: number
   meetingExtractionPrompt: string
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string
   defaultTaskSummaryPrompt: string
   dailySummaryPrompt: string
   defaultDailySummaryPrompt: string
+  areaProgressPrompt: string
+  defaultAreaProgressPrompt: string
+  projectInsightPrompt: string
+  defaultProjectInsightPrompt: string
 }
 
 export interface LlmCallLog {
@@ -86,6 +96,10 @@ function normalizeMaxTokens(value: unknown, fallback: number): number {
   return Math.max(16, Math.min(32000, Math.floor(parsed)))
 }
 
+function normalizeProjectInsightMaxTokens(value: unknown): number {
+  return Math.max(256, normalizeMaxTokens(value, 4000))
+}
+
 export function getLlmSettings(): LlmSettings {
   const config = getConfig().llm
   return {
@@ -96,12 +110,18 @@ export function getLlmSettings(): LlmSettings {
     meetingExtractionMaxTokens: normalizeMaxTokens(config.meetingExtractionMaxTokens, 4000),
     taskSummaryMaxTokens: normalizeMaxTokens(config.taskSummaryMaxTokens, 1200),
     dailySummaryMaxTokens: normalizeMaxTokens(config.dailySummaryMaxTokens, 4000),
+    areaProgressMaxTokens: normalizeProjectInsightMaxTokens(config.areaProgressMaxTokens),
+    projectInsightMaxTokens: normalizeProjectInsightMaxTokens(config.projectInsightMaxTokens),
     meetingExtractionPrompt: config.meetingExtractionPrompt,
     defaultMeetingExtractionPrompt: DEFAULT_MEETING_EXTRACTION_PROMPT,
     taskSummaryPrompt: config.taskSummaryPrompt,
     defaultTaskSummaryPrompt: DEFAULT_TASK_SUMMARY_PROMPT,
     dailySummaryPrompt: config.dailySummaryPrompt,
     defaultDailySummaryPrompt: DEFAULT_DAILY_SUMMARY_PROMPT,
+    areaProgressPrompt: config.areaProgressPrompt,
+    defaultAreaProgressPrompt: DEFAULT_AREA_PROGRESS_PROMPT,
+    projectInsightPrompt: config.projectInsightPrompt,
+    defaultProjectInsightPrompt: DEFAULT_PROJECT_INSIGHT_PROMPT,
   }
 }
 
@@ -117,6 +137,12 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
   const dailySummaryMaxTokens = input.dailySummaryMaxTokens === undefined
     ? current.dailySummaryMaxTokens
     : normalizeMaxTokens(input.dailySummaryMaxTokens, 4000)
+  const areaProgressMaxTokens = input.areaProgressMaxTokens === undefined
+    ? current.areaProgressMaxTokens
+    : normalizeProjectInsightMaxTokens(input.areaProgressMaxTokens)
+  const projectInsightMaxTokens = input.projectInsightMaxTokens === undefined
+    ? current.projectInsightMaxTokens
+    : normalizeProjectInsightMaxTokens(input.projectInsightMaxTokens)
   updateConfig({
     llm: {
       baseUrl: input.baseUrl ?? current.baseUrl,
@@ -126,9 +152,13 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
       meetingExtractionMaxTokens,
       taskSummaryMaxTokens,
       dailySummaryMaxTokens,
+      areaProgressMaxTokens,
+      projectInsightMaxTokens,
       meetingExtractionPrompt: input.meetingExtractionPrompt ?? current.meetingExtractionPrompt,
       taskSummaryPrompt: input.taskSummaryPrompt ?? current.taskSummaryPrompt,
       dailySummaryPrompt: input.dailySummaryPrompt ?? current.dailySummaryPrompt,
+      areaProgressPrompt: input.areaProgressPrompt ?? current.areaProgressPrompt,
+      projectInsightPrompt: input.projectInsightPrompt ?? current.projectInsightPrompt,
     },
   } as any)
   return getLlmSettings()
@@ -141,6 +171,8 @@ export async function testLlmConnection(): Promise<{ ok: boolean; latencyMs: num
     settings.meetingExtractionMaxTokens,
     settings.taskSummaryMaxTokens,
     settings.dailySummaryMaxTokens,
+    settings.areaProgressMaxTokens,
+    settings.projectInsightMaxTokens,
   )
   await callChatCompletions(settings, [
     { role: 'system', content: 'Reply with JSON only.\n- Answer in Chinese.' },

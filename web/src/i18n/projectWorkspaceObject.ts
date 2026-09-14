@@ -28,5 +28,6 @@ export const projectWorkspaceObjectTranslations: Record<string, TranslationEntry
   'project.object.doneSelecting': { 'zh-CN': '退出选择', en: 'Done selecting' },
   'project.object.noNotes': { 'zh-CN': '关联资料、成果或感悟，供下次继续使用。', en: 'Link useful references, outcomes or reflections to return to later.' },
   'project.object.propertiesHistory': { 'zh-CN': '属性与管理历史', en: 'Properties & history' },
+  'project.object.reviewWorkspace': { 'zh-CN': '回顾与沉淀', en: 'Review & reflection' },
   'project.object.editProperties': { 'zh-CN': '编辑属性', en: 'Edit properties' },
 }

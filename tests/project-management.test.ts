@@ -60,6 +60,18 @@ test('HTTP objects, typed backlinks, rename and statistical conservation', async
   expect(search.results.areas.some((a: any) => a.id === area.id)).toBeTruthy()
 })
 
+test('Area order is durable and reorders only the requested visible subset', async ({ request }) => {
+  const first = await post(request, '/api/areas', { name: unique('First area') })
+  const hidden = await post(request, '/api/areas', { name: unique('Hidden between') })
+  const last = await post(request, '/api/areas', { name: unique('Last area') })
+  const reordered = await post(request, '/api/areas/reorder', { areaIds: [last.id, first.id] })
+  const relevant = reordered.filter((area: any) => [first.id, hidden.id, last.id].includes(area.id)).map((area: any) => area.id)
+  expect(relevant).toEqual([last.id, hidden.id, first.id])
+  const catalog = await get(request, '/api/projects/catalog?includeArchived=true')
+  expect(catalog.areas.filter((area: any) => [first.id, hidden.id, last.id].includes(area.id)).map((area: any) => area.id)).toEqual(relevant)
+  expect(new Set(catalog.areas.map((area: any) => area.sortOrder)).size).toBe(catalog.areas.length)
+})
+
 test('legacy Task updates cannot bypass assignment preview; apply and undo remain atomic', async ({ request }) => {
   const { milestone, ongoing, task } = await setup(request)
   record(task.id, Date.now() - 60_000, Date.now() - 30_000)
@@ -157,7 +169,7 @@ test('MCP discovers and uses the same Area and primary milestone model', async (
 })
 
 test('project page creates an Area and opens a stage milestone with navigable references', async ({ page, request }) => {
-  const { milestone, task } = await setup(request)
+  const { area, milestone, task } = await setup(request)
   await page.goto('/projects')
   await expect(page.getByRole('heading', { name: '方向与里程碑' })).toBeVisible()
   await page.getByRole('button', { name: '新建方向', exact: true }).click()
@@ -177,6 +189,8 @@ test('project page creates an Area and opens a stage milestone with navigable re
   await page.goto(`/projects/milestones/${milestone.id}`)
   await expect(page.getByRole('heading', { name: milestone.name, exact: true })).toBeVisible()
   await expect(page.getByTestId('project-object-tasks').getByText(task.title, { exact: true })).toBeVisible()
+  await page.goto('/')
+  await expect(page.locator(`[data-task-id="${task.id}"]`)).toContainText(`${area.name} / ${milestone.name}`)
 })
 
 test('invalid project requests fail without mutations', async ({ request }) => {

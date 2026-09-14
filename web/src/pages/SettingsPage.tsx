@@ -65,6 +65,8 @@ type SettingsSectionId =
   | 'ai.meetingExtraction'
   | 'ai.taskSummary'
   | 'ai.dailySummary'
+  | 'ai.areaProgress'
+  | 'ai.periodicReview'
   | 'data.database'
   | 'data.importExport'
   | 'diagnostics.clientLog'
@@ -96,6 +98,50 @@ function formatTimestamp(ts: number | null): string {
 function normalizeMaxTokens(value: number, fallback: number): number {
   if (!Number.isFinite(value)) return fallback
   return Math.max(16, Math.min(32000, Math.floor(value)))
+}
+
+type LlmTokenBudgetKey =
+  | 'meetingExtractionMaxTokens'
+  | 'taskSummaryMaxTokens'
+  | 'dailySummaryMaxTokens'
+  | 'areaProgressMaxTokens'
+  | 'projectInsightMaxTokens'
+
+type LlmTokenDrafts = Record<LlmTokenBudgetKey, string>
+
+const LLM_TOKEN_BUDGET_FIELDS: Array<{
+  key: LlmTokenBudgetKey
+  label: string
+  min: number
+}> = [
+  { key: 'meetingExtractionMaxTokens', label: 'Meeting Max Tokens', min: 16 },
+  { key: 'taskSummaryMaxTokens', label: 'Task Summary Max Tokens', min: 16 },
+  { key: 'dailySummaryMaxTokens', label: 'Daily Summary Max Tokens', min: 16 },
+  { key: 'areaProgressMaxTokens', label: 'Area Progress Max Tokens', min: 256 },
+  { key: 'projectInsightMaxTokens', label: 'Periodic Review Max Tokens', min: 256 },
+]
+
+function tokenDraftsFromSettings(settings: LlmSettings): LlmTokenDrafts {
+  return {
+    meetingExtractionMaxTokens: String(settings.meetingExtractionMaxTokens),
+    taskSummaryMaxTokens: String(settings.taskSummaryMaxTokens),
+    dailySummaryMaxTokens: String(settings.dailySummaryMaxTokens),
+    areaProgressMaxTokens: String(settings.areaProgressMaxTokens),
+    projectInsightMaxTokens: String(settings.projectInsightMaxTokens),
+  }
+}
+
+function applyTokenDrafts(settings: LlmSettings, drafts: LlmTokenDrafts): LlmSettings {
+  const next = { ...settings }
+  for (const field of LLM_TOKEN_BUDGET_FIELDS) {
+    const raw = drafts[field.key].trim()
+    const value = Number(raw)
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < field.min || value > 32000) {
+      throw new Error(`${field.label} must be a whole number between ${field.min} and 32000`)
+    }
+    next[field.key] = value
+  }
+  return next
 }
 
 function LogJsonBlock({ label, value }: { label: string; value: unknown }) {
@@ -130,6 +176,8 @@ function displayLlmSettings(settings: LlmSettings): LlmSettings {
     meetingExtractionPrompt: settings.meetingExtractionPrompt || settings.defaultMeetingExtractionPrompt,
     taskSummaryPrompt: settings.taskSummaryPrompt || settings.defaultTaskSummaryPrompt,
     dailySummaryPrompt: settings.dailySummaryPrompt || settings.defaultDailySummaryPrompt,
+    areaProgressPrompt: settings.areaProgressPrompt || settings.defaultAreaProgressPrompt,
+    projectInsightPrompt: settings.projectInsightPrompt || settings.defaultProjectInsightPrompt,
   }
 }
 
@@ -140,6 +188,10 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
   const defaultTaskSummaryPrompt = settings.defaultTaskSummaryPrompt.trim()
   const dailySummaryPrompt = settings.dailySummaryPrompt.trim()
   const defaultDailySummaryPrompt = settings.defaultDailySummaryPrompt.trim()
+  const areaProgressPrompt = settings.areaProgressPrompt.trim()
+  const defaultAreaProgressPrompt = settings.defaultAreaProgressPrompt.trim()
+  const projectInsightPrompt = settings.projectInsightPrompt.trim()
+  const defaultProjectInsightPrompt = settings.defaultProjectInsightPrompt.trim()
   return {
     baseUrl: settings.baseUrl,
     model: settings.model,
@@ -148,9 +200,13 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
     meetingExtractionMaxTokens: normalizeMaxTokens(settings.meetingExtractionMaxTokens, 4000),
     taskSummaryMaxTokens: normalizeMaxTokens(settings.taskSummaryMaxTokens, 1200),
     dailySummaryMaxTokens: normalizeMaxTokens(settings.dailySummaryMaxTokens, 4000),
+    areaProgressMaxTokens: Math.max(256, normalizeMaxTokens(settings.areaProgressMaxTokens, 4000)),
+    projectInsightMaxTokens: Math.max(256, normalizeMaxTokens(settings.projectInsightMaxTokens, 4000)),
     meetingExtractionPrompt: meetingPrompt === defaultMeetingPrompt ? '' : settings.meetingExtractionPrompt,
     taskSummaryPrompt: taskSummaryPrompt === defaultTaskSummaryPrompt ? '' : settings.taskSummaryPrompt,
     dailySummaryPrompt: dailySummaryPrompt === defaultDailySummaryPrompt ? '' : settings.dailySummaryPrompt,
+    areaProgressPrompt: areaProgressPrompt === defaultAreaProgressPrompt ? '' : settings.areaProgressPrompt,
+    projectInsightPrompt: projectInsightPrompt === defaultProjectInsightPrompt ? '' : settings.projectInsightPrompt,
   }
 }
 
@@ -407,16 +463,20 @@ function AutoAfkSettingsSection({
 
 function LlmProviderSettingsSection({
   settings,
+  tokenDrafts,
   saving,
   testing,
   onUpdate,
+  onTokenDraftChange,
   onSave,
   onTest,
 }: {
   settings: LlmSettings
+  tokenDrafts: LlmTokenDrafts
   saving: boolean
   testing: boolean
   onUpdate: (patch: Partial<LlmSettings>) => void
+  onTokenDraftChange: (key: LlmTokenBudgetKey, value: string) => void
   onSave: () => void
   onTest: () => void
 }) {
@@ -470,8 +530,8 @@ function LlmProviderSettingsSection({
             max={32000}
             step={100}
             className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-            value={settings.meetingExtractionMaxTokens}
-            onChange={(e) => onUpdate({ meetingExtractionMaxTokens: normalizeMaxTokens(parseInt(e.target.value, 10), 4000) })}
+            value={tokenDrafts.meetingExtractionMaxTokens}
+            onChange={(e) => onTokenDraftChange('meetingExtractionMaxTokens', e.target.value)}
           />
         </label>
         <label className="space-y-1">
@@ -482,8 +542,8 @@ function LlmProviderSettingsSection({
             max={32000}
             step={100}
             className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-            value={settings.taskSummaryMaxTokens}
-            onChange={(e) => onUpdate({ taskSummaryMaxTokens: normalizeMaxTokens(parseInt(e.target.value, 10), 1200) })}
+            value={tokenDrafts.taskSummaryMaxTokens}
+            onChange={(e) => onTokenDraftChange('taskSummaryMaxTokens', e.target.value)}
           />
         </label>
         <label className="space-y-1">
@@ -494,8 +554,32 @@ function LlmProviderSettingsSection({
             max={32000}
             step={100}
             className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
-            value={settings.dailySummaryMaxTokens}
-            onChange={(e) => onUpdate({ dailySummaryMaxTokens: normalizeMaxTokens(parseInt(e.target.value, 10), 4000) })}
+            value={tokenDrafts.dailySummaryMaxTokens}
+            onChange={(e) => onTokenDraftChange('dailySummaryMaxTokens', e.target.value)}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Area Progress Max Tokens</span>
+          <input
+            type="number"
+            min={256}
+            max={32000}
+            step={100}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={tokenDrafts.areaProgressMaxTokens}
+            onChange={(e) => onTokenDraftChange('areaProgressMaxTokens', e.target.value)}
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Periodic Review Max Tokens</span>
+          <input
+            type="number"
+            min={256}
+            max={32000}
+            step={100}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={tokenDrafts.projectInsightMaxTokens}
+            onChange={(e) => onTokenDraftChange('projectInsightMaxTokens', e.target.value)}
           />
         </label>
       </div>
@@ -810,6 +894,122 @@ function DailySummarySettingsSection({
       </SectionPanel>
       <LlmCallLogsSection
         featureLabel="daily summary"
+        logs={logs}
+        loading={logsLoading}
+        expandedLogId={expandedLogId}
+        onLoad={onLoadLogs}
+        onToggleExpanded={onToggleExpandedLog}
+      />
+    </div>
+  )
+}
+
+function AreaProgressSettingsSection({
+  settings,
+  saving,
+  logs,
+  logsLoading,
+  expandedLogId,
+  onUpdate,
+  onSave,
+  onLoadLogs,
+  onToggleExpandedLog,
+}: {
+  settings: LlmSettings
+  saving: boolean
+  logs: LlmCallLogSummary[]
+  logsLoading: boolean
+  expandedLogId: string | null
+  onUpdate: (patch: Partial<LlmSettings>) => void
+  onSave: () => void
+  onLoadLogs: () => void
+  onToggleExpandedLog: (id: string | null) => void
+}) {
+  return (
+    <div className="space-y-4">
+      <SectionPanel icon={<Bot className="h-5 w-5 text-muted-foreground" />} title="Area Progress Drafting">
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Prompt</span>
+          <textarea
+            className="min-h-[390px] w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-1 focus:ring-primary"
+            value={settings.areaProgressPrompt}
+            onChange={(e) => onUpdate({ areaProgressPrompt: e.target.value })}
+            placeholder="Area progress drafting prompt"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            Drafts source-grounded Area progress and next steps for the selected period. Keep the required JSON shape and exact-source citation rules.
+          </span>
+        </label>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={onSave} disabled={saving} className="dialog-button-primary">
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving...' : 'Save Prompt'}
+          </button>
+          <button onClick={() => onUpdate({ areaProgressPrompt: settings.defaultAreaProgressPrompt })} className="dialog-button-secondary">
+            Restore Default
+          </button>
+        </div>
+      </SectionPanel>
+      <LlmCallLogsSection
+        featureLabel="area progress drafting"
+        logs={logs}
+        loading={logsLoading}
+        expandedLogId={expandedLogId}
+        onLoad={onLoadLogs}
+        onToggleExpanded={onToggleExpandedLog}
+      />
+    </div>
+  )
+}
+
+function PeriodicReviewSettingsSection({
+  settings,
+  saving,
+  logs,
+  logsLoading,
+  expandedLogId,
+  onUpdate,
+  onSave,
+  onLoadLogs,
+  onToggleExpandedLog,
+}: {
+  settings: LlmSettings
+  saving: boolean
+  logs: LlmCallLogSummary[]
+  logsLoading: boolean
+  expandedLogId: string | null
+  onUpdate: (patch: Partial<LlmSettings>) => void
+  onSave: () => void
+  onLoadLogs: () => void
+  onToggleExpandedLog: (id: string | null) => void
+}) {
+  return (
+    <div className="space-y-4">
+      <SectionPanel icon={<Bot className="h-5 w-5 text-muted-foreground" />} title="Periodic Review">
+        <label className="block space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Prompt</span>
+          <textarea
+            className="min-h-[390px] w-full resize-y rounded-md border bg-background px-3 py-2 font-mono text-xs leading-5 outline-none focus:ring-1 focus:ring-primary"
+            value={settings.projectInsightPrompt}
+            onChange={(e) => onUpdate({ projectInsightPrompt: e.target.value })}
+            placeholder="Periodic review prompt"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            Keep the required JSON shape and exact-source citation rules. Use {'{{language}}'} where the selected review language should be inserted.
+          </span>
+        </label>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button onClick={onSave} disabled={saving} className="dialog-button-primary">
+            <Save className="h-4 w-4" />
+            {saving ? 'Saving...' : 'Save Prompt'}
+          </button>
+          <button onClick={() => onUpdate({ projectInsightPrompt: settings.defaultProjectInsightPrompt })} className="dialog-button-secondary">
+            Restore Default
+          </button>
+        </div>
+      </SectionPanel>
+      <LlmCallLogsSection
+        featureLabel="periodic review"
         logs={logs}
         loading={logsLoading}
         expandedLogId={expandedLogId}
@@ -1252,12 +1452,25 @@ export function SettingsPage() {
     meetingExtractionMaxTokens: 4000,
     taskSummaryMaxTokens: 1200,
     dailySummaryMaxTokens: 4000,
+    areaProgressMaxTokens: 4000,
+    projectInsightMaxTokens: 4000,
     meetingExtractionPrompt: '',
     defaultMeetingExtractionPrompt: '',
     taskSummaryPrompt: '',
     defaultTaskSummaryPrompt: '',
     dailySummaryPrompt: '',
     defaultDailySummaryPrompt: '',
+    areaProgressPrompt: '',
+    defaultAreaProgressPrompt: '',
+    projectInsightPrompt: '',
+    defaultProjectInsightPrompt: '',
+  })
+  const [llmTokenDrafts, setLlmTokenDrafts] = useState<LlmTokenDrafts>({
+    meetingExtractionMaxTokens: '4000',
+    taskSummaryMaxTokens: '1200',
+    dailySummaryMaxTokens: '4000',
+    areaProgressMaxTokens: '4000',
+    projectInsightMaxTokens: '4000',
   })
   const [llmSaving, setLlmSaving] = useState(false)
   const [llmTesting, setLlmTesting] = useState(false)
@@ -1273,6 +1486,12 @@ export function SettingsPage() {
   const [dailySummaryLogs, setDailySummaryLogs] = useState<LlmCallLogSummary[]>([])
   const [dailySummaryLogsLoading, setDailySummaryLogsLoading] = useState(false)
   const [expandedDailySummaryLogId, setExpandedDailySummaryLogId] = useState<string | null>(null)
+  const [areaProgressLogs, setAreaProgressLogs] = useState<LlmCallLogSummary[]>([])
+  const [areaProgressLogsLoading, setAreaProgressLogsLoading] = useState(false)
+  const [expandedAreaProgressLogId, setExpandedAreaProgressLogId] = useState<string | null>(null)
+  const [projectInsightLogs, setProjectInsightLogs] = useState<LlmCallLogSummary[]>([])
+  const [projectInsightLogsLoading, setProjectInsightLogsLoading] = useState(false)
+  const [expandedProjectInsightLogId, setExpandedProjectInsightLogId] = useState<string | null>(null)
 
   const [autoAfkEnabled, setAutoAfkEnabled] = useState(false)
   const [screenLockEnabled, setScreenLockEnabled] = useState(true)
@@ -1329,6 +1548,16 @@ export function SettingsPage() {
             id: 'ai.dailySummary',
             label: 'Daily Summary',
             description: 'Edit the daily review prompt and inspect summary calls.',
+          },
+          {
+            id: 'ai.areaProgress',
+            label: 'Area Progress Drafting',
+            description: 'Configure AI-drafted Area progress and next steps.',
+          },
+          {
+            id: 'ai.periodicReview',
+            label: 'Periodic Review',
+            description: 'Configure evidence-backed Area and Milestone review drafts.',
           },
         ],
       },
@@ -1424,19 +1653,37 @@ export function SettingsPage() {
   }, [])
 
   useEffect(() => {
-    fetchLlmSettings().then((settings) => setLlmSettings(displayLlmSettings(settings))).catch(() => {})
+    fetchLlmSettings().then((settings) => {
+      const displayed = displayLlmSettings(settings)
+      setLlmSettings(displayed)
+      setLlmTokenDrafts(tokenDraftsFromSettings(displayed))
+    }).catch(() => {})
   }, [])
 
   const updateLlmSettings = (patch: Partial<LlmSettings>) => {
     setLlmSettings((current) => ({ ...current, ...patch }))
   }
 
+  const updateLlmTokenDraft = (key: LlmTokenBudgetKey, value: string) => {
+    setLlmTokenDrafts((current) => ({ ...current, [key]: value }))
+  }
+
+  const currentSerializedLlmSettings = () => (
+    serializeLlmSettings(applyTokenDrafts(llmSettings, llmTokenDrafts))
+  )
+
+  const applySavedLlmSettings = (settings: LlmSettings) => {
+    const displayed = displayLlmSettings(settings)
+    setLlmSettings(displayed)
+    setLlmTokenDrafts(tokenDraftsFromSettings(displayed))
+  }
+
   const handleSaveLlmSettings = async () => {
     setLlmSaving(true)
     setMessage(null)
     try {
-      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
-      setLlmSettings(displayLlmSettings(saved))
+      const saved = await saveLlmSettings(currentSerializedLlmSettings())
+      applySavedLlmSettings(saved)
       setMessage({ type: 'success', text: 'LLM settings saved' })
       setTimeout(() => setMessage(null), 3000)
     } catch (err: any) {
@@ -1450,7 +1697,7 @@ export function SettingsPage() {
     setLlmTesting(true)
     setMessage(null)
     try {
-      await saveLlmSettings(serializeLlmSettings(llmSettings))
+      await saveLlmSettings(currentSerializedLlmSettings())
       const result = await testLlmConnection()
       setMessage({ type: 'success', text: `LLM connection OK (${result.latencyMs ?? 0} ms)` })
       setTimeout(() => setMessage(null), 3000)
@@ -1463,8 +1710,8 @@ export function SettingsPage() {
 
   const handleTestMeetingExtractionPrompt = async () => {
     try {
-      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
-      setLlmSettings(displayLlmSettings(saved))
+      const saved = await saveLlmSettings(currentSerializedLlmSettings())
+      applySavedLlmSettings(saved)
       setShowPromptTest(true)
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save prompt before test' })
@@ -1473,8 +1720,8 @@ export function SettingsPage() {
 
   const handleTestTaskSummaryPrompt = async () => {
     try {
-      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
-      setLlmSettings(displayLlmSettings(saved))
+      const saved = await saveLlmSettings(currentSerializedLlmSettings())
+      applySavedLlmSettings(saved)
       setShowTaskSummaryPromptTest(true)
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save prompt before test' })
@@ -1483,8 +1730,8 @@ export function SettingsPage() {
 
   const handleTestDailySummaryPrompt = async () => {
     try {
-      const saved = await saveLlmSettings(serializeLlmSettings(llmSettings))
-      setLlmSettings(displayLlmSettings(saved))
+      const saved = await saveLlmSettings(currentSerializedLlmSettings())
+      applySavedLlmSettings(saved)
       setShowDailySummaryPromptTest(true)
     } catch (err: any) {
       setMessage({ type: 'error', text: err?.response?.data?.error || err?.message || 'Failed to save prompt before test' })
@@ -1527,6 +1774,32 @@ export function SettingsPage() {
       setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
     } finally {
       setDailySummaryLogsLoading(false)
+    }
+  }
+
+  const loadProjectInsightLogs = async () => {
+    setProjectInsightLogsLoading(true)
+    try {
+      const res = await apiFetch('/api/llm-call-logs?feature=project_insight&limit=50')
+      if (!res.ok) throw new Error('Failed to load LLM logs')
+      setProjectInsightLogs(await res.json())
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
+    } finally {
+      setProjectInsightLogsLoading(false)
+    }
+  }
+
+  const loadAreaProgressLogs = async () => {
+    setAreaProgressLogsLoading(true)
+    try {
+      const res = await apiFetch('/api/llm-call-logs?feature=area_progress&limit=50')
+      if (!res.ok) throw new Error('Failed to load LLM logs')
+      setAreaProgressLogs(await res.json())
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err?.message || 'Failed to load LLM logs' })
+    } finally {
+      setAreaProgressLogsLoading(false)
     }
   }
 
@@ -1679,9 +1952,11 @@ export function SettingsPage() {
         return (
           <LlmProviderSettingsSection
             settings={llmSettings}
+            tokenDrafts={llmTokenDrafts}
             saving={llmSaving}
             testing={llmTesting}
             onUpdate={updateLlmSettings}
+            onTokenDraftChange={updateLlmTokenDraft}
             onSave={handleSaveLlmSettings}
             onTest={handleTestLlmConnection}
           />
@@ -1729,6 +2004,34 @@ export function SettingsPage() {
             onTestPrompt={handleTestDailySummaryPrompt}
             onLoadLogs={loadDailySummaryLogs}
             onToggleExpandedLog={setExpandedDailySummaryLogId}
+          />
+        )
+      case 'ai.areaProgress':
+        return (
+          <AreaProgressSettingsSection
+            settings={llmSettings}
+            saving={llmSaving}
+            logs={areaProgressLogs}
+            logsLoading={areaProgressLogsLoading}
+            expandedLogId={expandedAreaProgressLogId}
+            onUpdate={updateLlmSettings}
+            onSave={handleSaveLlmSettings}
+            onLoadLogs={loadAreaProgressLogs}
+            onToggleExpandedLog={setExpandedAreaProgressLogId}
+          />
+        )
+      case 'ai.periodicReview':
+        return (
+          <PeriodicReviewSettingsSection
+            settings={llmSettings}
+            saving={llmSaving}
+            logs={projectInsightLogs}
+            logsLoading={projectInsightLogsLoading}
+            expandedLogId={expandedProjectInsightLogId}
+            onUpdate={updateLlmSettings}
+            onSave={handleSaveLlmSettings}
+            onLoadLogs={loadProjectInsightLogs}
+            onToggleExpandedLog={setExpandedProjectInsightLogId}
           />
         )
       case 'data.database':

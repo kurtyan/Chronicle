@@ -2,6 +2,7 @@ export type ProjectLocale = 'en' | 'zh-CN'
 /** Durable reviews and evidence-backed AI drafts. No model-generated value is a time statistic. */
 export type ReviewTargetType = 'area' | 'milestone'
 export type ProjectReviewKind = 'completion' | 'periodic'
+export type ProjectInsightPurpose = 'area_progress' | 'periodic_review'
 export interface ReviewScope {
   targetType: ReviewTargetType
   targetId: string
@@ -78,6 +79,7 @@ export interface ProjectInsightContent {
 export interface ProjectInsightBudget { inputCharacters: number; maxCalls: number; maxOutputTokens: number }
 export interface ProjectInsightDraft extends ReviewScope {
   locale?: ProjectLocale
+  purpose: ProjectInsightPurpose
   id: string
   status: 'running' | 'success' | 'error' | 'cancelled'
   evidence: ReviewEvidence

@@ -1566,8 +1566,8 @@ export function TodayPage() {
                 className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border hover:bg-muted disabled:opacity-60"
                 onClick={handlePlanToday}
                 disabled={planDraftLoading || loadingScript || !script}
-                title="Plan Today with LLM task context"
-                aria-label="Plan Today with LLM task context"
+                title="Plan Today from task context"
+                aria-label="Plan Today from task context"
               >
                 {planDraftLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CalendarPlus className="h-4 w-4" />}
               </button>

@@ -411,7 +411,16 @@ function BackgroundTasksPanel() {
   async function openTask(task: BackgroundTask) {
     if (task.type === 'daily_summary') await routeDailySummaryTask(task)
     else if (task.type === 'task_summary') await routeTaskSummaryTask(task)
-    else await routeMeetingExtractTask(task)
+    else if (task.type === 'meeting_extract') await routeMeetingExtractTask(task)
+    else {
+      const targetType = task.meta?.targetType
+      const targetId = task.meta?.targetId
+      if ((targetType === 'area' || targetType === 'milestone') && typeof targetId === 'string') {
+        selectTask(null)
+        setPanelOpen(false)
+        navigate(entityPath(targetType, targetId))
+      } else selectTask(task.id)
+    }
     if (!task.readAt && task.status !== 'running') await markRead(task.id)
   }
 
@@ -667,7 +676,8 @@ function TaskStatusIcon({ status }: { status: BackgroundTask['status'] }) {
 function formatTaskType(type: BackgroundTask['type']): string {
   if (type === 'daily_summary') return 'Daily Summary'
   if (type === 'task_summary') return 'Task Summary'
-  return 'Meeting Extract'
+  if (type === 'meeting_extract') return 'Meeting Extract'
+  return 'Periodic Review'
 }
 
 function BackgroundTaskResultDialog({ task, onOpenChange }: {
@@ -704,6 +714,11 @@ function BackgroundTaskResultDialog({ task, onOpenChange }: {
               <ResultField label="Latest Progress">{result.latestProgress}</ResultField>
               {result.nextStep && <ResultField label="Next Step">{result.nextStep}</ResultField>}
               {!result.nextStep && result.recommendedNextStep && <ResultField label="Recommendation">{result.recommendedNextStep}</ResultField>}
+            </div>
+          ) : 'draftId' in result ? (
+            <div className="space-y-2 text-sm">
+              <ResultField label="Periodic Review">{task?.title || result.draftId}</ResultField>
+              <p className="text-muted-foreground">Open the related Area or Milestone to inspect the evidence-backed draft.</p>
             </div>
           ) : (
             <div className="space-y-4">

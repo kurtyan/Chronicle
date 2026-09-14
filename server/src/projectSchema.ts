@@ -28,6 +28,8 @@ export function initProjectSchema(db: Database.Database): void {
       );
       CREATE INDEX IF NOT EXISTS idx_milestones_area ON milestones(area_id,archived,updated_at DESC);
     `)
+    const areaColumnsBefore = db.prepare('PRAGMA table_info(areas)').all() as Array<{ name: string }>
+    const needsAreaOrder = !areaColumnsBefore.some(item => item.name === 'sort_order')
     for (const [table, column, definition] of [
       ['tasks', 'primary_milestone_id', 'TEXT REFERENCES milestones(id)'],
       ['tasks', 'project_revision', 'INTEGER NOT NULL DEFAULT 1'],
@@ -40,9 +42,15 @@ export function initProjectSchema(db: Database.Database): void {
       ['areas', 'summary_source_note_id', 'TEXT'],
       ['areas', 'summary_source_insight_id', 'TEXT'],
       ['areas', 'summary_source_note_revision', 'INTEGER'],
+      ['areas', 'sort_order', 'INTEGER NOT NULL DEFAULT 0'],
     ]) {
       const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
       if (!columns.some(item => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+    }
+    if (needsAreaOrder) {
+      const existingAreas = db.prepare('SELECT id FROM areas ORDER BY created_at,id').all() as Array<{ id: string }>
+      const updateOrder = db.prepare('UPDATE areas SET sort_order=? WHERE id=?')
+      existingAreas.forEach((area, index) => updateOrder.run((index + 1) * 1000, area.id))
     }
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_tasks_primary_milestone ON tasks(primary_milestone_id);

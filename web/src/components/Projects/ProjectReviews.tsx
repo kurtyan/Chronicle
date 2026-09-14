@@ -1,7 +1,7 @@
 import { withProjectNavigation, projectNavigationState } from '@/lib/projectNavigation'
 import { ProjectSelect } from '@/components/ui/ProjectSelect'
 import { useI18n } from '@/i18n/context'
-import { fetchStartOfDayOffset } from '@/services/api'
+import { fetchLlmSettings, fetchStartOfDayOffset } from '@/services/api'
 import { getWorkPeriodRange } from '@/lib/workPeriod'
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -41,6 +41,7 @@ export function ProjectReviews({ targetType, targetId, targetName, completed = f
   const [busy, setBusy] = useState(false)
   const [analysisDepth, setAnalysisDepth] = useState('standard')
   const [maxOutputTokens, setMaxOutputTokens] = useState(4000)
+  useEffect(() => { fetchLlmSettings().then(settings => setMaxOutputTokens(settings.projectInsightMaxTokens)).catch(() => {}) }, [])
   const insightBudget = {
     inputCharacters: analysisDepth === 'maximum' ? 480000 : analysisDepth === 'expanded' ? 240000 : 96000,
     maxCalls: analysisDepth === 'maximum' ? 24 : analysisDepth === 'expanded' ? 12 : 6,
@@ -73,7 +74,7 @@ export function ProjectReviews({ targetType, targetId, targetName, completed = f
     const context = { returnTo: returnTo || location.pathname + location.search, range: { ...(review.periodStart != null ? { start: review.periodStart } : {}), ...(review.periodEnd != null ? { end: review.periodEnd } : {}) }, periodLabel: rangeOverride ? rangeLabel(review) : periodLabel || rangeLabel(review) }
     navigate(withProjectNavigation(`/notes?id=${encodeURIComponent(review.noteId)}&projectReview=${encodeURIComponent(review.id)}`, context), { state: projectNavigationState(context) })
   }
-  useEffect(() => { let active = true; Promise.all([projectRequest<ProjectReview[]>('get', '/api/project-reviews', { targetType, targetId }), projectRequest<ProjectInsightDraft[]>('get', '/api/project-insights', { targetType, targetId })]).then(([r, d]) => { if (active) { setReviews(r); setDrafts(d) } }).catch(e => { if (active) setError(projectError(e)) }); return () => { active = false } }, [targetType, targetId, refresh, tick])
+  useEffect(() => { let active = true; Promise.all([projectRequest<ProjectReview[]>('get', '/api/project-reviews', { targetType, targetId }), projectRequest<ProjectInsightDraft[]>('get', '/api/project-insights', { targetType, targetId, purpose: 'periodic_review' })]).then(([r, d]) => { if (active) { setReviews(r); setDrafts(d) } }).catch(e => { if (active) setError(projectError(e)) }); return () => { active = false } }, [targetType, targetId, refresh, tick])
   useEffect(() => { if (!drafts.some(d => d.status === 'running')) return; const timer = window.setTimeout(() => setTick(n => n + 1), 3000); return () => window.clearTimeout(timer) }, [drafts])
   const run = async (fn: () => Promise<void>) => { setBusy(true); setError(''); try { await fn() } catch (e) { setError(projectError(e)) } finally { setBusy(false) } }
   const createReview = async (noteId?: string) => {
@@ -93,15 +94,15 @@ export function ProjectReviews({ targetType, targetId, targetName, completed = f
       if (mounted.current) openReviewNote(review)
     })
   }
-  return <section className="space-y-4 border-t border-border/60 pt-6" data-testid="project-reviews">
+  return <section className="space-y-4" data-testid="project-reviews">
     <div><h2 className="font-semibold">{t('project.review.heading')}</h2><p className="mt-1 text-xs text-muted-foreground">{t('project.review.description')}</p></div>
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><p><span className="font-medium">{t('project.reviewWorkflow.range')} · </span>{rangeLabel(scope)}</p><div className="flex items-center gap-2 text-muted-foreground"><span>{t(rangeOverride ? 'project.reviewWorkflow.customRange' : 'project.reviewWorkflow.inheritedRange')}</span>{rangeOverride && <button className="underline underline-offset-2" onClick={() => setRangeOverride(null)}>{t('project.reviewWorkflow.restoreRange')}</button>}</div></div>
     <details className="text-sm" data-testid="project-review-period-editor"><summary className="w-fit cursor-pointer text-xs text-muted-foreground hover:text-foreground">{t('project.reviewWorkflow.changeRange')}</summary><div className="mt-3 flex flex-wrap items-end gap-2"><label className="text-xs">{t('project.review.start')}<input className={`${control} mt-1 block`} aria-label={t('project.review.startDate')} type="date" value={start} onChange={e => setRangeOverride({ start: e.target.value, end })} /></label><label className="text-xs">{t('project.review.end')}<input className={`${control} mt-1 block`} aria-label={t('project.review.endDate')} type="date" value={end} onChange={e => setRangeOverride({ start, end: e.target.value })} /></label><span className="pb-2 text-xs text-muted-foreground">{t('project.review.allRecordsHint')}</span></div></details>
     <details className="text-sm"><summary className="w-fit cursor-pointer text-xs text-muted-foreground hover:text-foreground">{t('project.summary.advanced')}</summary><div className="mt-3 space-y-3 rounded-md border border-border/60 p-3">
     <label className="flex flex-wrap items-center gap-2 text-sm">{t('project.review.coverage')}<ProjectSelect label={t('project.review.coverage')} value={analysisDepth} onChange={setAnalysisDepth} options={[{ value: 'standard', label: t('project.review.standard') }, { value: 'expanded', label: t('project.review.expanded') }, { value: 'maximum', label: t('project.review.maximum') }]} /><span className="text-xs text-muted-foreground">{t('project.review.coverageHint')}</span></label>
-    <label className="flex flex-wrap items-center gap-2 text-sm">{t('project.review.outputBudget')}<ProjectSelect label={t('project.review.outputBudget')} value={String(maxOutputTokens)} onChange={value => setMaxOutputTokens(Number(value))} options={[4000, 8000, 16000].map(value => ({ value: String(value), label: `${value.toLocaleString(locale)} tokens` }))} /><span className="text-xs text-muted-foreground">{t('project.review.budgetHint')}</span></label>
+    <label className="flex flex-wrap items-center gap-2 text-sm">{t('project.review.outputBudget')}<ProjectSelect label={t('project.review.outputBudget')} value={String(maxOutputTokens)} onChange={value => setMaxOutputTokens(Number(value))} options={Array.from(new Set([maxOutputTokens, 4000, 8000, 16000, 32000])).sort((a, b) => a - b).map(value => ({ value: String(value), label: `${value.toLocaleString(locale)} tokens` }))} /><span className="text-xs text-muted-foreground">{t('project.review.budgetHint')}</span></label>
     </div></details>
-    <div className="flex flex-wrap gap-2"><button data-project-review-create className={primaryButton} disabled={busy || invalidRange} onClick={() => void run(() => createReview())}>{t(completed ? 'project.review.newCompletion' : 'project.review.newPeriodic')}</button><button className={button} disabled={busy || invalidRange} onClick={() => setPicker(true)}>{t('project.review.linkExisting')}</button><button className={button} disabled={busy || invalidRange} onClick={() => void run(async () => { const draft = await projectRequest<ProjectInsightDraft>('post', '/api/project-insights', { ...scope, locale, budget: insightBudget }); setDrafts(ds => [draft, ...ds.filter(d => d.id !== draft.id)]) })}>{t('project.review.generate')}</button></div>
+    <div className="flex flex-wrap gap-2"><button data-project-review-create className={primaryButton} disabled={busy || invalidRange} onClick={() => void run(() => createReview())}>{t(completed ? 'project.review.newCompletion' : 'project.review.newPeriodic')}</button><button className={button} disabled={busy || invalidRange} onClick={() => setPicker(true)}>{t('project.review.linkExisting')}</button><button className={button} disabled={busy || invalidRange} onClick={() => void run(async () => { const draft = await projectRequest<ProjectInsightDraft>('post', '/api/project-insights', { ...scope, purpose: 'periodic_review', locale, budget: insightBudget }); setDrafts(ds => [draft, ...ds.filter(d => d.id !== draft.id)]) })}>{t('project.review.generate')}</button></div>
     <ErrorMessage>{invalidRange ? t('project.reviewWorkflow.invalidRange') : error}</ErrorMessage>
     {!reviews.length && <Empty>{t('project.review.empty')}</Empty>}
     {reviews.map(review => <article key={review.id} className="space-y-3 rounded-lg border border-border/60 p-4 text-sm" data-testid="project-review-card">

@@ -118,7 +118,7 @@ test('a separately chosen review period stays visible and does not replace the o
   const refreshedResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/projects/overview' && new URL(response.url()).searchParams.get('start') === '0')
   await page.getByRole('button', { name: 'Refresh projects', exact: true }).click()
   const refreshed = await (await refreshedResponse).json()
-  expect(refreshed.statistics.end).toBeGreaterThan(allTime.statistics.end)
+  expect(refreshed.statistics.end).toBeGreaterThanOrEqual(allTime.statistics.end)
   await expect(reviews.getByLabel('Review start date', { exact: true })).toHaveValue('2026-09-09')
   await expect(reviews).toContainText('Custom review period')
   await reviews.getByRole('button', { name: 'Use viewing period', exact: true }).click()

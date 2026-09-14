@@ -419,12 +419,10 @@ test.describe('Background Tasks UI', () => {
       await expect(dialog.getByRole('heading', { name: 'Session Activity' })).toBeVisible()
       const activityParagraph = dialog.locator('p', { hasText: '05:00 work block' }).first()
       await expect(activityParagraph).toBeVisible()
-      const metrics = await activityParagraph.evaluate((element) => ({
-        text: (element as HTMLElement).innerText,
-        whiteSpace: window.getComputedStyle(element).whiteSpace,
-      }))
-      expect(metrics.whiteSpace).toBe('pre-wrap')
-      expect(metrics.text).toBe('05:00 work block\n06:00 work block\n07:00 no work recorded')
+      await expect(activityParagraph).toHaveCSS('white-space', 'pre-wrap')
+      await expect(activityParagraph).toHaveText(
+        '05:00 work block\n06:00 work block\n07:00 no work recorded',
+      )
     } finally {
       await page.request.put('/api/settings/llm', { data: originalSettings })
       await mock.close()
@@ -479,6 +477,42 @@ test.describe('Background Tasks UI', () => {
     } finally {
       await page.request.put('/api/settings/llm', { data: originalSettings })
       await mock.close()
+    }
+  })
+
+  test('a failed Periodic Review task stays a Periodic Review and opens its Area instead of Meeting', async ({ page }) => {
+    const originalSettings = await (await page.request.get('/api/settings/llm')).json()
+    const areaName = `Periodic Review route ${Date.now()}`
+    let draftId: string | undefined
+    try {
+      await page.request.put('/api/settings/llm', {
+        data: { ...originalSettings, baseUrl: 'http://127.0.0.1:1/v1', model: 'unavailable-periodic-review-model', timeoutMs: 1000 },
+      })
+      const areaResponse = await page.request.post('/api/areas', { data: { name: areaName } })
+      expect(areaResponse.ok(), await areaResponse.text()).toBeTruthy()
+      const area = await areaResponse.json()
+      const started = await page.request.post('/api/project-insights', { data: { targetType: 'area', targetId: area.id, locale: 'en' } })
+      expect(started.ok(), await started.text()).toBeTruthy()
+      const draft = await started.json()
+      draftId = draft.id
+      await expect.poll(async () => {
+        const response = await page.request.get(`/api/project-insights/${draft.id}`)
+        return (await response.json()).status
+      }).toBe('error')
+
+      await page.goto('/today?lang=en')
+      await page.locator('[data-background-tasks-trigger="true"]').click()
+      await page.getByRole('button', { name: 'Error', exact: true }).click()
+      const panel = page.locator('[data-background-tasks-panel="true"]')
+      const row = panel.locator('.grid').filter({ hasText: areaName }).first()
+      await expect(row).toContainText('Periodic Review')
+      await row.locator('button').first().click()
+      await expect(page).toHaveURL(new RegExp(`/projects/areas/${area.id}`))
+      await expect(page.getByRole('heading', { name: areaName, exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Save Meeting', exact: true })).toHaveCount(0)
+    } finally {
+      if (draftId) await page.request.post(`/api/project-insights/${draftId}/cancel`)
+      await page.request.put('/api/settings/llm', { data: originalSettings })
     }
   })
 })

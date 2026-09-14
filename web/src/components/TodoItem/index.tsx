@@ -49,7 +49,9 @@ export function TodoItem({ task, isActive, pinned, onClick, onContextMenu }: Tod
 
 function TaskMilestoneLabel({ milestoneId }: { milestoneId: string }) {
   const { t } = useI18n()
+  const areas = useProjectStore(state => state.areas)
   const milestones = useProjectStore(state => state.milestones)
   const milestone = milestones.find(item => item.id === milestoneId)
-  return <p className="mt-1 truncate text-xs text-primary/80">{milestone?.name || milestoneId}{milestone?.archived ? ` · ${t('project.relations.archived')}` : ''}</p>
+  const area = milestone ? areas.find(item => item.id === milestone.areaId) : null
+  return <p className="mt-1 truncate text-xs text-primary/80" title={area && milestone ? `${area.name} / ${milestone.name}` : undefined}>{area ? `${area.name} / ` : ''}{milestone?.name || milestoneId}{milestone?.archived ? ` · ${t('project.relations.archived')}` : ''}</p>
 }

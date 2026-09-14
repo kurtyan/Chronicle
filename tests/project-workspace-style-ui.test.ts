@@ -36,7 +36,9 @@ test('English system uses a full desktop workspace while overlap lanes remain co
   expect(await page.getByTestId('projects-page').innerText()).not.toContain('project.')
   await expect(chart.getByText('Weeks', { exact: true })).toBeVisible()
   const bar = chart.locator(`[data-milestone-id="${milestones[0].id}"]`).getByRole('button')
-  await bar.hover()
+  // The dedicated Gantt interaction suite covers hover. Focus is deterministic
+  // here after the viewport-resize assertions and exercises the same preview.
+  await bar.focus()
   const peek = page.getByTestId('milestone-peek')
   await expect(peek).toBeVisible()
   expect(await peek.innerText()).not.toMatch(/[\u4e00-\u9fff]/)
@@ -49,6 +51,19 @@ test('English system uses a full desktop workspace while overlap lanes remain co
   await expect(bar).toBeFocused()
 })
 
+test('Area view separates the right column into notes, review, and properties cards', async ({ page, request }) => {
+  const { area } = await seed(request)
+  await page.goto(`/projects/areas/${area.id}`)
+  const workspace = page.getByTestId('project-object-workspace')
+  await expect(workspace.getByRole('heading', { name: area.name, exact: true })).toBeVisible()
+  const contextColumn = workspace.getByTestId('project-object-context-column')
+  await expect(contextColumn.locator(':scope > section')).toHaveCount(2)
+  await expect(contextColumn.locator(':scope > details')).toHaveCount(1)
+  await expect(contextColumn.getByRole('heading', { name: /Linked notes/i, exact: false })).toBeVisible()
+  await expect(contextColumn.getByText('Review & reflection', { exact: true })).toBeVisible()
+  await expect(contextColumn.locator(':scope > details > summary')).toContainText('Properties & history')
+})
+
 test('Project search and nested searchable form selectors work entirely from the keyboard', async ({ page, request }) => {
   const { area } = await seed(request)
   await page.addInitScript(() => Object.defineProperty(navigator, 'platform', { value: 'MacIntel', configurable: true }))
@@ -59,7 +74,6 @@ test('Project search and nested searchable form selectors work entirely from the
   await page.keyboard.press('Meta+n')
   const editor = page.getByRole('dialog', { name: 'New milestone', exact: true })
   await expect(editor).toBeVisible()
-  expect(await editor.innerText()).not.toMatch(/[\u4e00-\u9fff]/)
   await expect(editor.locator('select')).toHaveCount(0)
   await expect(editor.getByRole('textbox', { name: 'Latest progress', exact: true })).toHaveCount(0)
   await expect(editor.locator('input[type="date"]')).toHaveCount(0)
@@ -74,6 +88,9 @@ test('Project search and nested searchable form selectors work entirely from the
   await expect(popup).toHaveCount(0)
   await expect(areaTrigger).toBeFocused()
   await expect(areaTrigger).toContainText(area.name)
+  // User-created Area names may be in any language. Assert the English UI only
+  // after choosing this test's English fixture instead of depending on DB order.
+  expect(await editor.innerText()).not.toMatch(/[\u4e00-\u9fff]/)
   await page.keyboard.press('Enter')
   await popup.getByRole('combobox').fill('no such area in the catalog')
   await expect(popup.getByRole('option')).toHaveCount(0)

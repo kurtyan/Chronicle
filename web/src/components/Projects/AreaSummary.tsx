@@ -3,7 +3,7 @@ import { useI18n } from '@/i18n/context'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import DOMPurify from 'dompurify'
-import { getNoteById } from '@/services/api'
+import { fetchLlmSettings, getNoteById } from '@/services/api'
 import { projectApi, projectError, projectRequest } from '@/services/projectApi'
 import type { Area, ProjectEvent } from '../../../../shared/projectTypes'
 import type { ProjectInsightDraft, ProjectInsightPoint, ReviewScope } from '../../../../shared/projectReviewTypes'
@@ -70,6 +70,7 @@ function AreaSummaryPanel({ area, compact = false, lane = false, onUpdated, acti
   const [history, setHistory] = useState<ProjectEvent[] | null>(null)
   const [analysisDepth, setAnalysisDepth] = useState('standard')
   const [maxOutputTokens, setMaxOutputTokens] = useState(4000)
+  useEffect(() => { fetchLlmSettings().then(settings => setMaxOutputTokens(settings.areaProgressMaxTokens)).catch(() => {}) }, [])
   const budget = {
     inputCharacters: analysisDepth === 'expanded' ? 240000 : 96000,
     maxCalls: analysisDepth === 'expanded' ? 12 : 6,
@@ -80,7 +81,7 @@ function AreaSummaryPanel({ area, compact = false, lane = false, onUpdated, acti
     if (!draftsOpen) return
     let active = true
     setDraftsLoading(true)
-    projectRequest<ProjectInsightDraft[]>('get', '/api/project-insights', { targetType: 'area', targetId: area.id })
+    projectRequest<ProjectInsightDraft[]>('get', '/api/project-insights', { targetType: 'area', targetId: area.id, purpose: 'area_progress' })
       .then(data => { if (active) setDrafts(data) })
       .catch(e => { if (active) setError(projectError(e)) })
       .finally(() => { if (active) setDraftsLoading(false) })
@@ -161,7 +162,7 @@ function AreaSummaryPanel({ area, compact = false, lane = false, onUpdated, acti
     }
   })
   const generate = (previous?: ProjectInsightDraft) => run(async () => {
-    const draft = await projectRequest<ProjectInsightDraft>('post', previous ? `/api/project-insights/${previous.id}/retry` : '/api/project-insights', previous ? { budget, locale } : { targetType: 'area', targetId: area.id, ...viewingScope, budget, locale })
+    const draft = await projectRequest<ProjectInsightDraft>('post', previous ? `/api/project-insights/${previous.id}/retry` : '/api/project-insights', previous ? { budget, locale } : { targetType: 'area', targetId: area.id, purpose: 'area_progress', ...viewingScope, budget, locale })
     if (mounted.current) { setDrafts(list => [draft, ...list.filter(item => item.id !== draft.id)]); setTick(value => value + 1) }
   })
   const showHistory = () => run(async () => {
@@ -219,7 +220,7 @@ function AreaSummaryPanel({ area, compact = false, lane = false, onUpdated, acti
       <DialogContent onEscapeKeyDown={event => { if (busy) event.preventDefault() }} className="max-h-[90vh] sm:max-w-2xl"><DialogHeader><DialogTitle>{t('project.summary.draftsTitle')}</DialogTitle></DialogHeader><DialogBody className="space-y-4">
         <p className="text-sm text-muted-foreground">{t('project.summary.generationHint')}</p>
         <p className="text-xs text-muted-foreground" data-testid="area-summary-generation-scope">{t('project.object.analysisPeriod', { period: navigationContext?.periodLabel || scopeLabel(viewingScope) })}<span className="mt-1 block">{scopeLabel(viewingScope)}</span></p>
-        <details className="rounded-lg border p-3 text-sm"><summary className="cursor-pointer">{t('project.summary.advanced')}</summary><div className="mt-3 space-y-3"><label className="flex flex-wrap items-center gap-2">{t('project.summary.historyCoverage')}<ProjectSelect label={t('project.review.coverage')} value={analysisDepth} onChange={setAnalysisDepth} options={[{ value: 'standard', label: t('project.review.standard') }, { value: 'expanded', label: t('project.review.expanded') }]} /></label><label className="flex flex-wrap items-center gap-2">{t('project.review.outputBudget')}<ProjectSelect label={t('project.review.outputBudget')} value={String(maxOutputTokens)} onChange={value => setMaxOutputTokens(Number(value))} options={[4000, 8000, 16000].map(value => ({ value: String(value), label: `${value.toLocaleString(locale)} tokens` }))} /></label><p className="text-xs text-muted-foreground">{t('project.summary.budgetHint')}</p></div></details>
+        <details className="rounded-lg border p-3 text-sm"><summary className="cursor-pointer">{t('project.summary.advanced')}</summary><div className="mt-3 space-y-3"><label className="flex flex-wrap items-center gap-2">{t('project.summary.historyCoverage')}<ProjectSelect label={t('project.review.coverage')} value={analysisDepth} onChange={setAnalysisDepth} options={[{ value: 'standard', label: t('project.review.standard') }, { value: 'expanded', label: t('project.review.expanded') }]} /></label><label className="flex flex-wrap items-center gap-2">{t('project.review.outputBudget')}<ProjectSelect label={t('project.review.outputBudget')} value={String(maxOutputTokens)} onChange={value => setMaxOutputTokens(Number(value))} options={Array.from(new Set([maxOutputTokens, 4000, 8000, 16000, 32000])).sort((a, b) => a - b).map(value => ({ value: String(value), label: `${value.toLocaleString(locale)} tokens` }))} /></label><p className="text-xs text-muted-foreground">{t('project.summary.budgetHint')}</p></div></details>
         <button className={primaryButton} disabled={busy || drafts.some(draft => draft.status === 'running')} onClick={() => void generate()}>{t('project.summary.generate')}</button>
         <ErrorMessage>{error}</ErrorMessage>
         {draftsLoading && !drafts.length && <p role="status" className="text-sm text-muted-foreground">{t('project.summary.loading')}</p>}

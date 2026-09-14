@@ -231,7 +231,7 @@ test('Area AI progress inherits the viewing period and retry keeps the older dra
     await dialog.getByRole('button', { name: 'Draft progress & next steps', exact: true }).click()
     const generatedResponse = await generated
     expect(generatedResponse.ok()).toBe(true)
-    expect(generatedResponse.request().postDataJSON()).toMatchObject({ targetType: 'area', targetId: area.id, periodStart: range.start, periodEnd: range.end })
+    expect(generatedResponse.request().postDataJSON()).toMatchObject({ targetType: 'area', targetId: area.id, purpose: 'area_progress', periodStart: range.start, periodEnd: range.end })
     const first = await generatedResponse.json()
     generatedIds.push(first.id)
     expect(first.evidence.scope).toMatchObject({ periodStart: range.start, periodEnd: range.end })

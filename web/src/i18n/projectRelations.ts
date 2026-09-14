@@ -24,6 +24,7 @@ export const projectRelationsTranslations: Record<string, TranslationEntry> = {
   'project.relations.more': { 'zh-CN': '更多归属操作', en: 'More milestone actions' },
   'project.relations.choose': { 'zh-CN': '选择主里程碑', en: 'Choose milestone' },
   'project.relations.references': { 'zh-CN': '相关引用', en: 'References' },
+  'project.relations.referencesHint': { 'zh-CN': '用于补充相关方向或里程碑，方便双向查找与复盘；不会改变 Task 的主归属，也不会重复计算投入。', en: 'Adds related Area or Milestone context for backlinks and reviews. It does not change the Task assignment or count time twice.' },
   'project.relations.continue': { 'zh-CN': '在另一里程碑继续', en: 'Continue in another milestone' },
   'project.relations.draftExists': { 'zh-CN': '已有未提交 Task 草稿，请先在看板完成或取消。', en: 'Finish or discard your existing task draft in Board first.' },
   'project.relations.continueTask': { 'zh-CN': '继续任务', en: 'Continue task' },

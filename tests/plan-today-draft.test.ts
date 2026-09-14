@@ -178,7 +178,7 @@ test.describe('Plan Today draft', () => {
 
     await page.goto(`/today?date=${date}&lang=en`)
     await page.waitForLoadState('load')
-    await page.getByLabel('Plan Today with LLM task context').click()
+    await page.getByLabel('Plan Today from task context').click()
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog).toContainText('generated plan')
@@ -216,7 +216,7 @@ test.describe('Plan Today draft', () => {
 
     await page.goto(`/today?date=${date}&lang=en`)
     await page.waitForLoadState('load')
-    await page.getByLabel('Plan Today with LLM task context').click()
+    await page.getByLabel('Plan Today from task context').click()
     await expect(page.getByRole('dialog')).toBeVisible()
     await expect.poll(() => errors.join('\n')).toBe('')
   })
