@@ -173,6 +173,8 @@ export function useSSE() {
 
       const handlers: Record<string, (data: string) => void> = {
         heartbeat: () => {},
+        outline_updated: () => window.dispatchEvent(new Event('chronicle:outline-updated')),
+        task_daily_summary_updated: () => window.dispatchEvent(new Event('chronicle:task-days-updated')),
         projects_changed: (raw) => {
           notifyProjectsChanged()
           // Area summaries and project insights do not change Task content.
@@ -273,6 +275,7 @@ export function useSSE() {
         },
         db_imported: () => {
           notifyProjectsChanged()
+          window.dispatchEvent(new Event('chronicle:outline-updated'))
           console.log('[SSE] db_imported')
           loadTodos()
           loadPinnedIds()
@@ -287,6 +290,7 @@ export function useSSE() {
         () => {
           if (destroyed) return
           notifyProjectsChanged()
+          window.dispatchEvent(new Event('chronicle:outline-updated'))
           console.log('[SSE] Connected')
           setState('connected')
           globalState = 'connected'

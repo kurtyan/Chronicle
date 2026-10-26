@@ -4,6 +4,7 @@ import { app, service, initializeDatabaseState } from './app'
 import { getConfig } from './config'
 import { closeDb } from './db'
 import { startBackupService } from './services/backupService'
+import { startTaskDailySummaryScheduler, stopTaskDailySummaryScheduler } from './services/taskDailySummaryWorker'
 import { getLogger } from './logging'
 import { getVersion } from './version'
 import { handleMcpRequest } from './mcp/start'
@@ -14,9 +15,11 @@ const port = index >= 0 ? Number(process.argv[index + 1]) : config.server.port
 const host = config.server.host
 initializeDatabaseState()
 startBackupService()
+startTaskDailySummaryScheduler()
 
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   getLogger().info(`Received ${signal}, shutting down...`)
+  await stopTaskDailySummaryScheduler()
   closeDb()
   process.exit(0)
 }

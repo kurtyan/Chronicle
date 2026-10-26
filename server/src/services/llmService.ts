@@ -5,6 +5,8 @@ import {
   DEFAULT_DAILY_SUMMARY_PROMPT,
   DEFAULT_MEETING_EXTRACTION_PROMPT,
   DEFAULT_TASK_SUMMARY_PROMPT,
+  DEFAULT_TASK_DAILY_SUMMARY_PROMPT,
+  TASK_DAILY_SUMMARY_DEFAULT_PROMPT_VERSION,
   DEFAULT_AREA_PROGRESS_PROMPT,
   DEFAULT_PROJECT_INSIGHT_PROMPT,
   TASK_SUMMARY_DEFAULT_PROMPT_VERSION,
@@ -14,6 +16,8 @@ export {
   DEFAULT_DAILY_SUMMARY_PROMPT,
   DEFAULT_MEETING_EXTRACTION_PROMPT,
   DEFAULT_TASK_SUMMARY_PROMPT,
+  DEFAULT_TASK_DAILY_SUMMARY_PROMPT,
+  TASK_DAILY_SUMMARY_DEFAULT_PROMPT_VERSION,
   DEFAULT_AREA_PROGRESS_PROMPT,
   DEFAULT_PROJECT_INSIGHT_PROMPT,
   TASK_SUMMARY_DEFAULT_PROMPT_VERSION,
@@ -26,6 +30,7 @@ export interface LlmSettings {
   timeoutMs: number
   meetingExtractionMaxTokens: number
   taskSummaryMaxTokens: number
+  taskDailySummaryMaxTokens: number
   dailySummaryMaxTokens: number
   areaProgressMaxTokens: number
   projectInsightMaxTokens: number
@@ -33,6 +38,8 @@ export interface LlmSettings {
   defaultMeetingExtractionPrompt: string
   taskSummaryPrompt: string
   defaultTaskSummaryPrompt: string
+  taskDailySummaryPrompt: string
+  defaultTaskDailySummaryPrompt: string
   dailySummaryPrompt: string
   defaultDailySummaryPrompt: string
   areaProgressPrompt: string
@@ -109,6 +116,7 @@ export function getLlmSettings(): LlmSettings {
     timeoutMs: Number.isFinite(config.timeoutMs) ? config.timeoutMs : 30000,
     meetingExtractionMaxTokens: normalizeMaxTokens(config.meetingExtractionMaxTokens, 4000),
     taskSummaryMaxTokens: normalizeMaxTokens(config.taskSummaryMaxTokens, 1200),
+    taskDailySummaryMaxTokens: normalizeMaxTokens(config.taskDailySummaryMaxTokens, 1200),
     dailySummaryMaxTokens: normalizeMaxTokens(config.dailySummaryMaxTokens, 4000),
     areaProgressMaxTokens: normalizeProjectInsightMaxTokens(config.areaProgressMaxTokens),
     projectInsightMaxTokens: normalizeProjectInsightMaxTokens(config.projectInsightMaxTokens),
@@ -116,6 +124,8 @@ export function getLlmSettings(): LlmSettings {
     defaultMeetingExtractionPrompt: DEFAULT_MEETING_EXTRACTION_PROMPT,
     taskSummaryPrompt: config.taskSummaryPrompt,
     defaultTaskSummaryPrompt: DEFAULT_TASK_SUMMARY_PROMPT,
+    taskDailySummaryPrompt: config.taskDailySummaryPrompt,
+    defaultTaskDailySummaryPrompt: DEFAULT_TASK_DAILY_SUMMARY_PROMPT,
     dailySummaryPrompt: config.dailySummaryPrompt,
     defaultDailySummaryPrompt: DEFAULT_DAILY_SUMMARY_PROMPT,
     areaProgressPrompt: config.areaProgressPrompt,
@@ -137,6 +147,9 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
   const dailySummaryMaxTokens = input.dailySummaryMaxTokens === undefined
     ? current.dailySummaryMaxTokens
     : normalizeMaxTokens(input.dailySummaryMaxTokens, 4000)
+  const taskDailySummaryMaxTokens = input.taskDailySummaryMaxTokens === undefined
+    ? current.taskDailySummaryMaxTokens
+    : normalizeMaxTokens(input.taskDailySummaryMaxTokens, 1200)
   const areaProgressMaxTokens = input.areaProgressMaxTokens === undefined
     ? current.areaProgressMaxTokens
     : normalizeProjectInsightMaxTokens(input.areaProgressMaxTokens)
@@ -151,11 +164,13 @@ export function saveLlmSettings(input: Partial<LlmSettings>): LlmSettings {
       timeoutMs,
       meetingExtractionMaxTokens,
       taskSummaryMaxTokens,
+      taskDailySummaryMaxTokens,
       dailySummaryMaxTokens,
       areaProgressMaxTokens,
       projectInsightMaxTokens,
       meetingExtractionPrompt: input.meetingExtractionPrompt ?? current.meetingExtractionPrompt,
       taskSummaryPrompt: input.taskSummaryPrompt ?? current.taskSummaryPrompt,
+      taskDailySummaryPrompt: input.taskDailySummaryPrompt ?? current.taskDailySummaryPrompt,
       dailySummaryPrompt: input.dailySummaryPrompt ?? current.dailySummaryPrompt,
       areaProgressPrompt: input.areaProgressPrompt ?? current.areaProgressPrompt,
       projectInsightPrompt: input.projectInsightPrompt ?? current.projectInsightPrompt,
@@ -170,6 +185,7 @@ export async function testLlmConnection(): Promise<{ ok: boolean; latencyMs: num
   const maxTokens = Math.min(
     settings.meetingExtractionMaxTokens,
     settings.taskSummaryMaxTokens,
+    settings.taskDailySummaryMaxTokens,
     settings.dailySummaryMaxTokens,
     settings.areaProgressMaxTokens,
     settings.projectInsightMaxTokens,
@@ -253,9 +269,11 @@ export async function extractMeeting(rawContent: string, mode: 'record' | 'test'
   }
 }
 
-function normalizeLlmRequestError(err: any, timeoutMs: number): never {
+function normalizeLlmRequestError(err: any, timeoutMs: number, abortedByCaller = false): never {
   if (err?.name === 'AbortError') {
-    throw new Error(`LLM request timed out after ${timeoutMs} ms`)
+    // A caller-requested abort (shutdown, database replacement) is not a provider timeout.
+    if (abortedByCaller) throw Object.assign(new Error('LLM request was aborted'), { code: 'LLM_ABORTED' })
+    throw Object.assign(new Error(`LLM request timed out after ${timeoutMs} ms`), { code: 'LLM_TIMEOUT' })
   }
   throw err
 }
@@ -291,9 +309,18 @@ export async function callChatCompletionsWithRaw(
         ...(options.jsonResponse === false ? {} : { response_format: { type: 'json_object' } }),
       }),
     })
-      .catch((err) => normalizeLlmRequestError(err, settings.timeoutMs))
-    const text = await res.text()
-    if (!res.ok) throw new Error(`LLM request failed (${res.status}): ${text.slice(0, 500)}`)
+      .catch((err) => normalizeLlmRequestError(err, settings.timeoutMs, !!options.signal?.aborted))
+    const text = await res.text().catch((err) => normalizeLlmRequestError(err, settings.timeoutMs, !!options.signal?.aborted))
+    if (!res.ok) {
+      const retryAfter = res.headers.get('Retry-After')?.trim()
+      const retryAfterMs = retryAfter
+        ? /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now()
+        : NaN
+      throw Object.assign(new Error(`LLM request failed (${res.status}): ${text.slice(0, 500)}`), {
+        status: res.status,
+        ...(Number.isFinite(retryAfterMs) ? { retryAfterMs: Math.max(0, Math.min(86_400_000, retryAfterMs)) } : {}),
+      })
+    }
     let json: any
     try {
       json = JSON.parse(text)

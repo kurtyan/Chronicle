@@ -1,6 +1,6 @@
 import { getDb } from '../db'
 
-export interface RecordedWorkRange { start?: number; end?: number; asOf?: number }
+export interface RecordedWorkRange { start?: number; end?: number; asOf?: number; taskIds?: string[] }
 export interface RecordedWorkSession {
   id: string
   taskId: string
@@ -19,9 +19,11 @@ export function getRecordedWork(range: RecordedWorkRange = {}) {
   }
   // Future ranges are valid, but they cannot add future running time.
   const asOf = Math.min(requestedAsOf, Date.now())
+  const taskIds = range.taskIds === undefined ? undefined : [...new Set(range.taskIds)]
+  const taskFilter = taskIds === undefined ? '' : taskIds.length ? ` AND s.task_id IN (${taskIds.map(() => '?').join(',')})` : ' AND 0'
   const rows = getDb().prepare(`SELECT s.id,s.task_id,s.started_at,s.ended_at FROM work_sessions s
-    JOIN tasks t ON t.id=s.task_id WHERE s.started_at < ? AND (s.ended_at IS NULL OR s.ended_at > ?) ORDER BY s.started_at,s.id`)
-    .all(Math.min(end, asOf), start) as Array<{ id: string; task_id: string; started_at: number; ended_at: number | null }>
+    JOIN tasks t ON t.id=s.task_id WHERE s.started_at < ? AND (s.ended_at IS NULL OR s.ended_at > ?)${taskFilter} ORDER BY s.started_at,s.id`)
+    .all(Math.min(end, asOf), start, ...(taskIds ?? [])) as Array<{ id: string; task_id: string; started_at: number; ended_at: number | null }>
   const sessions: RecordedWorkSession[] = []
   const anomalies: Array<{ sessionId: string; reason: string }> = []
   const byTask = new Map<string, number>()

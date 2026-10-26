@@ -7,6 +7,7 @@ import { ReportPage } from './pages/ReportPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TodayPage } from './pages/TodayPage'
 import { NotesPage } from './pages/NotesPage'
+import { WorkOutlinePage } from './pages/WorkOutlinePage'
 import { AlertCircle, BarChart3, Calendar, CheckCircle2, ClipboardList, FileText, ListTodo, Loader2, Search, Settings, X } from 'lucide-react'
 import { useI18n } from './i18n/context'
 import { lazy, Suspense, useEffect, useState, useRef, useCallback, useMemo } from 'react'
@@ -36,14 +37,15 @@ const ProjectsPage = lazy(() => import('@/pages/ProjectsPage').then(module => ({
 const AreaDetailPage = lazy(() => import('@/pages/ProjectDetailPage').then(module => ({ default: module.AreaDetailPage })))
 const MilestoneDetailPage = lazy(() => import('@/pages/ProjectDetailPage').then(module => ({ default: module.MilestoneDetailPage })))
 
-// The sidebar order is the source of truth for numbered navigation shortcuts.
+// Numbered shortcuts follow the visible navigation order. Settings stays last.
 const sidebarNavigation = [
-  { id: 'board', path: '/', icon: ListTodo, labelKey: 'sidebar.board' },
-  { id: 'today', path: '/today', icon: Calendar, labelKey: 'sidebar.today' },
-  { id: 'notes', path: '/notes', icon: FileText, labelKey: 'sidebar.notes' },
-  { id: 'report', path: '/report', icon: BarChart3, labelKey: 'sidebar.report' },
-  { id: 'projects', path: '/projects', icon: FolderKanban, labelKey: 'sidebar.projects' },
-  { id: 'settings', path: '/settings', icon: Settings, labelKey: 'sidebar.settings' },
+  { id: 'board', path: '/', icon: ListTodo, labelKey: 'sidebar.board', shortcut: 1 },
+  { id: 'today', path: '/today', icon: Calendar, labelKey: 'sidebar.today', shortcut: 2 },
+  { id: 'notes', path: '/notes', icon: FileText, labelKey: 'sidebar.notes', shortcut: 3 },
+  { id: 'work-outline', path: '/work-outline', icon: ClipboardList, labelKey: 'sidebar.workOutline', shortcut: 4 },
+  { id: 'report', path: '/report', icon: BarChart3, labelKey: 'sidebar.report', shortcut: 5 },
+  { id: 'projects', path: '/projects', icon: FolderKanban, labelKey: 'sidebar.projects', shortcut: 6 },
+  { id: 'settings', path: '/settings', icon: Settings, labelKey: 'sidebar.settings', shortcut: 7 },
 ] as const
 
 function ProjectRoute({ children }: { children: React.ReactNode }) {
@@ -229,7 +231,7 @@ function Sidebar() {
         </svg>
       </div>
       <nav className="flex flex-col gap-3">
-        {sidebarNavigation.map((item, index) => (
+        {sidebarNavigation.map(item => (
           <button
             key={item.path}
             className={`w-8 h-8 rounded-md flex items-center justify-center transition ${
@@ -238,9 +240,9 @@ function Sidebar() {
                 : 'hover:bg-muted text-muted-foreground'
             }`}
             onClick={() => { void navigateWithGuard(() => navigate(item.path)) }}
-            title={`${t(item.labelKey)} (${isMac ? '⌘' : 'Ctrl+'}${index + 1})`}
+            title={`${t(item.labelKey)} (${isMac ? '⌘' : 'Ctrl+'}${item.shortcut})`}
             aria-label={t(item.labelKey)}
-            aria-keyshortcuts={`${isMac ? 'Meta' : 'Control'}+${index + 1}`}
+            aria-keyshortcuts={`${isMac ? 'Meta' : 'Control'}+${item.shortcut}`}
             aria-current={location.pathname === item.path || (item.path === '/projects' && location.pathname.startsWith('/projects/')) ? 'page' : undefined}
           >
             <item.icon className="w-5 h-5" />
@@ -1285,11 +1287,11 @@ function Layout() {
     globalSearchOpenRef.current = globalSearchOpen
   }, [globalSearchOpen])
 
-  // Re-register labels when language changes; routes use the same ordered items as the sidebar.
+  // Re-register translated labels using the same explicit bindings shown in the sidebar.
   useEffect(() => {
-    const unregisters = sidebarNavigation.map((item, index) => registerShortcut({
+    const unregisters = sidebarNavigation.map(item => registerShortcut({
       id: `nav-${item.id}`,
-      combo: `mod+${index + 1}`,
+      combo: `mod+${item.shortcut}`,
       label: t('projectShell.goTo', { page: t(item.labelKey) }),
       scope: 'app',
       handler: () => { void navigateWithGuard(() => navigateRef.current(item.path)) },
@@ -1442,6 +1444,7 @@ function Layout() {
           <Route path="/projects/areas/:id" element={<ProjectRoute><AreaDetailPage /></ProjectRoute>} />
           <Route path="/projects/milestones/:id" element={<ProjectRoute><MilestoneDetailPage /></ProjectRoute>} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/work-outline" element={<WorkOutlinePage />} />
         </Routes>
       </main>
       <BackgroundTasksPanel />
