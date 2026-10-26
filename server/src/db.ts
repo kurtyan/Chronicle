@@ -3,6 +3,8 @@ import { getDbPath, ensureDataDir } from './config'
 import { getLogger } from './logging'
 import { initProjectSchema } from './projectSchema'
 import { initProjectReviewSchema } from './projectReviewSchema'
+import { initWorkOutlineSchema } from './workOutlineSchema'
+import { initTaskDailySummarySchema } from './taskDailySummarySchema'
 
 let db: Database.Database | null = null
 
@@ -479,6 +481,8 @@ export function initDb() {
 
   initProjectSchema(db)
   initProjectReviewSchema(db)
+  initWorkOutlineSchema(db)
+  initTaskDailySummarySchema(db)
   db.prepare('INSERT OR REPLACE INTO _meta(key,value) VALUES (?,?)').run('project_schema_version', '1')
   db.prepare('INSERT OR REPLACE INTO _meta(key,value) VALUES (?,?)').run('project_review_schema_version', '1')
   cleanupOrphans()

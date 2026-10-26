@@ -28,6 +28,7 @@ import { isTauriEnv, ensureApiReady, clientId } from '@/services/httpApi'
 import { fetchLlmSettings, fetchStartOfDayOffset, fetchTaskEntries, fetchTodos, generateDailySummary, saveLlmSettings, setStartOfDayOffset, testLlmConnection, testTaskSummaryPrompt } from '@/services/api'
 import { MeetingExtractionDialog } from '@/components/MeetingExtractionDialog'
 import type { LlmSettings, Task, TaskEntry, TaskSummaryTestResult } from '@/types'
+import type { TaskDailySummarySettingsResponse } from '../../../shared/taskDailySummaryTypes'
 
 interface SettingsInfo {
   dbPath: string
@@ -64,6 +65,7 @@ type SettingsSectionId =
   | 'ai.provider'
   | 'ai.meetingExtraction'
   | 'ai.taskSummary'
+  | 'ai.taskDailySummary'
   | 'ai.dailySummary'
   | 'ai.areaProgress'
   | 'ai.periodicReview'
@@ -103,6 +105,7 @@ function normalizeMaxTokens(value: number, fallback: number): number {
 type LlmTokenBudgetKey =
   | 'meetingExtractionMaxTokens'
   | 'taskSummaryMaxTokens'
+  | 'taskDailySummaryMaxTokens'
   | 'dailySummaryMaxTokens'
   | 'areaProgressMaxTokens'
   | 'projectInsightMaxTokens'
@@ -116,6 +119,7 @@ const LLM_TOKEN_BUDGET_FIELDS: Array<{
 }> = [
   { key: 'meetingExtractionMaxTokens', label: 'Meeting Max Tokens', min: 16 },
   { key: 'taskSummaryMaxTokens', label: 'Task Summary Max Tokens', min: 16 },
+  { key: 'taskDailySummaryMaxTokens', label: 'Task Daily Summary Max Tokens', min: 16 },
   { key: 'dailySummaryMaxTokens', label: 'Daily Summary Max Tokens', min: 16 },
   { key: 'areaProgressMaxTokens', label: 'Area Progress Max Tokens', min: 256 },
   { key: 'projectInsightMaxTokens', label: 'Periodic Review Max Tokens', min: 256 },
@@ -125,6 +129,7 @@ function tokenDraftsFromSettings(settings: LlmSettings): LlmTokenDrafts {
   return {
     meetingExtractionMaxTokens: String(settings.meetingExtractionMaxTokens),
     taskSummaryMaxTokens: String(settings.taskSummaryMaxTokens),
+    taskDailySummaryMaxTokens: String(settings.taskDailySummaryMaxTokens),
     dailySummaryMaxTokens: String(settings.dailySummaryMaxTokens),
     areaProgressMaxTokens: String(settings.areaProgressMaxTokens),
     projectInsightMaxTokens: String(settings.projectInsightMaxTokens),
@@ -175,6 +180,7 @@ function displayLlmSettings(settings: LlmSettings): LlmSettings {
     ...settings,
     meetingExtractionPrompt: settings.meetingExtractionPrompt || settings.defaultMeetingExtractionPrompt,
     taskSummaryPrompt: settings.taskSummaryPrompt || settings.defaultTaskSummaryPrompt,
+    taskDailySummaryPrompt: settings.taskDailySummaryPrompt || settings.defaultTaskDailySummaryPrompt,
     dailySummaryPrompt: settings.dailySummaryPrompt || settings.defaultDailySummaryPrompt,
     areaProgressPrompt: settings.areaProgressPrompt || settings.defaultAreaProgressPrompt,
     projectInsightPrompt: settings.projectInsightPrompt || settings.defaultProjectInsightPrompt,
@@ -186,6 +192,8 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
   const defaultMeetingPrompt = settings.defaultMeetingExtractionPrompt.trim()
   const taskSummaryPrompt = settings.taskSummaryPrompt.trim()
   const defaultTaskSummaryPrompt = settings.defaultTaskSummaryPrompt.trim()
+  const taskDailySummaryPrompt = settings.taskDailySummaryPrompt.trim()
+  const defaultTaskDailySummaryPrompt = settings.defaultTaskDailySummaryPrompt.trim()
   const dailySummaryPrompt = settings.dailySummaryPrompt.trim()
   const defaultDailySummaryPrompt = settings.defaultDailySummaryPrompt.trim()
   const areaProgressPrompt = settings.areaProgressPrompt.trim()
@@ -199,11 +207,13 @@ function serializeLlmSettings(settings: LlmSettings): Partial<LlmSettings> {
     timeoutMs: settings.timeoutMs,
     meetingExtractionMaxTokens: normalizeMaxTokens(settings.meetingExtractionMaxTokens, 4000),
     taskSummaryMaxTokens: normalizeMaxTokens(settings.taskSummaryMaxTokens, 1200),
+    taskDailySummaryMaxTokens: normalizeMaxTokens(settings.taskDailySummaryMaxTokens, 1200),
     dailySummaryMaxTokens: normalizeMaxTokens(settings.dailySummaryMaxTokens, 4000),
     areaProgressMaxTokens: Math.max(256, normalizeMaxTokens(settings.areaProgressMaxTokens, 4000)),
     projectInsightMaxTokens: Math.max(256, normalizeMaxTokens(settings.projectInsightMaxTokens, 4000)),
     meetingExtractionPrompt: meetingPrompt === defaultMeetingPrompt ? '' : settings.meetingExtractionPrompt,
     taskSummaryPrompt: taskSummaryPrompt === defaultTaskSummaryPrompt ? '' : settings.taskSummaryPrompt,
+    taskDailySummaryPrompt: taskDailySummaryPrompt === defaultTaskDailySummaryPrompt ? '' : settings.taskDailySummaryPrompt,
     dailySummaryPrompt: dailySummaryPrompt === defaultDailySummaryPrompt ? '' : settings.dailySummaryPrompt,
     areaProgressPrompt: areaProgressPrompt === defaultAreaProgressPrompt ? '' : settings.areaProgressPrompt,
     projectInsightPrompt: projectInsightPrompt === defaultProjectInsightPrompt ? '' : settings.projectInsightPrompt,
@@ -559,6 +569,13 @@ function LlmProviderSettingsSection({
           />
         </label>
         <label className="space-y-1">
+          <span className="text-xs font-medium text-muted-foreground">Task Daily Summary Max Tokens</span>
+          <input type="number" min={16} max={32000} step={100}
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary"
+            value={tokenDrafts.taskDailySummaryMaxTokens}
+            onChange={(e) => onTokenDraftChange('taskDailySummaryMaxTokens', e.target.value)} />
+        </label>
+        <label className="space-y-1">
           <span className="text-xs font-medium text-muted-foreground">Area Progress Max Tokens</span>
           <input
             type="number"
@@ -902,6 +919,163 @@ function DailySummarySettingsSection({
       />
     </div>
   )
+}
+
+type TaskDailyScheduleSettings = TaskDailySummarySettingsResponse
+
+async function taskDailySettingsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await apiFetch(path, init)
+  const body = await response.json()
+  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`)
+  return body as T
+}
+
+function TaskDailySummarySettingsSection({ settings, tokenDraft, onUpdate, onTokenChange }: {
+  settings: LlmSettings
+  tokenDraft: string
+  onUpdate: (patch: Partial<LlmSettings>) => void
+  onTokenChange: (value: string) => void
+}) {
+  const { t } = useI18n()
+  const [schedule, setSchedule] = useState<TaskDailyScheduleSettings | null>(null)
+  const [numericDrafts, setNumericDrafts] = useState({ intervalMinutes: '', maxInputChars: '', dailyCallBudget: '', backfillDays: '', logRetentionDays: '' })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState<SettingsMessage>(null)
+  const [logs, setLogs] = useState<LlmCallLogSummary[]>([])
+  const [logsLoading, setLogsLoading] = useState(false)
+  const [expandedLog, setExpandedLog] = useState<string | null>(null)
+  const [showTest, setShowTest] = useState(false)
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [taskId, setTaskId] = useState('')
+  const [date, setDate] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [loadingTasks, setLoadingTasks] = useState(false)
+  const [result, setResult] = useState<{ summaryText: string; sourceEntryIds: string[]; llmCallLogId: string | null } | null>(null)
+  const inputClass = 'w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-primary'
+  const numberFields = [
+    { key: 'intervalMinutes', min: 1, max: 1440 },
+    { key: 'maxInputChars', min: 4000, max: 200000 },
+    { key: 'dailyCallBudget', min: 0, max: 10000 },
+    { key: 'backfillDays', min: 0, max: 3650 },
+    { key: 'logRetentionDays', min: 0, max: 3650 },
+  ] as const
+
+  const applySchedule = (value: TaskDailyScheduleSettings) => {
+    setSchedule(value)
+    setNumericDrafts({ intervalMinutes: String(value.intervalMinutes), maxInputChars: String(value.maxInputChars), dailyCallBudget: String(value.dailyCallBudget), backfillDays: String(value.backfillDays), logRetentionDays: String(value.logRetentionDays) })
+    setDate(current => current || value.calendar.lastClosedWorkDate)
+  }
+  const load = async () => {
+    setLoading(true)
+    setMessage(null)
+    try { applySchedule(await taskDailySettingsRequest<TaskDailyScheduleSettings>('/api/settings/task-daily-summary')) }
+    catch (error: any) { setMessage({ type: 'error', text: error.message }) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => {
+    let active = true
+    taskDailySettingsRequest<TaskDailyScheduleSettings>('/api/settings/task-daily-summary')
+      .then(value => { if (active) applySchedule(value) })
+      .catch(error => { if (active) setMessage({ type: 'error', text: error.message }) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    if (!showTest) return
+    let active = true
+    setLoadingTasks(true)
+    fetchTodos(undefined, 'PENDING,DOING,DONE,DROPPED,ON_HOLD')
+      .then(values => { if (active) { setTasks(values); setTaskId(current => current || values[0]?.id || '') } })
+      .catch(error => { if (active) setMessage({ type: 'error', text: error.message }) })
+      .finally(() => { if (active) setLoadingTasks(false) })
+    return () => { active = false }
+  }, [showTest])
+
+  const integer = (raw: string, min: number, max: number, label: string) => {
+    const value = Number(raw)
+    if (!/^\d+$/.test(raw.trim()) || !Number.isSafeInteger(value) || value < min || value > max) {
+      throw new Error(t('settings.taskDailySummary.invalidNumber', { label, min: String(min), max: String(max) }))
+    }
+    return value
+  }
+  const maxTokens = () => integer(tokenDraft, 16, 32000, t('settings.taskDailySummary.maxTokens'))
+  const saveSettings = async () => {
+    if (!schedule || saving) return
+    setSaving(true); setMessage(null)
+    try {
+      const numbers = Object.fromEntries(numberFields.map(field => [field.key, integer(numericDrafts[field.key], field.min, field.max, t(`settings.taskDailySummary.${field.key}`))]))
+      const prompt = settings.taskDailySummaryPrompt.trim() === settings.defaultTaskDailySummaryPrompt.trim() ? '' : settings.taskDailySummaryPrompt
+      const saved = await taskDailySettingsRequest<TaskDailyScheduleSettings>('/api/settings/task-daily-summary', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...numbers, enabled: schedule.enabled, taskDailySummaryMaxTokens: maxTokens(), taskDailySummaryPrompt: prompt }),
+      })
+      applySchedule(saved)
+      onUpdate({ taskDailySummaryPrompt: saved.taskDailySummaryPrompt || settings.defaultTaskDailySummaryPrompt, taskDailySummaryMaxTokens: saved.taskDailySummaryMaxTokens })
+      onTokenChange(String(saved.taskDailySummaryMaxTokens))
+      setMessage({ type: 'success', text: t('settings.taskDailySummary.saved') })
+    } catch (error: any) { setMessage({ type: 'error', text: error.message }) }
+    finally { setSaving(false) }
+  }
+  const loadLogs = async () => {
+    setLogsLoading(true)
+    try { setLogs(await taskDailySettingsRequest<LlmCallLogSummary[]>('/api/llm-call-logs?feature=task_daily_summary&limit=50')) }
+    catch (error: any) { setMessage({ type: 'error', text: error.message }) }
+    finally { setLogsLoading(false) }
+  }
+  const runTest = async () => {
+    if (!taskId || !date || testing) return
+    setTesting(true); setMessage(null); setResult(null)
+    try {
+      const latest = await taskDailySettingsRequest<TaskDailyScheduleSettings>('/api/settings/task-daily-summary')
+      setSchedule(current => current ? { ...current, calendar: latest.calendar } : latest)
+      if (date > latest.calendar.lastClosedWorkDate) throw new Error(t('settings.taskDailySummary.closedOnly'))
+      setResult(await taskDailySettingsRequest(`/api/tasks/${encodeURIComponent(taskId)}/days/${encodeURIComponent(date)}/summary-test`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: settings.taskDailySummaryPrompt || settings.defaultTaskDailySummaryPrompt, maxTokens: maxTokens() }),
+      }))
+      await loadLogs()
+    } catch (error: any) { setMessage({ type: 'error', text: error.message }) }
+    finally { setTesting(false) }
+  }
+
+  return <div className="space-y-4" data-testid="task-daily-summary-settings">
+    <SettingsMessageBanner message={message} />
+    <SectionPanel icon={<Bot className="h-5 w-5 text-muted-foreground" />} title={t('settings.taskDailySummary.title')}>
+      <p className="mb-4 text-sm text-muted-foreground">{t('settings.taskDailySummary.providerHint')}</p>
+      {loading && <p role="status">{t('settings.taskDailySummary.loading')}</p>}
+      {!loading && !schedule && <button className="dialog-button-secondary" onClick={() => void load()}>{t('settings.taskDailySummary.reload')}</button>}
+      <fieldset disabled={loading || !schedule || saving || testing} className="space-y-4">
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={schedule?.enabled ?? false} onChange={event => setSchedule(current => current ? { ...current, enabled: event.target.checked } : current)} />{t('settings.taskDailySummary.enabled')}</label>
+        <p className="text-xs text-muted-foreground">{t('settings.taskDailySummary.pollHint')}</p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {numberFields.map(field => <label className="space-y-1" key={field.key}><span className="text-xs font-medium text-muted-foreground">{t(`settings.taskDailySummary.${field.key}`)}</span><input type="number" min={field.min} max={field.max} step={1} className={inputClass} value={numericDrafts[field.key]} onChange={event => setNumericDrafts(current => ({ ...current, [field.key]: event.target.value }))} /></label>)}
+          <label className="space-y-1"><span className="text-xs font-medium text-muted-foreground">{t('settings.taskDailySummary.maxTokens')}</span><input type="number" min={16} max={32000} step={1} className={inputClass} value={tokenDraft} onChange={event => onTokenChange(event.target.value)} /></label>
+        </div>
+        <p className="text-xs text-muted-foreground">{t('settings.taskDailySummary.backfillHint')}</p>
+        {schedule && <p className="text-xs text-muted-foreground">{t('settings.taskDailySummary.calendar', { zone: schedule.calendar.timeZone, hour: String(schedule.calendar.startOfDayHour), date: schedule.calendar.lastClosedWorkDate })}</p>}
+        <label className="block space-y-1"><span className="text-xs font-medium text-muted-foreground">{t('settings.taskDailySummary.prompt')}</span><textarea className={`${inputClass} min-h-[330px] resize-y font-mono text-xs leading-5`} value={settings.taskDailySummaryPrompt} onChange={event => onUpdate({ taskDailySummaryPrompt: event.target.value })} /></label>
+        <p className="text-xs text-muted-foreground">{t('settings.taskDailySummary.promptHint')}</p>
+        {schedule && schedule.summariesInWindow > 0 && (schedule.taskDailySummaryPrompt || schedule.defaultTaskDailySummaryPrompt).trim() !== settings.taskDailySummaryPrompt.trim() && <p role="alert" data-testid="task-daily-summary-prompt-impact" className="text-xs text-amber-700 dark:text-amber-400">{t('settings.taskDailySummary.promptImpact', { count: String(schedule.summariesInWindow) })}</p>}
+        <div className="flex flex-wrap gap-2">
+          <button className="dialog-button-primary" onClick={() => void saveSettings()}><Save className="h-4 w-4" />{t('settings.taskDailySummary.save')}</button>
+          <button className="dialog-button-secondary" onClick={() => onUpdate({ taskDailySummaryPrompt: settings.defaultTaskDailySummaryPrompt })}>{t('settings.taskDailySummary.reset')}</button>
+          <button className="dialog-button-secondary" onClick={() => setShowTest(current => !current)}><FlaskConical className="h-4 w-4" />{t('settings.taskDailySummary.test')}</button>
+        </div>
+      </fieldset>
+      {showTest && <div className="mt-4 space-y-3 border-t pt-4" data-testid="task-daily-summary-test">
+        <p className="text-sm text-muted-foreground">{t('settings.taskDailySummary.testHint')}</p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="space-y-1"><span className="text-xs font-medium">{t('settings.taskDailySummary.task')}</span><select className={inputClass} disabled={loadingTasks || testing} value={taskId} onChange={event => { setTaskId(event.target.value); setResult(null) }}><option value="">{t('settings.taskDailySummary.selectTask')}</option>{tasks.map(task => <option key={task.id} value={task.id}>{task.title} · {task.status}</option>)}</select></label>
+          <label className="space-y-1"><span className="text-xs font-medium">{t('settings.taskDailySummary.date')}</span><input type="date" className={inputClass} max={schedule?.calendar.lastClosedWorkDate} disabled={testing} value={date} onChange={event => { setDate(event.target.value); setResult(null) }} /></label>
+        </div>
+        <button className="dialog-button-primary" disabled={!taskId || !date || loadingTasks || testing || saving || !schedule || date > schedule.calendar.lastClosedWorkDate} onClick={() => void runTest()}>{testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}{t('settings.taskDailySummary.runTest')}</button>
+        {result && <div className="rounded-md border p-3 text-sm" data-testid="task-daily-summary-test-result"><p className="whitespace-pre-wrap">{result.summaryText}</p><p className="mt-2 text-xs text-muted-foreground">{t('settings.taskDailySummary.sources')}: {result.sourceEntryIds.join(', ') || '—'}</p></div>}
+      </div>}
+    </SectionPanel>
+    <LlmCallLogsSection featureLabel="task daily summary" logs={logs} loading={logsLoading} expandedLogId={expandedLog} onLoad={() => void loadLogs()} onToggleExpanded={setExpandedLog} />
+  </div>
 }
 
 function AreaProgressSettingsSection({
@@ -1451,6 +1625,7 @@ export function SettingsPage() {
     timeoutMs: 30000,
     meetingExtractionMaxTokens: 4000,
     taskSummaryMaxTokens: 1200,
+    taskDailySummaryMaxTokens: 1200,
     dailySummaryMaxTokens: 4000,
     areaProgressMaxTokens: 4000,
     projectInsightMaxTokens: 4000,
@@ -1458,6 +1633,8 @@ export function SettingsPage() {
     defaultMeetingExtractionPrompt: '',
     taskSummaryPrompt: '',
     defaultTaskSummaryPrompt: '',
+    taskDailySummaryPrompt: '',
+    defaultTaskDailySummaryPrompt: '',
     dailySummaryPrompt: '',
     defaultDailySummaryPrompt: '',
     areaProgressPrompt: '',
@@ -1468,6 +1645,7 @@ export function SettingsPage() {
   const [llmTokenDrafts, setLlmTokenDrafts] = useState<LlmTokenDrafts>({
     meetingExtractionMaxTokens: '4000',
     taskSummaryMaxTokens: '1200',
+    taskDailySummaryMaxTokens: '1200',
     dailySummaryMaxTokens: '4000',
     areaProgressMaxTokens: '4000',
     projectInsightMaxTokens: '4000',
@@ -1548,6 +1726,11 @@ export function SettingsPage() {
             id: 'ai.dailySummary',
             label: 'Daily Summary',
             description: 'Edit the daily review prompt and inspect summary calls.',
+          },
+          {
+            id: 'ai.taskDailySummary',
+            label: t('settings.taskDailySummary.title'),
+            description: t('settings.taskDailySummary.description'),
           },
           {
             id: 'ai.areaProgress',
@@ -2006,6 +2189,11 @@ export function SettingsPage() {
             onToggleExpandedLog={setExpandedDailySummaryLogId}
           />
         )
+      case 'ai.taskDailySummary':
+        return <TaskDailySummarySettingsSection settings={llmSettings}
+          tokenDraft={llmTokenDrafts.taskDailySummaryMaxTokens}
+          onUpdate={updateLlmSettings}
+          onTokenChange={value => updateLlmTokenDraft('taskDailySummaryMaxTokens', value)} />
       case 'ai.areaProgress':
         return (
           <AreaProgressSettingsSection

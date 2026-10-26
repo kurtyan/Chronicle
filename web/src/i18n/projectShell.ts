@@ -1,6 +1,7 @@
 import type { TranslationEntry } from './translations'
 
 export const projectShellTranslations: Record<string, TranslationEntry> = {
+  'sidebar.workOutline': { 'zh-CN': '工作大纲', en: 'Work outline' },
   'sidebar.projects': { 'zh-CN': '方向与里程碑', en: 'Areas & Milestones' },
   'projectShell.goTo': { 'zh-CN': '前往{page}', en: 'Go to {page}' },
   'projectShell.loading': { 'zh-CN': '正在加载方向与里程碑…', en: 'Loading areas and milestones…' },

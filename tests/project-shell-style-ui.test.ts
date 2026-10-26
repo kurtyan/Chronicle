@@ -3,18 +3,20 @@ import { test, expect } from '@playwright/test'
 test.use({ locale: 'en-US' })
 const unique = (label: string) => `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
 
-test('sidebar shortcuts follow the visible order, including Projects fifth and Settings sixth', async ({ page }) => {
+test('outline is fourth and numbered shortcuts follow every sidebar position with Settings last', async ({ page }) => {
   await page.goto('/?lang=en')
-  const navigation = page.locator('aside nav')
+  const navigation = page.locator('aside nav').first()
   const items = [
-    ['Board', '/'], ['Today', '/today'], ['Notes', '/notes'], ['Report', '/report'],
-    ['Areas & Milestones', '/projects'], ['Settings', '/settings'],
-  ]
-  for (const index of [4, 5, 0, 1, 2, 3]) {
-    const [label, path] = items[index]
+    ['Board', '/', 1], ['Today', '/today', 2], ['Notes', '/notes', 3], ['Work outline', '/work-outline', 4],
+    ['Report', '/report', 5], ['Areas & Milestones', '/projects', 6], ['Settings', '/settings', 7],
+  ] as const
+  await expect(navigation.getByRole('button')).toHaveCount(items.length)
+  for (const [index, [label, path, shortcut]] of items.entries()) {
     const item = navigation.getByRole('button', { name: label, exact: true })
-    await expect(item).toHaveAttribute('aria-keyshortcuts', new RegExp(`(?:Meta|Control)\\+${index + 1}$`))
-    await page.keyboard.press(`ControlOrMeta+${index + 1}`)
+    await expect(navigation.getByRole('button').nth(index)).toHaveAttribute('aria-label', label)
+    await expect(item).toHaveAttribute('aria-keyshortcuts', new RegExp(`(?:Meta|Control)\\+${shortcut}$`))
+    await expect(item).toHaveAttribute('title', new RegExp(`(?:⌘|Ctrl\\+)${shortcut}\\)`))
+    await page.keyboard.press(`ControlOrMeta+${shortcut}`)
     await expect.poll(() => new URL(page.url()).pathname).toBe(path)
     await expect(item).toHaveAttribute('aria-current', 'page')
   }
@@ -79,14 +81,14 @@ test('English Report grouping has a compact button control and localizes isolate
   await expect.poll(() => new URL(page.url()).pathname).toBe('/')
 })
 
-test('an immediate Cmd+5 navigation retains an unsaved Focus edit on return', async ({ page, request }) => {
+test('an immediate Cmd+6 navigation retains an unsaved Focus edit on return', async ({ page, request }) => {
   const date = '2099-07-19'
   const text = unique('Focus-before-project-navigation')
   await page.goto(`/today?date=${date}&lang=en`)
   const focus = page.locator('.day-script-editor.ProseMirror')
   await expect(focus).toBeVisible()
   await focus.fill(text)
-  await focus.press('ControlOrMeta+5')
+  await focus.press('ControlOrMeta+6')
   await expect(page.getByTestId('projects-page')).toBeVisible()
   await page.goBack()
   await expect(focus).toContainText(text)
@@ -105,7 +107,7 @@ for (const status of [500, 409]) test(`Focus stays editable when navigation savi
   await page.goto(`/today?date=${date}&lang=en`)
   const focus = page.locator('.day-script-editor.ProseMirror')
   await focus.fill(text)
-  if (status === 500) await focus.press('ControlOrMeta+5')
+  if (status === 500) await focus.press('ControlOrMeta+6')
   else await page.locator('aside nav').getByRole('button', { name: 'Areas & Milestones', exact: true }).click()
   await expect.poll(() => writes).toBe(1)
   await expect(page.getByText(status === 409 ? 'Save conflict. Reload this date before saving again.' : 'Request failed with status code 500', { exact: true })).toBeVisible()
@@ -114,7 +116,7 @@ for (const status of [500, 409]) test(`Focus stays editable when navigation savi
   expect(JSON.stringify((await (await request.get(`/api/day-scripts/${date}`)).json()).document)).not.toContain(text)
   // A later successful request can leave normally without losing the retained draft.
   await page.unroute(`**/api/day-scripts/${date}`)
-  await focus.press('ControlOrMeta+5')
+  await focus.press('ControlOrMeta+6')
   await expect(page.getByTestId('projects-page')).toBeVisible()
   expect(JSON.stringify((await (await request.get(`/api/day-scripts/${date}`)).json()).document)).toContain(text)
 })
@@ -142,8 +144,8 @@ test('navigation waits for an in-flight save, saves later edits and uses the las
     await focus.press('ControlOrMeta+s')
     await expect.poll(() => writes.length).toBe(1)
     await focus.fill(latest)
-    await focus.press('ControlOrMeta+5')
     await focus.press('ControlOrMeta+6')
+    await focus.press('ControlOrMeta+7')
     expect(new URL(page.url()).pathname).toBe('/today')
     expect(writes).toHaveLength(1)
     release()
@@ -163,7 +165,7 @@ test('navigation from an untouched Focus does not write the day script', async (
   await page.goto(`/today?date=${date}&lang=en`)
   await expect(page.locator('.day-script-editor.ProseMirror')).toBeVisible()
   const before = await (await request.get(`/api/day-scripts/${date}`)).json()
-  await page.keyboard.press('ControlOrMeta+5')
+  await page.keyboard.press('ControlOrMeta+6')
   await expect(page.getByTestId('projects-page')).toBeVisible()
   const after = await (await request.get(`/api/day-scripts/${date}`)).json()
   expect(writes).toEqual([])

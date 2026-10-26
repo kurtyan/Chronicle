@@ -3,6 +3,10 @@ import { cors } from 'hono/cors'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { AppService } from './services/appService'
 import { projectRoutes } from './projectRoutes'
+import { workOutlineRoutes } from './workOutlineRoutes'
+import { rotateWorkOutlineEpoch } from './services/workOutlineService'
+import { taskDailySummaryRoutes } from './taskDailySummaryRoutes'
+import { startTaskDailySummaryScheduler, stopTaskDailySummaryScheduler, isTaskDailySummarySchedulerRunning } from './services/taskDailySummaryWorker'
 import { initDb, closeDb, getDb, getMetaValue, setMetaValue } from './db'
 import { getConfig } from './config'
 import { exportDatabase, importDatabase, getSettingsInfo } from './services/settingsService'
@@ -245,6 +249,8 @@ function getBackgroundTaskBySource(type: 'daily_summary' | 'task_summary' | 'mee
 
 // Project routes share the same origin and database-maintenance middleware.
 app.route('/api', projectRoutes)
+app.route('/api', workOutlineRoutes)
+app.route('/api', taskDailySummaryRoutes)
 
 // --- Task API ---
 app.get('/api/tasks', async (c) => {
@@ -1133,6 +1139,8 @@ app.get('/api/settings/export', async (c) => {
 
 app.post('/api/settings/import', async (c) => {
   if (databaseMaintenance) return c.json({ error: 'Database maintenance already in progress' }, 503)
+  let ownsDatabaseMaintenance = false
+  let resumeDailyScheduler = false
   try {
     const formData = await c.req.formData()
     const file = formData.get('file')
@@ -1143,14 +1151,24 @@ app.post('/api/settings/import', async (c) => {
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
 
+    // Another import may have acquired the lock while this upload was parsed.
+    // Check and acquire without an await between them.
+    if (databaseMaintenance) return c.json({ error: 'Database maintenance already in progress' }, 503)
     databaseMaintenance = true
+    ownsDatabaseMaintenance = true
+    resumeDailyScheduler = isTaskDailySummarySchedulerRunning()
+    if (resumeDailyScheduler) await stopTaskDailySummaryScheduler()
     const result = await importDatabase(buffer)
-    broadcastEvent('db_imported', {}, c.get('clientId'))
+    const outlineEpoch = rotateWorkOutlineEpoch()
+    broadcastEvent('db_imported', { outlineEpoch }, c.get('clientId'))
     return c.json(result)
   } catch (err: any) {
     return c.json({ error: err.message || 'Import failed' }, 400)
   } finally {
-    databaseMaintenance = false
+    if (ownsDatabaseMaintenance) {
+      databaseMaintenance = false
+      if (resumeDailyScheduler) startTaskDailySummaryScheduler()
+    }
   }
 })
 

@@ -6,6 +6,7 @@ import { projectWorkspaceNavigationTranslations } from './projectWorkspaceNaviga
 import { projectActivityTranslations } from './projectActivity'
 import { projectReviewWorkflowTranslations } from './projectReviewWorkflow'
 import { projectWorkspaceObjectTranslations } from './projectWorkspaceObject'
+import { workOutlineTranslations } from './workOutline'
 
 export type Locale = 'zh-CN' | 'en'
 
@@ -23,6 +24,7 @@ export const translations: Record<string, TranslationEntry> = {
   ...projectActivityTranslations,
   ...projectReviewWorkflowTranslations,
   ...projectWorkspaceObjectTranslations,
+  ...workOutlineTranslations,
   // Sidebar
   'sidebar.board': { 'zh-CN': '看板', en: 'Board' },
   'sidebar.today': { 'zh-CN': '今日', en: 'Today' },
@@ -236,6 +238,34 @@ export const translations: Record<string, TranslationEntry> = {
   'settings.serverVersion': { 'zh-CN': 'Server 版本', en: 'Server Version' },
   'settings.startOfDayOffset': { 'zh-CN': '每日起始偏移', en: 'Start of Day Offset' },
   'settings.startOfDayOffsetHint': { 'zh-CN': '偏移小时数。例如 +5 表示凌晨 5 点前算作前一天，适合熬夜场景。Report 和 Today 页面会使用此配置。', en: 'Hours to shift the day boundary. E.g. +5 means times before 5am count as the previous day. Used by Report and Today pages.' },
+
+  // Pin
+  'settings.taskDailySummary.title': { 'zh-CN': '每日任务摘要', en: 'Task Daily Summary' },
+  'settings.taskDailySummary.description': { 'zh-CN': '配置历史工作日的任务摘要、轮询和调用记录。', en: 'Configure per-task workday summaries, polling, and call logs.' },
+  'settings.taskDailySummary.providerHint': { 'zh-CN': '使用 Provider 页的模型、连接、API Key 和超时设置。此处独立配置每日任务摘要。', en: 'Uses the model, connection, API key, and timeout from Provider. Configure task daily summaries independently here.' },
+  'settings.taskDailySummary.enabled': { 'zh-CN': '启用定期生成和更新', en: 'Enable scheduled generation and updates' },
+  'settings.taskDailySummary.pollHint': { 'zh-CN': '每轮检查已结束工作日的明细，缺失或内容变化才生成。当天只显示工时，始终不生成摘要。', en: 'Each poll checks completed workdays and generates only missing or changed summaries. The current workday shows time only.' },
+  'settings.taskDailySummary.intervalMinutes': { 'zh-CN': '检查周期（分钟）', en: 'Polling interval (minutes)' },
+  'settings.taskDailySummary.maxInputChars': { 'zh-CN': '每次调用最大输入字符', en: 'Maximum input characters per call' },
+  'settings.taskDailySummary.dailyCallBudget': { 'zh-CN': '每日调用上限（0 表示暂停模型调用）', en: 'Daily call limit (0 pauses model calls)' },
+  'settings.taskDailySummary.maxTokens': { 'zh-CN': '最大输出 Token', en: 'Maximum output tokens' },
+  'settings.taskDailySummary.calendar': { 'zh-CN': '日界沿用 Focus：{zone}，每天 {hour}:00 起算。可生成至 {date}。', en: 'Uses the Focus day boundary: {zone}, starting at {hour}:00. Summaries available through {date}.' },
+  'settings.taskDailySummary.prompt': { 'zh-CN': '提示词', en: 'Prompt' },
+  'settings.taskDailySummary.promptHint': { 'zh-CN': '返回 JSON：summaryText 和 sourceEntryIds。只总结该工作日的证据；工时由系统计算。', en: 'Return JSON with summaryText and sourceEntryIds. Summarize only evidence for this workday; recorded time is calculated separately.' },
+  'settings.taskDailySummary.save': { 'zh-CN': '保存每日任务摘要设置', en: 'Save Task Daily Summary' },
+  'settings.taskDailySummary.saved': { 'zh-CN': '每日任务摘要设置已保存', en: 'Task daily summary settings saved' },
+  'settings.taskDailySummary.reset': { 'zh-CN': '恢复默认提示词', en: 'Reset to Default Prompt' },
+  'settings.taskDailySummary.test': { 'zh-CN': '测试提示词', en: 'Test Prompt' },
+  'settings.taskDailySummary.testHint': { 'zh-CN': '选择任务与已结束的工作日，使用当前编辑的提示词和 Token 上限试跑。试跑仅保留模型调用记录，不覆盖每日摘要。', en: 'Choose a task and a completed workday to test the edited prompt and token limit. Tests retain call logs without replacing daily summaries.' },
+  'settings.taskDailySummary.task': { 'zh-CN': '任务', en: 'Task' },
+  'settings.taskDailySummary.selectTask': { 'zh-CN': '选择任务', en: 'Select a task' },
+  'settings.taskDailySummary.date': { 'zh-CN': '工作日', en: 'Workday' },
+  'settings.taskDailySummary.runTest': { 'zh-CN': '运行测试', en: 'Run Test' },
+  'settings.taskDailySummary.sources': { 'zh-CN': '来源记录', en: 'Source entries' },
+  'settings.taskDailySummary.closedOnly': { 'zh-CN': '只能测试已结束的工作日摘要。', en: 'Only completed workdays can be summarized.' },
+  'settings.taskDailySummary.invalidNumber': { 'zh-CN': '{label}必须是 {min} 到 {max} 之间的整数。', en: '{label} must be a whole number between {min} and {max}.' },
+  'settings.taskDailySummary.loading': { 'zh-CN': '正在加载设置…', en: 'Loading settings…' },
+  'settings.taskDailySummary.reload': { 'zh-CN': '重新加载设置', en: 'Reload settings' },
 
   // Pin
   'task.pin': { 'zh-CN': '置顶', en: 'Pin' },

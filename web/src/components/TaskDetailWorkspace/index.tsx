@@ -28,9 +28,10 @@ interface TaskDetailWorkspaceProps {
   showTrackingStatus?: boolean
   keepCompletedTaskVisible?: boolean
   findTokens?: string[]
+  shortcutScopeRef?: React.RefObject<HTMLElement>
 }
 
-export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true, keepCompletedTaskVisible = false, findTokens }: TaskDetailWorkspaceProps) {
+export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = true, keepCompletedTaskVisible = false, findTokens, shortcutScopeRef }: TaskDetailWorkspaceProps) {
   const { t } = useI18n()
   const navigate = useNavigate()
   const {
@@ -379,13 +380,19 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
   // Register task-detail keyboard shortcuts (work on both Board and Today pages)
   useEffect(() => {
     const unregisters: (() => void)[] = []
+    const registerTaskShortcut = (definition: Parameters<typeof registerShortcut>[0]) => registerShortcut({
+      ...definition,
+      context: () => (!shortcutScopeRef || !!shortcutScopeRef.current?.contains(document.activeElement))
+        && (!definition.context || definition.context()),
+    })
 
     // Ctrl+Enter: Submit entry
-    unregisters.push(registerShortcut({
+    unregisters.push(registerTaskShortcut({
       id: 'submit-entry',
       combo: 'ctrl+enter',
       label: 'Submit entry',
       scope: 'page',
+      context: () => !shortcutScopeRef,
       handler: async () => {
         const state = useTaskStore.getState()
         if (state.activeTaskId) {
@@ -403,7 +410,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     }))
 
     // ArrowRight: Focus log editor (only when not already editing)
-    unregisters.push(registerShortcut({
+    unregisters.push(registerTaskShortcut({
       id: 'focus-log-editor',
       combo: 'ArrowRight',
       label: 'Focus log editor',
@@ -421,7 +428,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     }))
 
     // Cmd+Shift+T: Take Over
-    unregisters.push(registerShortcut({
+    unregisters.push(registerTaskShortcut({
       id: 'take-over',
       combo: 'mod+shift+t',
       label: 'Take Over task',
@@ -438,7 +445,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     }))
 
     // Cmd+Shift+S: Start task (when PENDING)
-    unregisters.push(registerShortcut({
+    unregisters.push(registerTaskShortcut({
       id: 'start-task',
       combo: 'mod+shift+s',
       label: 'Start task',
@@ -454,7 +461,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     }))
 
     // Cmd+Shift+D: Mark done (when DOING)
-    unregisters.push(registerShortcut({
+    unregisters.push(registerTaskShortcut({
       id: 'mark-done',
       combo: 'mod+shift+d',
       label: 'Mark done',
@@ -469,7 +476,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     }))
 
     return () => unregisters.forEach(fn => fn())
-  }, [handleCompleteTask])
+  }, [handleCompleteTask, shortcutScopeRef])
 
   if (!selectedTask) return null
 

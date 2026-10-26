@@ -27,11 +27,13 @@ export interface ChronicleConfig {
     timeoutMs: number
     meetingExtractionMaxTokens: number
     taskSummaryMaxTokens: number
+    taskDailySummaryMaxTokens: number
     dailySummaryMaxTokens: number
     areaProgressMaxTokens: number
     projectInsightMaxTokens: number
     meetingExtractionPrompt: string
     taskSummaryPrompt: string
+    taskDailySummaryPrompt: string
     dailySummaryPrompt: string
     areaProgressPrompt: string
     projectInsightPrompt: string
@@ -64,11 +66,13 @@ const defaultConfig: ChronicleConfig = {
     timeoutMs: 30000,
     meetingExtractionMaxTokens: 4000,
     taskSummaryMaxTokens: 1200,
+    taskDailySummaryMaxTokens: 1200,
     dailySummaryMaxTokens: 4000,
     areaProgressMaxTokens: 4000,
     projectInsightMaxTokens: 4000,
     meetingExtractionPrompt: '',
     taskSummaryPrompt: '',
+    taskDailySummaryPrompt: '',
     dailySummaryPrompt: '',
     areaProgressPrompt: '',
     projectInsightPrompt: '',
@@ -136,11 +140,13 @@ export function getConfig(): ChronicleConfig {
       timeoutMs: envLlmTimeoutMs ? parseInt(envLlmTimeoutMs, 10) : (fileConfig.llm?.timeoutMs ?? defaultConfig.llm.timeoutMs),
       meetingExtractionMaxTokens: fileConfig.llm?.meetingExtractionMaxTokens ?? defaultConfig.llm.meetingExtractionMaxTokens,
       taskSummaryMaxTokens: fileConfig.llm?.taskSummaryMaxTokens ?? defaultConfig.llm.taskSummaryMaxTokens,
+      taskDailySummaryMaxTokens: fileConfig.llm?.taskDailySummaryMaxTokens ?? defaultConfig.llm.taskDailySummaryMaxTokens,
       dailySummaryMaxTokens: fileConfig.llm?.dailySummaryMaxTokens ?? defaultConfig.llm.dailySummaryMaxTokens,
       areaProgressMaxTokens: fileConfig.llm?.areaProgressMaxTokens ?? defaultConfig.llm.areaProgressMaxTokens,
       projectInsightMaxTokens: fileConfig.llm?.projectInsightMaxTokens ?? defaultConfig.llm.projectInsightMaxTokens,
       meetingExtractionPrompt: fileConfig.llm?.meetingExtractionPrompt ?? defaultConfig.llm.meetingExtractionPrompt,
       taskSummaryPrompt: fileConfig.llm?.taskSummaryPrompt ?? defaultConfig.llm.taskSummaryPrompt,
+      taskDailySummaryPrompt: fileConfig.llm?.taskDailySummaryPrompt ?? defaultConfig.llm.taskDailySummaryPrompt,
       dailySummaryPrompt: fileConfig.llm?.dailySummaryPrompt ?? defaultConfig.llm.dailySummaryPrompt,
       areaProgressPrompt: fileConfig.llm?.areaProgressPrompt ?? defaultConfig.llm.areaProgressPrompt,
       projectInsightPrompt: fileConfig.llm?.projectInsightPrompt ?? defaultConfig.llm.projectInsightPrompt,
