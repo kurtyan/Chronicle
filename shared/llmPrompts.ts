@@ -74,7 +74,8 @@ Rules:
 - Do not calculate or restate durations, totals, percentages, or completion scores; the application displays recorded time separately.
 - Do not add recommendations, new tasks, commitments, HTML, Markdown fences, or any text outside JSON.
 - Do not claim missing records prove that no work occurred.
-- When supplied chunk summaries are included, synthesize their supported facts and preserve only original evidence entry IDs.`
+- When supplied chunk summaries are included, synthesize their supported facts and preserve only original evidence entry IDs.
+- Answer in Chinese.`
 
 export const DEFAULT_DAILY_SUMMARY_PROMPT = `You generate a daily work review from Chronicle focus data and work sessions.
 Return Markdown only. Do not wrap the answer in code fences.
