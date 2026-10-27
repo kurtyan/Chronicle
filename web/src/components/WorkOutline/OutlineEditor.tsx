@@ -42,7 +42,7 @@ const TaskReference = Node.create({
 })
 
 const projectionKey = new PluginKey('outline-projection')
-type Projection = { collapsed: Set<string>; statuses: Record<string, string>; titles: Record<string, string> }
+type Projection = { collapsed: Set<string>; activeOnly: boolean; statuses: Record<string, string>; titles: Record<string, string> }
 const OutlineProjection = Extension.create({
   name: 'outlineProjection',
   addProseMirrorPlugins: () => [new Plugin<Projection>({
@@ -58,11 +58,11 @@ const OutlineProjection = Extension.create({
       if (invalid) queueMicrotask(() => window.dispatchEvent(new Event('chronicle:outline-merge-rejected')))
       return !invalid
     },
-    state: { init: () => ({ collapsed: new Set(), statuses: {}, titles: {} }), apply: (tr, value) => tr.getMeta(projectionKey) ?? value },
+    state: { init: () => ({ collapsed: new Set(), activeOnly: false, statuses: {}, titles: {} }), apply: (tr, value) => tr.getMeta(projectionKey) ?? value },
     props: { decorations: state => {
       const projection = projectionKey.getState(state)!
       const doc = normalizeOutlineDocument(state.doc.toJSON())
-      const visible = new Map(visibleOutlineRows(doc, projection.collapsed, projection.statuses).map(row => [row.line.attrs.id, row]))
+      const visible = new Map(visibleOutlineRows(doc, projection.collapsed, projection.statuses, projection.activeOnly).map(row => [row.line.attrs.id, row]))
       const decorations: Decoration[] = []
       state.doc.forEach((node, pos) => {
         const row = visible.get(node.attrs.id)
@@ -104,6 +104,7 @@ interface Props {
   tasks: Task[]
   statuses: Record<string, string>
   collapsed: Set<string>
+  activeOnly: boolean
   onChange: (document: OutlineDocument) => void
   onSave: () => void
   onOpenTask: (id: string, rowId: string) => void
@@ -396,8 +397,8 @@ export function OutlineEditor(props: Props) {
 
   useEffect(() => {
     if (!editor) return
-    editor.view.dispatch(editor.state.tr.setMeta(projectionKey, { collapsed: props.collapsed, statuses: props.statuses, titles: Object.fromEntries(props.tasks.map(task => [task.id, task.title])) }).setMeta('addToHistory', false))
-  }, [editor, props.collapsed, props.statuses, props.tasks])
+    editor.view.dispatch(editor.state.tr.setMeta(projectionKey, { collapsed: props.collapsed, activeOnly: props.activeOnly, statuses: props.statuses, titles: Object.fromEntries(props.tasks.map(task => [task.id, task.title])) }).setMeta('addToHistory', false))
+  }, [editor, props.collapsed, props.activeOnly, props.statuses, props.tasks])
 
   useEffect(() => {
     props.handleRef.current = {
@@ -437,7 +438,7 @@ export function OutlineEditor(props: Props) {
     root.querySelectorAll('[data-outline-row]').forEach(el => observer.observe(el))
     measure()
     return () => { cancelAnimationFrame(frame); observer.disconnect() }
-  }, [editor, props.value, props.collapsed, props.statuses])
+  }, [editor, props.value, props.collapsed, props.activeOnly, props.statuses])
 
   useEffect(() => {
     if (!mention) return

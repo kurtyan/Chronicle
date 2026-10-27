@@ -86,3 +86,5 @@
 .outline-form-columns{grid-template-columns:1fr}
 .outline-toolbar-actions{gap:4px}
 .outline-toolbar-actions>[role=status]{max-width:120px}}
+
+.work-outline-page .outline-toolbar-actions button.is-active{background:hsl(var(--primary)/.12);border-color:hsl(var(--primary));color:hsl(var(--primary))}

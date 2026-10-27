@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, Link2Off, RefreshCw, Save, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, Link2Off, ListFilter, RefreshCw, Save, X } from 'lucide-react'
 import { OutlineEditor, type OutlineEditorHandle, type OutlineRowLayout } from '@/components/WorkOutline/OutlineEditor'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { useWorkOutlineStore, pendingOutlineCreation } from '@/stores/workOutlineStore'
@@ -137,6 +137,7 @@ export function WorkOutlinePage() {
   const [width, setWidth] = useState(() => Math.max(280, Math.min(800, storage('chronicle:outline:width', 420))))
   const [pageWidth, setPageWidth] = useState(() => window.innerWidth)
   const [collapsed, setCollapsed] = useState(() => new Set<string>(storage<string[]>('chronicle:outline:collapsed', [])))
+  const [activeOnly, setActiveOnly] = useState(() => storage<boolean>('chronicle:outline:activeOnly', false))
   const [layout, setLayout] = useState<{ rows: OutlineRowLayout[]; height: number }>({ rows: [], height: 100 })
   const [showConflict, setShowConflict] = useState(false)
   const editorHandle = useRef<OutlineEditorHandle | null>(null)
@@ -163,7 +164,8 @@ export function WorkOutlinePage() {
     for (const task of knownTasks) if (values[task.id] !== 'MISSING') values[task.id] = task.status
     return values
   }, [days, knownTasks])
-  const visible = useMemo(() => outlineDocument ? visibleOutlineRows(outlineDocument, collapsed, statuses) : [], [outlineDocument, collapsed, statuses])
+  const visible = useMemo(() => outlineDocument ? visibleOutlineRows(outlineDocument, collapsed, statuses, activeOnly) : [], [outlineDocument, collapsed, statuses, activeOnly])
+  const hiddenByFilter = useMemo(() => outlineDocument && activeOnly ? visibleOutlineRows(outlineDocument, collapsed, statuses).length - visible.length : 0, [outlineDocument, collapsed, statuses, activeOnly, visible])
   const byRow = useMemo(() => new Map(visible.map(row => [row.line.attrs.id, row])), [visible])
   const taskStats = useMemo(() => new Map(days?.tasks.map(task => [task.taskId, task])), [days])
   const cells = useMemo(() => new Map(days?.cells.map(cell => [`${cell.taskId}:${cell.date}`, cell])), [days])
@@ -239,6 +241,7 @@ export function WorkOutlinePage() {
     if (days && !dateInitialized.current && grid.current) { grid.current.scrollLeft = grid.current.scrollWidth; dateInitialized.current = true }
   }, [days])
   useEffect(() => { store('chronicle:outline:collapsed', [...collapsed]) }, [collapsed])
+  useEffect(() => { store('chronicle:outline:activeOnly', activeOnly) }, [activeOnly])
   useEffect(() => { store('chronicle:outline:width', width) }, [width])
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (useWorkOutlineStore.getState().dirty) { event.preventDefault(); event.returnValue = '' } }
@@ -250,6 +253,7 @@ export function WorkOutlinePage() {
     if (current.creating || pendingOutlineCreation()) { setNotice(t('outline.notice.confirmCreation')); return false }
     try { await current.save(); return !useWorkOutlineStore.getState().dirty } catch { return false }
   }), [])
+  useEffect(() => registerShortcut({ id: 'work-outline-toggle-active', combo: 'mod+o', label: 'Toggle unfinished-only outline', scope: 'page', handler: () => setActiveOnly(current => !current) }), [])
   useEffect(() => registerShortcut({ id: 'work-outline-refresh', combo: 'mod+r', label: 'Refresh work outline', scope: 'page', handler: () => { void refreshDays(); void reloadTasks(); void useWorkOutlineStore.getState().checkRemote() } }), [refreshDays, reloadTasks])
   useEffect(() => {
     const onEscape = (event: KeyboardEvent) => {
@@ -312,6 +316,7 @@ export function WorkOutlinePage() {
     <header className="outline-toolbar">
       <div><h1>{t('outline.title')}</h1><span className="outline-muted">{t('outline.subtitle')}</span></div>
       <div className="outline-toolbar-actions">
+        <button data-testid="outline-active-only" className={activeOnly ? 'is-active' : ''} aria-pressed={activeOnly} title={t('outline.activeOnly.title')} onClick={() => setActiveOnly(current => !current)}><ListFilter size={14} />{activeOnly ? t('outline.activeOnly.on', { count: String(hiddenByFilter) }) : t('outline.activeOnly.off')}</button>
         <span role="status" data-testid="outline-save-status" className={status === 'error' || status === 'conflict' ? 'outline-error' : 'outline-muted'}>{status === 'conflict' ? t('outline.status.conflict') : status === 'error' ? t('outline.status.error') : dirty || status === 'saving' ? t('outline.status.saving') : status === 'loading' ? t('outline.status.loading') : t('outline.status.saved')}</span>
         <button title={t('outline.save')} onClick={() => void outlineState.save().catch(() => {})}><Save size={16} /></button>
         <button title={t('outline.prevWeek')} onClick={() => setRangeEnd(shiftDate(rangeEnd || days?.calendar.currentWorkDate || new Date().toISOString().slice(0, 10), -7))}><ChevronLeft size={16} /></button>
@@ -333,7 +338,7 @@ export function WorkOutlinePage() {
             {layout.rows.map(row => { const source = byRow.get(row.id); const taskId = source && outlineTaskId(source.line); return <div key={row.id} className={`outline-total-cell ${source?.dimmed ? 'is-dimmed' : ''}`} style={{ top: row.top, height: row.height }} data-testid="outline-total" data-row-id={row.id}>{taskId ? duration(t, taskStats.get(taskId)?.totalRecordedMs) : ''}</div> })}
           </div>
           <div className="outline-text-column" style={{ width: editorWidth, left: TOTAL_WIDTH }}>
-            {outlineDocument ? <OutlineEditor value={outlineDocument} tasks={knownTasks} statuses={statuses} collapsed={collapsed} onChange={outlineState.edit} onSave={() => void outlineState.save().catch(() => {})} onOpenTask={(id, rowId) => void openTask(id, rowId)} onCreateTask={(rowId, title) => switchPanel({ mode: 'create', rowId, title, requestKey: crypto.randomUUID() })} onLayout={onLayout} onActiveRow={setActiveRow} handleRef={editorHandle} /> : <div className="outline-initial">{status === 'error' ? <button onClick={() => void outlineState.load()}>{t('outline.reload')}</button> : t('outline.loadingOutline')}</div>}
+            {outlineDocument ? <OutlineEditor value={outlineDocument} tasks={knownTasks} statuses={statuses} collapsed={collapsed} activeOnly={activeOnly} onChange={outlineState.edit} onSave={() => void outlineState.save().catch(() => {})} onOpenTask={(id, rowId) => void openTask(id, rowId)} onCreateTask={(rowId, title) => switchPanel({ mode: 'create', rowId, title, requestKey: crypto.randomUUID() })} onLayout={onLayout} onActiveRow={setActiveRow} handleRef={editorHandle} /> : <div className="outline-initial">{status === 'error' ? <button onClick={() => void outlineState.load()}>{t('outline.reload')}</button> : t('outline.loadingOutline')}</div>}
             {layout.rows.map(row => { const source = byRow.get(row.id); return source?.hasChildren ? <button key={row.id} className="outline-fold" aria-label={collapsed.has(row.id) ? t('outline.expand') : t('outline.collapse')} data-testid="outline-fold" data-row-id={row.id} style={{ top: row.top + 2, left: source.line.attrs.depth * 22 + 3 }} onMouseDown={event => event.preventDefault()} onClick={() => setCollapsed(current => { const next = new Set(current); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next })}>{collapsed.has(row.id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button> : null })}
             <div className="outline-resize" role="separator" aria-label={t('outline.resize')} onPointerDown={resize} />
           </div>

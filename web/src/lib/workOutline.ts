@@ -42,7 +42,8 @@ export function getSubtreeEnd(lines: OutlineLine[], index: number) {
   return end
 }
 
-export function visibleOutlineRows(doc: OutlineDocument, collapsed: Set<string>, statuses: Record<string, string>) {
+/** With `activeOnly`, only unfinished leaves and their ancestors stay visible. */
+export function visibleOutlineRows(doc: OutlineDocument, collapsed: Set<string>, statuses: Record<string, string>, activeOnly = false) {
   const lines = doc.content
   const counts = lines.map(() => ({ count: 0, done: 0 }))
   const parents: number[] = []
@@ -62,12 +63,28 @@ export function visibleOutlineRows(doc: OutlineDocument, collapsed: Set<string>,
   }
   const inherited: boolean[] = []
   const hidden: boolean[] = []
+  const keep: boolean[] = []
+  if (activeOnly) {
+    // A leaf is finished when it, or an ancestor task, is DONE; parents survive while any descendant does.
+    const done: boolean[] = []
+    lines.forEach((line, index) => {
+      const taskId = outlineTaskId(line)
+      const parent = parentIndex[index]
+      done[index] = taskId ? statuses[taskId] === 'DONE' : parent >= 0 && done[parent]
+    })
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const leaf = !(i + 1 < lines.length && lines[i + 1].attrs.depth > lines[i].attrs.depth)
+      if (leaf && !done[i]) keep[i] = true
+      if (keep[i] && parentIndex[i] >= 0) keep[parentIndex[i]] = true
+    }
+  }
   return lines.flatMap((line, index) => {
     const parent = parentIndex[index]
     const taskId = outlineTaskId(line)
     inherited[index] = taskId ? statuses[taskId] === 'DONE' : parent >= 0 && inherited[parent]
     hidden[index] = parent >= 0 && (hidden[parent] || collapsed.has(lines[parent].attrs.id))
     const dimmed = taskId ? statuses[taskId] === 'DONE' : inherited[index] || (counts[index].count > 0 && counts[index].count === counts[index].done)
+    if (activeOnly && !keep[index]) return []
     return hidden[index] ? [] : [{ line, index, dimmed, hasChildren: index + 1 < lines.length && lines[index + 1].attrs.depth > line.attrs.depth }]
   })
 }
