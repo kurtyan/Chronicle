@@ -9,7 +9,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Task } from '@/types'
 import type { OutlineDocument } from '@/services/workOutlineApi'
-import { MENTION_LIMIT, normalizeOutlineDocument, normalizePastedOutline, indentOutlineRows, moveOutlineBranch, outlineId, outlineLabel, outlineLineText, outlineTaskId, parseOutlineText, parseOutlineHtml, rankOutlineTasks, splitOutlineLine, visibleOutlineRows } from '@/lib/workOutline'
+import { MENTION_LIMIT, normalizeOutlineDocument, normalizePastedOutline, indentOutlineRows, moveOutlineBranch, outlineDraftTitle, outlineId, outlineLabel, outlineLineText, outlineTaskId, parseOutlineText, parseOutlineHtml, rankOutlineTasks, splitOutlineLine, visibleOutlineRows } from '@/lib/workOutline'
 import { useI18n } from '@/i18n/context'
 import { translateCurrent } from '@/i18n/runtime'
 
@@ -129,6 +129,8 @@ export function OutlineEditor(props: Props) {
   const selectedRef = useRef(0)
   const [notice, setNotice] = useState('')
   const incoming = useRef('')
+  // Text of the IME composition in progress, as last reported by compositionupdate.
+  const compositionText = useRef('')
   const cutIds = useRef<Set<string>>(new Set())
   const savedSelection = useRef<{ anchorId: string; anchorOffset: number; headId: string; headOffset: number } | null>(null)
   // Ranked and capped at MENTION_LIMIT; `total` says how many matches the cap hid.
@@ -159,6 +161,24 @@ export function OutlineEditor(props: Props) {
     ed.state.doc.forEach((node, pos) => { if (pos < to && pos + node.nodeSize > from) ids.push(node.attrs.id) })
     return ids
   }
+  /** Cmd+N: opens the create-Task panel for the cursor row, titled "<nearest linked ancestor's Task> - <row text>". */
+  function createTaskFromRow() {
+    const ed = editorRef.current
+    if (!ed) return
+    const { $from } = ed.state.selection
+    const rowId = $from.parent.attrs.id
+    if ($from.parent.type.name !== 'outlineLine' || !rowId) return
+    const active = mentionRef.current
+    closeMention()
+    const row = currentDocument().content.find(line => line.attrs.id === rowId)
+    if (!row) return
+    if (outlineTaskId(row)) { setNotice(tRef.current('outline.editor.alreadyLinked')); return }
+    // An open @ query is not part of the title; drop it as choosing a Task would.
+    if (active && active.rowId === rowId) ed.view.dispatch(ed.state.tr.delete(active.from, active.to))
+    const { tasks, statuses } = latest.current
+    const title = outlineDraftTitle(currentDocument(), rowId, (id, label) => statuses[id] === 'MISSING' ? null : tasks.find(task => task.id === id)?.title ?? label)
+    latest.current.onCreateTask(rowId, title)
+  }
   function updateMention(ed: Editor) {
     const { $from, empty } = ed.state.selection
     const rowId = $from.parent.attrs.id
@@ -172,19 +192,10 @@ export function OutlineEditor(props: Props) {
     if (mentionRef.current?.query !== value.query || mentionRef.current?.rowId !== value.rowId || mentionRef.current?.from !== value.from) { selectedRef.current = 0; setSelected(0) }
     mentionRef.current = value; setMention(value)
   }
-  function chooseMention(task?: Task) {
+  function chooseMention(task: Task) {
     const active = mentionRef.current
     const ed = editorRef.current
     if (!active || !ed) return
-    const row = currentDocument().content.find(line => line.attrs.id === active.rowId)
-    if (!row) return
-    if (!task) {
-      if (outlineTaskId(row)) { setNotice(tRef.current('outline.editor.alreadyLinked')); closeMention(); return }
-      ed.view.dispatch(ed.state.tr.delete(active.from, active.to))
-      closeMention()
-      latest.current.onCreateTask(active.rowId, active.query.trim() || outlineLineText(row).replace(/\s*@[^@]*$/, '').trim())
-      return
-    }
     let tr = ed.state.tr
     const pos = rowPosition(ed, active.rowId)
     const node = ed.state.doc.nodeAt(pos)
@@ -220,20 +231,33 @@ export function OutlineEditor(props: Props) {
         return true
       },
       handleKeyDown: (_view, event) => {
+        // WebKit commits an IME composition as deleteCompositionText + insertFromComposition. ProseMirror reads the
+        // first step as an Enter/Backspace/Delete press and calls this handler with an untrusted event; acting on it
+        // would split or join rows. Returning true makes ProseMirror drop the DOM change, which has already removed
+        // the marked text (pinyin) from the page, so remove it from the document here to keep both in step.
+        if (!event.isTrusted && _view.composing && (event.key === 'Enter' || event.key === 'Backspace' || event.key === 'Delete')) {
+          const marked = compositionText.current
+          const { $from, empty } = _view.state.selection
+          compositionText.current = ''
+          if (marked && empty && $from.parent.textBetween(0, $from.parentOffset, '', '\ufffc').endsWith(marked)) _view.dispatch(_view.state.tr.delete($from.pos - marked.length, $from.pos))
+          return true
+        }
         if (event.isComposing || event.keyCode === 229) return event.key === 'Enter' || event.key === 'Tab'
         const ed = editorRef.current!
         const { $from } = ed.state.selection
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); latest.current.onSave(); return true }
         if (event.ctrlKey && event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); return true }
+        // Ctrl+N is cursor-down in macOS text fields, so only Cmd+N counts there.
+        if ((event.metaKey || (event.ctrlKey && !/Mac/i.test(navigator.platform))) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') { event.preventDefault(); event.stopPropagation(); createTaskFromRow(); return true }
         const currentMention = mentionRef.current
         if (currentMention) {
           const matches = mentionTasks(currentMention.query)
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault()
-            selectedRef.current = Math.max(0, Math.min(matches.length, selectedRef.current + (event.key === 'ArrowDown' ? 1 : -1)))
+            selectedRef.current = Math.max(0, Math.min(matches.length - 1, selectedRef.current + (event.key === 'ArrowDown' ? 1 : -1)))
             setSelected(selectedRef.current); return true
           }
-          if (event.key === 'Enter') { event.preventDefault(); chooseMention(matches[selectedRef.current]); return true }
+          if (event.key === 'Enter') { event.preventDefault(); if (matches.length) chooseMention(matches[Math.min(selectedRef.current, matches.length - 1)]); else closeMention(); return true }
           if (event.key === 'Escape') { closeMention(); return true }
         }
         if (event.key === 'Tab') {
@@ -299,7 +323,24 @@ export function OutlineEditor(props: Props) {
         } else view.dispatch(closeHistory(view.state.tr.replaceSelection(new Slice(Fragment.fromArray(pasted.content.map(line => view.state.schema.nodeFromJSON(line))), 1, 1)).setMeta('paste', true)).scrollIntoView())
         return true
       },
+      // ProseMirror's default keeps the caret only 5px inside the scroller, so new rows sat at the very bottom edge
+      // (often clipped) and the sticky date header could cover rows near the top. Keep the caret row clear of both.
+      handleScrollToSelection: view => {
+        const scroller = view.dom.closest<HTMLElement>('.outline-grid-scroll')
+        if (!scroller) return false
+        const box = scroller.getBoundingClientRect()
+        const header = scroller.querySelector<HTMLElement>('.outline-grid-header')?.offsetHeight ?? 0
+        const caret = view.coordsAtPos(view.state.selection.head)
+        const top = box.top + header + 8
+        const bottom = box.bottom - Math.min(90, (box.height - header) / 3)
+        if (caret.top < top) scroller.scrollTop -= top - caret.top
+        else if (caret.bottom > bottom) scroller.scrollTop += caret.bottom - bottom
+        return true
+      },
       handleDOMEvents: {
+        compositionstart: () => { compositionText.current = ''; return false },
+        compositionupdate: (_view, event) => { compositionText.current = (event as CompositionEvent).data ?? ''; return false },
+        compositionend: () => { compositionText.current = ''; return false },
         blur: view => {
           const { $anchor, $head } = view.state.selection
           savedSelection.current = { anchorId: $anchor.parent.attrs.id, anchorOffset: $anchor.parentOffset, headId: $head.parent.attrs.id, headOffset: $head.parentOffset }
@@ -413,8 +454,8 @@ export function OutlineEditor(props: Props) {
     const context = JSON.stringify([mention.rowId, mention.from, mention.query])
     if (context !== mentionScrollContext.current || selected === 0) menu.scrollTop = 0
     mentionScrollContext.current = context
-    if (selected > matches.length) {
-      selectedRef.current = matches.length; setSelected(matches.length)
+    if (selected > 0 && selected >= matches.length) {
+      selectedRef.current = Math.max(0, matches.length - 1); setSelected(selectedRef.current)
       return
     }
     const option = menu.querySelector<HTMLElement>('[aria-selected="true"]')
@@ -433,7 +474,7 @@ export function OutlineEditor(props: Props) {
     {mention && createPortal(<div ref={mentionMenuRef} data-outline-mention data-testid="outline-mention-menu" role="listbox" className="outline-mention-menu" style={{ top: Math.min(mention.top + 6, window.innerHeight - 320), left: Math.max(8, Math.min(mention.left, window.innerWidth - 340)) }}>
       {matches.map((task, index) => <button key={task.id} role="option" aria-selected={selected === index} className={selected === index ? 'selected' : ''} onPointerDown={event => { event.preventDefault(); chooseMention(task) }}><span>{task.title}</span><small>{task.status}</small></button>)}
       {ranking && ranking.total > matches.length && <div className="outline-mention-more" data-testid="outline-mention-more">{t('outline.editor.moreMatches', { count: String(ranking.total - matches.length) })}</div>}
-      <button data-testid="outline-new-task-option" role="option" aria-selected={selected === matches.length} className={selected === matches.length ? 'selected' : ''} onPointerDown={event => { event.preventDefault(); chooseMention() }}>{mention.query.trim() ? t('outline.editor.newTaskNamed', { title: mention.query.trim() }) : t('outline.editor.newTask')}</button>
+      {!matches.length && <div className="outline-mention-more" data-testid="outline-mention-empty">{t('outline.editor.noMatches')}</div>}
     </div>, document.body)}
   </div>
 }

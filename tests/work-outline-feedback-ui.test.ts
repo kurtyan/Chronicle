@@ -6,7 +6,7 @@ const directory = process.env.CHRONICLE_TEST_DATA_DIR
 if (!directory || !path.resolve(directory).startsWith(path.resolve('.dev-data') + path.sep)) throw new Error('Isolated work-outline runner required')
 const uid = () => crypto.randomUUID()
 const tasks: string[] = []
-const line = (text: string, depth = 0, task?: { id: string; title: string }): OutlineLine => ({ type: 'outlineLine', attrs: { id: uid(), depth }, content: [{ type: 'text', text }, ...(task ? [{ type: 'taskRef' as const, attrs: { taskId: task.id, label: task.title } }] : [])] })
+const line = (text: string, depth = 0, task?: { id: string; title: string }): OutlineLine => ({ type: 'outlineLine', attrs: { id: uid(), depth }, content: [...(text ? [{ type: 'text' as const, text }] : []), ...(task ? [{ type: 'taskRef' as const, attrs: { taskId: task.id, label: task.title } }] : [])] })
 async function saveDocument(request: APIRequestContext, rows: OutlineLine[]) {
   const current = await (await request.get('/api/work-outlines/default')).json()
   const response = await request.put('/api/work-outlines/default', { data: { expectedEpoch: current.epoch, expectedRevision: current.revision, mutationId: uid(), document: { type: 'doc', schemaVersion: 1, content: rows } } })
@@ -24,8 +24,14 @@ async function cursor(page: Page, id: string) {
   })
 }
 async function openCreate(page: Page, id: string, title: string) {
-  await cursor(page, id); await page.keyboard.type(`@${title}`)
-  await page.getByTestId('outline-new-task-option').click()
+  // Reopening the same row: its earlier draft text is still there, so select and replace it.
+  await page.locator(`[data-outline-row="${id}"]`).evaluate(element => {
+    (element.closest('[contenteditable="true"]') as HTMLElement).focus()
+    const range = document.createRange(); range.selectNodeContents(element)
+    const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range)
+  })
+  await page.keyboard.type(title)
+  await page.keyboard.press('Meta+n')
   await expect(page.getByTestId('outline-create-title')).toBeFocused()
 }
 async function panelGeometry(page: Page) {
@@ -84,7 +90,7 @@ test('outline text uses compact natural heights without row borders and the date
 })
 
 test('Escape and Cancel discard all unsubmitted new Task fields when reopening the same row', async ({ page, request }) => {
-  const target = line('Direction ')
+  const target = line('')
   await saveDocument(request, [target]); await page.goto('/work-outline')
   for (const cancel of ['Escape', '取消']) {
     await openCreate(page, target.attrs.id, 'Fresh task')
@@ -118,7 +124,7 @@ test('Escape and Cancel discard all unsubmitted new Task fields when reopening t
 })
 
 test('a saved wide outline clamps to a narrow window and leaves the full create panel and close control reachable', async ({ page, request }) => {
-  const target = line('Small-window direction ')
+  const target = line('')
   await saveDocument(request, [target])
   // A shorter viewport makes the form itself scroll. Filling a fixed-height
   // textarea only scrolls its own contents, so it cannot establish this case.

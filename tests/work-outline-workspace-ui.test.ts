@@ -117,8 +117,8 @@ test('@ new Task moves focus into right form; actual Ctrl+Enter creates once and
   const title = `Created by outline ${uid()}`
   await page.goto('/work-outline')
   await editor(page).click()
-  await page.keyboard.type(`@${title}`)
-  await page.getByTestId('outline-new-task-option').click()
+  await page.keyboard.type(`${title}`)
+  await page.keyboard.press('Meta+n')
   const form = page.getByTestId('outline-create-form')
   await expect(form).toBeVisible()
   const input = form.getByRole('textbox', { name: '任务名称', exact: true })
