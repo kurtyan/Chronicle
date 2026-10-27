@@ -12,7 +12,7 @@ export const workOutlineTranslations: Record<string, TranslationEntry> = {
   'outline.prevWeek': { 'zh-CN': '上一周', en: 'Previous week' },
   'outline.today': { 'zh-CN': '今天', en: 'Today' },
   'outline.nextWeek': { 'zh-CN': '下一周', en: 'Next week' },
-  'outline.hint': { 'zh-CN': 'Enter 新行 · Tab 缩进 · @ 关联或新建 · Alt ↑↓ 移动整支', en: 'Enter new row · Tab indent · @ link or create · Alt ↑↓ move branch' },
+  'outline.hint': { 'zh-CN': 'Enter 新行 · Tab 缩进 · @ 关联 Task · ⌘N 新建 Task · Alt ↑↓ 移动整支', en: 'Enter new row · Tab indent · @ link a Task · ⌘N new Task · Alt ↑↓ move branch' },
   'outline.moveUp': { 'zh-CN': '上移整支', en: 'Move branch up' },
   'outline.moveDown': { 'zh-CN': '下移整支', en: 'Move branch down' },
   'outline.unlink': { 'zh-CN': '移除 Task 引用', en: 'Remove Task link' },
@@ -90,8 +90,7 @@ export const workOutlineTranslations: Record<string, TranslationEntry> = {
   'outline.editor.alreadyLinked': { 'zh-CN': '此行已有 Task；请先移除引用，或在新行创建任务', en: 'This row already has a Task. Remove the link first, or create the Task on a new row.' },
   'outline.editor.mergeBlocked': { 'zh-CN': '两行各有关联 Task，请先移除一个引用再合并', en: 'Both rows are linked to Tasks. Remove one link before merging.' },
   'outline.editor.mergeRejected': { 'zh-CN': '两行各有关联 Task；已保留原内容，请先移除一个引用再合并', en: 'Both rows are linked to Tasks; the original content was kept. Remove one link before merging.' },
-  'outline.editor.newTask': { 'zh-CN': '＋ 新建 Task', en: '＋ New Task' },
-  'outline.editor.newTaskNamed': { 'zh-CN': '＋ 新建 Task：「{title}」', en: '＋ New Task: “{title}”' },
+  'outline.editor.noMatches': { 'zh-CN': '没有匹配的 Task', en: 'No matching Tasks' },
   'outline.editor.moreMatches': { 'zh-CN': '还有 {count} 项匹配，继续输入以缩小范围', en: '{count} more matches — keep typing to narrow down' },
 
   'settings.taskDailySummary.backfillDays': { 'zh-CN': '自动回填天数（0 表示不限）', en: 'Automatic backfill window (days, 0 = unlimited)' },

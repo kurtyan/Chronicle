@@ -103,6 +103,27 @@ export function moveOutlineBranch(doc: OutlineDocument, rowId: string, direction
   return { ...doc, content: lines }
 }
 
+/**
+ * Draft title for a Task created from a row: the Task title of the nearest ancestor
+ * row that is linked to a Task, then " - ", then the row's own text. `resolve` returns
+ * null for a link that should not count (for example a deleted Task).
+ */
+export function outlineDraftTitle(doc: OutlineDocument, rowId: string, resolve: (taskId: string, label: string) => string | null): string {
+  const lines = doc.content
+  const index = lines.findIndex(line => line.attrs.id === rowId)
+  if (index < 0) return ''
+  let depth = lines[index].attrs.depth
+  let parent = ''
+  for (let i = index - 1; i >= 0 && depth > 0 && !parent; i--) {
+    if (lines[i].attrs.depth >= depth) continue
+    depth = lines[i].attrs.depth
+    const link = lines[i].content?.find(node => node.type === 'taskRef')
+    if (link?.type === 'taskRef') parent = resolve(link.attrs.taskId, link.attrs.label)?.trim() ?? ''
+  }
+  const own = outlineLineText(lines[index]).trim()
+  return outlineLabel(parent && own ? `${parent} - ${own}` : parent || own, '')
+}
+
 export function splitOutlineLine(doc: OutlineDocument, rowId: string, offset: number): { document: OutlineDocument; newRowId: string } {
   const index = doc.content.findIndex(line => line.attrs.id === rowId)
   if (index < 0) return { document: doc, newRowId: rowId }

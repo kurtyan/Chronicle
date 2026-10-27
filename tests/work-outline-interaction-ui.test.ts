@@ -107,7 +107,7 @@ test('@ Escape keeps text, Tab indents without choosing a Task, and arrow select
   await cursor(page, target.attrs.id)
   await page.keyboard.type(`@${prefix}`)
   const menu = page.getByTestId('outline-mention-menu')
-  await expect(menu.getByRole('option')).toHaveCount(3)
+  await expect(menu.getByRole('option')).toHaveCount(2)
   await page.keyboard.press('Escape')
   await expect(menu).not.toBeVisible()
   await expect(row(page, target.attrs.id)).toContainText(`@${prefix}`)
@@ -118,7 +118,7 @@ test('@ Escape keeps text, Tab indents without choosing a Task, and arrow select
   await expect(editor(page).locator('[data-outline-task]')).toHaveCount(0)
   // Editing the query reopens suggestions after an explicit dismissal.
   await page.keyboard.type(prefix.at(-1)!)
-  await expect(menu.getByRole('option')).toHaveCount(3)
+  await expect(menu.getByRole('option')).toHaveCount(2)
   const chosenText = await menu.getByRole('option').nth(1).innerText()
   const chosen = [first, second].find(task => chosenText.includes(task.title))!
   expect(chosen).toBeTruthy()
@@ -133,7 +133,7 @@ test('@ Escape keeps text, Tab indents without choosing a Task, and arrow select
 
 test('@ arrow navigation scrolls only its menu, keeps every selected option visible, and resets for a new query', async ({ page, request }) => {
   const prefix = `Scroll-${uid().slice(0, 8)}`
-  for (let index = 0; index < 8; index++) await createTask(request, `${prefix}-${index} ${'long result title '.repeat(3)}`)
+  for (let index = 0; index < 10; index++) await createTask(request, `${prefix}-${index} ${'long result title '.repeat(3)}`)
   const target = line('Choose ')
   await saveDocument(request, [...Array.from({ length: 18 }, (_, index) => line(`Earlier direction ${index}`)), target, ...Array.from({ length: 30 }, (_, index) => line(`Later direction ${index}`))])
   await page.goto('/work-outline')
@@ -142,7 +142,8 @@ test('@ arrow navigation scrolls only its menu, keeps every selected option visi
   await page.keyboard.type(`@${prefix}`)
   const menu = page.getByTestId('outline-mention-menu')
   const options = menu.getByRole('option')
-  await expect(options).toHaveCount(9)
+  await expect(options).toHaveCount(10)
+  await expect(page.getByTestId('outline-new-task-option')).toHaveCount(0)
   await expect(page.getByTestId('outline-save-status')).toHaveText('已保存')
   expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
   const scrollState = () => page.evaluate(() => {
@@ -162,25 +163,42 @@ test('@ arrow navigation scrolls only its menu, keeps every selected option visi
     expect(await scrollState()).toEqual(originalScroll)
   }
   await assertSelected(0)
-  for (let index = 1; index <= 8; index++) { await page.keyboard.press('ArrowDown'); await assertSelected(index) }
+  for (let index = 1; index <= 9; index++) { await page.keyboard.press('ArrowDown'); await assertSelected(index) }
   expect(await menu.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
-  await expect(page.getByTestId('outline-new-task-option')).toHaveAttribute('aria-selected', 'true')
-  for (let index = 7; index >= 0; index--) { await page.keyboard.press('ArrowUp'); await assertSelected(index) }
+  // Navigation stops at the last match; there is no extra slot after it.
+  await page.keyboard.press('ArrowDown')
+  await assertSelected(9)
+  for (let index = 8; index >= 0; index--) { await page.keyboard.press('ArrowUp'); await assertSelected(index) }
   expect(await menu.evaluate(element => element.scrollTop)).toBe(0)
-  for (let index = 0; index < 8; index++) await page.keyboard.press('ArrowDown')
-  await assertSelected(8)
-  // All eight titles still match; resetting cannot be explained by a shorter menu.
+  for (let index = 0; index < 9; index++) await page.keyboard.press('ArrowDown')
+  await assertSelected(9)
+  // All ten titles still match; resetting cannot be explained by a shorter menu.
   await page.keyboard.type('-')
-  await expect(options).toHaveCount(9)
+  await expect(options).toHaveCount(10)
   await assertSelected(0)
   expect(await menu.evaluate(element => element.scrollTop)).toBe(0)
-  for (let index = 0; index < 8; index++) await page.keyboard.press('ArrowDown')
-  await assertSelected(8)
+  for (let index = 0; index < 9; index++) await page.keyboard.press('ArrowDown')
+  await assertSelected(9)
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('outline-create-form')).toBeVisible()
-  await expect(page.getByTestId('outline-create-title')).toHaveValue(`${prefix}-`)
-  await page.getByTestId('outline-create-form').getByRole('button', { name: '取消', exact: true }).click()
-  expect((await stored(request)).content.map(taskId).filter(Boolean)).toEqual([])
+  await expect(menu).not.toBeVisible()
+  await expect(page.getByTestId('outline-create-form')).toHaveCount(0)
+  await expect(row(page, target.attrs.id).locator('[data-outline-task]')).toHaveCount(1)
+})
+
+test('@ with no matching Task shows an empty state, and Enter closes the menu without creating anything', async ({ page, request }) => {
+  const target = line('Nothing ')
+  await saveDocument(request, [target])
+  await page.goto('/work-outline')
+  await cursor(page, target.attrs.id)
+  await page.keyboard.type(`@zz-${uid()}`)
+  const menu = page.getByTestId('outline-mention-menu')
+  await expect(menu.getByRole('option')).toHaveCount(0)
+  await expect(page.getByTestId('outline-mention-empty')).toBeVisible()
+  await expect(page.getByTestId('outline-new-task-option')).toHaveCount(0)
+  await page.keyboard.press('Enter')
+  await expect(menu).not.toBeVisible()
+  await expect(page.getByTestId('outline-create-form')).toHaveCount(0)
+  await expect(editor(page).locator('[data-outline-row]')).toHaveCount(1)
 })
 
 test('Delete and Backspace cannot merge two adjacent Task references and silently drop one', async ({ page, request }) => {
@@ -231,12 +249,12 @@ test('copy generates new row IDs while cut and paste preserve row IDs and Task r
 
 test('canceling a new Task form creates nothing and rapid repeated submits create one Task', async ({ page, request }) => {
   const title = `Create interaction ${uid()}`
-  const target = line('Create target ')
+  const target = line('')
   await saveDocument(request, [target])
   await page.goto('/work-outline')
   await cursor(page, target.attrs.id)
-  await page.keyboard.type(`@${title}`)
-  await page.getByTestId('outline-new-task-option').click()
+  await page.keyboard.type(`${title}`)
+  await page.keyboard.press('Meta+n')
   const form = page.getByTestId('outline-create-form')
   await expect(form.getByTestId('outline-create-title')).toHaveValue(title)
   await cursor(page, target.attrs.id)
@@ -247,8 +265,7 @@ test('canceling a new Task form creates nothing and rapid repeated submits creat
   const allTasks = async () => (await (await request.get('/api/tasks?status=PENDING,DOING,DONE,DROPPED,ON_HOLD')).json()).filter((task: any) => task.title === title)
   expect(await allTasks()).toHaveLength(0)
   await cursor(page, target.attrs.id)
-  await page.keyboard.type(`@${title}`)
-  await page.getByTestId('outline-new-task-option').click()
+  await page.keyboard.press('Meta+n')
   let posts = 0, release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   await page.route('**/api/work-outlines/default/rows/*/task', async route => {
@@ -268,13 +285,13 @@ test('canceling a new Task form creates nothing and rapid repeated submits creat
 
 test('an unresolved create keeps its recovery form when another reference, date cell, or new Task is opened', async ({ page, request }) => {
   const linked = await createTask(request, 'Other existing Task')
-  const target = line('Create here '), other = line('Other ', 0, linked), spare = line('Spare ')
+  const target = line(''), other = line('Other ', 0, linked), spare = line('Spare ')
   const title = `Keep recovery ${uid()}`
   await saveDocument(request, [target, other, spare])
   await page.goto('/work-outline')
   await cursor(page, target.attrs.id)
-  await page.keyboard.type(`@${title}`)
-  await page.getByTestId('outline-new-task-option').click()
+  await page.keyboard.type(`${title}`)
+  await page.keyboard.press('Meta+n')
   const form = page.getByTestId('outline-create-form')
   let posts = 0, release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -304,8 +321,8 @@ test('an unresolved create keeps its recovery form when another reference, date 
     await page.locator(`[data-testid="outline-day-cell"][data-task-id="${linked.id}"]`).last().dispatchEvent('click')
     await expect(form).toBeVisible()
     await cursor(page, spare.attrs.id)
-    await page.keyboard.type(`@Another uncommitted ${uid()}`)
-    await page.getByTestId('outline-new-task-option').click()
+    await page.keyboard.type(`Another uncommitted ${uid()}`)
+    await page.keyboard.press('Meta+n')
     await expect(form.getByTestId('outline-create-title')).toHaveValue(title)
     await form.getByTestId('outline-create-submit').click()
     await expect(editor(page).locator(`[data-outline-task="${committed.id}"]`)).toBeVisible()
@@ -352,12 +369,12 @@ test('copying and cutting a non-root branch preserve its nested sibling relation
 })
 
 test('an unconfirmed create can be abandoned: the form closes, autosave resumes and no Task is created', async ({ page, request }) => {
-  const target = line('Create here '), title = `Abandoned ${uid()}`
+  const target = line(''), title = `Abandoned ${uid()}`
   await saveDocument(request, [target])
   await page.goto('/work-outline')
   await cursor(page, target.attrs.id)
-  await page.keyboard.type(`@${title}`)
-  await page.getByTestId('outline-new-task-option').click()
+  await page.keyboard.type(`${title}`)
+  await page.keyboard.press('Meta+n')
   const form = page.getByTestId('outline-create-form')
   await page.route('**/api/work-outlines/default/rows/*/task', route => route.abort('failed'))
   await form.getByTestId('outline-create-submit').click()
@@ -382,6 +399,60 @@ test('the @ menu lists the best 50 matches and says how many more exist', async 
   await cursor(page, target.attrs.id)
   await page.keyboard.type(`@${prefix}`)
   const menu = page.getByTestId('outline-mention-menu')
-  await expect(menu.getByRole('option')).toHaveCount(51)
+  await expect(menu.getByRole('option')).toHaveCount(50)
   await expect(page.getByTestId('outline-mention-more')).toContainText('5')
+})
+
+async function draftTitle(page: Page, id: string) {
+  await cursor(page, id)
+  await page.keyboard.press('Meta+n')
+  const form = page.getByTestId('outline-create-form')
+  await expect(form).toBeVisible()
+  return form.getByTestId('outline-create-title')
+}
+
+test('Cmd+N titles the draft "<nearest linked ancestor Task> - <row text>", skipping unlinked ancestors', async ({ page, request }) => {
+  const goal = await createTask(request, 'Goal'), sibling = await createTask(request, 'Sibling')
+  const rows = [line('', 0, goal), line('unlinked middle', 1), line('Write spec', 2), line('', 1, sibling), line('Review it', 1)]
+  await saveDocument(request, rows)
+  await page.goto('/work-outline')
+  await expect(await draftTitle(page, rows[2].attrs.id)).toHaveValue(`${goal.title} - Write spec`)
+})
+
+test('Cmd+N prefers the direct linked parent, and a linked sibling is not an ancestor', async ({ page, request }) => {
+  const grand = await createTask(request, 'Grand'), parent = await createTask(request, 'Parent'), sibling = await createTask(request, 'Sibling')
+  const rows = [line('', 0, grand), line('', 1, parent), line('child', 2), line('', 1, sibling), line('next to a linked sibling', 1)]
+  await saveDocument(request, rows)
+  await page.goto('/work-outline')
+  await expect(await draftTitle(page, rows[2].attrs.id)).toHaveValue(`${parent.title} - child`)
+  await page.getByTestId('outline-create-form').getByRole('button', { name: '取消', exact: true }).click()
+  await expect(await draftTitle(page, rows[4].attrs.id)).toHaveValue(`${grand.title} - next to a linked sibling`)
+})
+
+test('Cmd+N falls back to the row text without a linked ancestor, and to the ancestor title for an empty row', async ({ page, request }) => {
+  const goal = await createTask(request, 'Goal')
+  const rows = [line('plain root'), line('plain child', 1), line('', 0, goal), line('', 1)]
+  await saveDocument(request, rows)
+  await page.goto('/work-outline')
+  await expect(await draftTitle(page, rows[1].attrs.id)).toHaveValue('plain child')
+  await page.getByTestId('outline-create-form').getByRole('button', { name: '取消', exact: true }).click()
+  await expect(await draftTitle(page, rows[3].attrs.id)).toHaveValue(goal.title)
+})
+
+test('Cmd+N ignores an open @ query, and on a row that already has a Task only shows the notice', async ({ page, request }) => {
+  const goal = await createTask(request, 'Goal'), own = await createTask(request, 'Own')
+  const rows = [line('', 0, goal), line('Plan ', 1), line('', 1, own)]
+  await saveDocument(request, rows)
+  await page.goto('/work-outline')
+  await cursor(page, rows[1].attrs.id)
+  await page.keyboard.type('@zz-nothing')
+  await page.keyboard.press('Meta+n')
+  await expect(page.getByTestId('outline-create-title')).toHaveValue(`${goal.title} - Plan`)
+  await expect(page.getByTestId('outline-mention-menu')).not.toBeVisible()
+  await expect(row(page, rows[1].attrs.id)).toHaveText('Plan')
+  await page.getByTestId('outline-create-form').getByRole('button', { name: '取消', exact: true }).click()
+  await cursor(page, rows[2].attrs.id)
+  await page.keyboard.press('Meta+n')
+  await expect(page.getByRole('status').filter({ hasText: '此行已有 Task' })).toBeVisible()
+  await expect(page.getByTestId('outline-create-form')).toHaveCount(0)
 })
