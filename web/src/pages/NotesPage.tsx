@@ -126,8 +126,10 @@ export function NotesPage() {
     return () => window.removeEventListener('chronicle:search-jump', handler)
   }, [])
 
-  const toggleFindBar = useCallback(() => {
-    setShowFindBar((open) => !open)
+  const openFindBar = useCallback(() => {
+    const input = document.querySelector<HTMLInputElement>('[data-find-bar="true"] input')
+    if (input) { input.focus(); input.select(); return }
+    setShowFindBar(true)
   }, [])
 
   useEffect(() => {
@@ -454,9 +456,10 @@ export function NotesPage() {
   const handleCreateNote = useCallback(async () => {
     const run = noteSwitchRef.current.then(async () => {
       await flushSaveRef.current()
-      const note = await createNote({ title: 'Untitled note' })
+      const note = await createNote({ title: '' })
       navigate(noteUrl(note.id))
       applyNoteDraft(note)
+      requestAnimationFrame(() => titleInputRef.current?.focus())
     })
     noteSwitchRef.current = run.catch(() => {})
     await run
@@ -562,8 +565,8 @@ export function NotesPage() {
         combo: 'mod+f',
         label: 'Find in note',
         scope: 'page',
-        context: () => location.pathname === '/notes' && Boolean(activeNote) && !isEditing(),
-        handler: () => { toggleFindBar() },
+        context: () => location.pathname === '/notes' && Boolean(activeNote),
+        handler: () => { openFindBar() },
       }),
       registerShortcut({
         id: 'notes-list-up',
@@ -591,7 +594,7 @@ export function NotesPage() {
       }),
     ]
     return () => unregisters.forEach((unregister) => unregister())
-  }, [activeNote, activeNote?.id, handleCreateNote, handleSelectNote, location.pathname, toggleFindBar, visibleNotes])
+  }, [activeNote, activeNote?.id, handleCreateNote, handleSelectNote, location.pathname, openFindBar, visibleNotes])
 
   useEffect(() => {
     if (location.pathname !== '/notes') return
@@ -672,7 +675,7 @@ export function NotesPage() {
                 {note.pinned && <Pin className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />}
                 <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
-                  <h4 className="truncate text-sm font-medium">{note.title}</h4>
+                  <h4 className={cn('truncate text-sm font-medium', !note.title && 'text-muted-foreground')}>{note.title || 'Untitled'}</h4>
                   <div className="mt-1 flex items-center gap-2 truncate text-xs text-muted-foreground">
                     <span className="truncate">{note.id}</span>
                     {note.archived && (

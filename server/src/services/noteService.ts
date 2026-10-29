@@ -138,7 +138,7 @@ export function getNoteById(id: string): Note | null {
 export function createNote(data: { title: string; contentHtml?: string; tags?: string[]; linkedTaskIds?: string[] }): Note {
   const now = Date.now()
   const id = generateNoteId()
-  const title = data.title.trim() || 'Untitled note'
+  const title = data.title.trim()
   const contentHtml = data.contentHtml?.trim() || '<p></p>'
   for (const taskId of data.linkedTaskIds ?? []) {
     if (!getTaskById(taskId)) throw new Error('Task not found')
@@ -168,7 +168,7 @@ export function updateNote(id: string, data: { title?: string; contentHtml?: str
   const params: unknown[] = []
   if (data.title !== undefined) {
     updates.push('title = ?')
-    params.push(data.title.trim() || 'Untitled note')
+    params.push(data.title.trim())
   }
   if (data.contentHtml !== undefined) {
     updates.push('content_html = ?')

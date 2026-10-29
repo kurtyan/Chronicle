@@ -7,9 +7,11 @@ interface FindBarProps {
   containerRef: React.RefObject<HTMLElement | null>
   onTokensChange: (tokens: string[]) => void
   onCurrentMatchChange?: (index: number) => void
+  /** Bumping this number closes the bar with the same cleanup as its own close button. */
+  closeSignal?: number
 }
 
-export function FindBar({ open, onClose, containerRef, onTokensChange, onCurrentMatchChange }: FindBarProps) {
+export function FindBar({ open, onClose, containerRef, onTokensChange, onCurrentMatchChange, closeSignal }: FindBarProps) {
   const [query, setQuery] = useState('')
   const [currentMatch, setCurrentMatch] = useState(0)
   const [totalMatches, setTotalMatches] = useState(0)
@@ -99,6 +101,14 @@ export function FindBar({ open, onClose, containerRef, onTokensChange, onCurrent
     updateMatches(currentMatchRef.current - 1)
   }
 
+  const handleCloseRef = useRef<() => void>(() => {})
+  const seenCloseSignal = useRef(closeSignal)
+  useEffect(() => {
+    if (closeSignal === seenCloseSignal.current) return
+    seenCloseSignal.current = closeSignal
+    if (open) handleCloseRef.current()
+  }, [closeSignal, open])
+
   function handleClose() {
     onTokensChange([])
     const container = containerRef.current
@@ -117,6 +127,8 @@ export function FindBar({ open, onClose, containerRef, onTokensChange, onCurrent
     focusRestoreRef.current?.focus()
     focusRestoreRef.current = null
   }
+
+  handleCloseRef.current = handleClose
 
   function handleKeyDown(event: React.KeyboardEvent) {
     if (event.key === 'Enter') {
