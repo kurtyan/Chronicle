@@ -69,7 +69,7 @@ export const useNoteStore = create<NoteState>((set, get) => ({
   createNote: async (data) => {
     activeNoteRequestVersion += 1
     const note = await api.createNote({
-      title: data?.title || 'Untitled note',
+      title: data?.title ?? '',
       contentHtml: data?.contentHtml || '<p></p>',
       tags: data?.tags || [],
       linkedTaskIds: data?.linkedTaskIds || [],

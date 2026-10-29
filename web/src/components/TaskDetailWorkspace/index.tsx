@@ -185,7 +185,7 @@ export function TaskDetailWorkspace({ highlightEntryId, showTrackingStatus = tru
     if ((e.nativeEvent as KeyboardEvent).isComposing) return
     if (compositionJustEnded.current && e.key === 'Enter') { e.preventDefault(); return }
     if (e.key === 'Enter') handleTitleSave()
-    if (e.key === 'Escape') setEditingTitle(false)
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setEditingTitle(false) }
   }
 
   const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`

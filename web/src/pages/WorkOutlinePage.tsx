@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, Link2Off, ListFilter, RefreshCw, Save, X } from 'lucide-react'
+import { FindBar } from '@/components/FindBar'
 import { OutlineEditor, type OutlineEditorHandle, type OutlineRowLayout } from '@/components/WorkOutline/OutlineEditor'
 import { TaskDetailWorkspace } from '@/components/TaskDetailWorkspace'
 import { useWorkOutlineStore, pendingOutlineCreation } from '@/stores/workOutlineStore'
@@ -164,8 +165,14 @@ export function WorkOutlinePage() {
     for (const task of knownTasks) if (values[task.id] !== 'MISSING') values[task.id] = task.status
     return values
   }, [days, knownTasks])
-  const visible = useMemo(() => outlineDocument ? visibleOutlineRows(outlineDocument, collapsed, statuses, activeOnly) : [], [outlineDocument, collapsed, statuses, activeOnly])
-  const hiddenByFilter = useMemo(() => outlineDocument && activeOnly ? visibleOutlineRows(outlineDocument, collapsed, statuses).length - visible.length : 0, [outlineDocument, collapsed, statuses, activeOnly, visible])
+  const [showFind, setShowFind] = useState(false)
+  const [findTokens, setFindTokens] = useState<string[]>([])
+  const [findIndex, setFindIndex] = useState(-1)
+  const [findCloseSignal, setFindCloseSignal] = useState(0)
+  const searching = showFind && findTokens.length > 0
+  const effectiveCollapsed = useMemo(() => searching ? new Set<string>() : collapsed, [searching, collapsed])
+  const visible = useMemo(() => outlineDocument ? visibleOutlineRows(outlineDocument, effectiveCollapsed, statuses, activeOnly) : [], [outlineDocument, effectiveCollapsed, statuses, activeOnly])
+  const hiddenByFilter = useMemo(() => outlineDocument && activeOnly ? visibleOutlineRows(outlineDocument, effectiveCollapsed, statuses).length - visible.length : 0, [outlineDocument, effectiveCollapsed, statuses, activeOnly, visible])
   const byRow = useMemo(() => new Map(visible.map(row => [row.line.attrs.id, row])), [visible])
   const taskStats = useMemo(() => new Map(days?.tasks.map(task => [task.taskId, task])), [days])
   const cells = useMemo(() => new Map(days?.cells.map(cell => [`${cell.taskId}:${cell.date}`, cell])), [days])
@@ -253,16 +260,31 @@ export function WorkOutlinePage() {
     if (current.creating || pendingOutlineCreation()) { setNotice(t('outline.notice.confirmCreation')); return false }
     try { await current.save(); return !useWorkOutlineStore.getState().dirty } catch { return false }
   }), [])
+  useEffect(() => registerShortcut({ id: 'work-outline-find', combo: 'mod+f', label: 'Find in outline', scope: 'page', handler: () => {
+    const input = window.document.querySelector<HTMLInputElement>('[data-find-bar="true"] input')
+    if (input) { input.focus(); input.select() } else setShowFind(true)
+  } }), [])
   useEffect(() => registerShortcut({ id: 'work-outline-toggle-active', combo: 'mod+o', label: 'Toggle unfinished-only outline', scope: 'page', handler: () => setActiveOnly(current => !current) }), [])
   useEffect(() => registerShortcut({ id: 'work-outline-refresh', combo: 'mod+r', label: 'Refresh work outline', scope: 'page', handler: () => { void refreshDays(); void reloadTasks(); void useWorkOutlineStore.getState().checkRemote() } }), [refreshDays, reloadTasks])
   useEffect(() => {
+    const skip = (event: KeyboardEvent) => event.isComposing || event.key !== 'Escape' || !!window.document.querySelector('[data-outline-mention], [role="dialog"]') || !!(event.target as Element | null)?.closest?.('[data-find-bar="true"]')
+    // While editing inside the Task detail, its own Esc handling (leave the editor, cancel a title edit) goes first;
+    // Esc only reaches the bubble listener below, and closes the panel, when nothing there consumed it.
+    const editingInDetail = (event: KeyboardEvent) => panel.mode === 'view' && !!(event.target as Element | null)?.closest?.('.outline-side-panel') && !!(event.target as Element).closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]')
     const onEscape = (event: KeyboardEvent) => {
-      if (event.isComposing || event.key !== 'Escape' || panel.mode === 'closed' || window.document.querySelector('[data-outline-mention], [role="dialog"]')) return
-      event.preventDefault(); event.stopPropagation(); closePanel()
+      if (skip(event) || editingInDetail(event)) return
+      // The panel closes first; once it is gone, Esc closes the find bar even though focus is no longer in it.
+      if (panel.mode !== 'closed') { event.preventDefault(); event.stopPropagation(); closePanel() }
+      else if (showFind) { event.preventDefault(); event.stopPropagation(); setFindCloseSignal(signal => signal + 1) }
+    }
+    const onEscapeUnhandled = (event: KeyboardEvent) => {
+      if (skip(event) || !editingInDetail(event) || event.defaultPrevented) return
+      event.preventDefault(); closePanel()
     }
     window.addEventListener('keydown', onEscape, true)
-    return () => window.removeEventListener('keydown', onEscape, true)
-  }, [panel])
+    window.addEventListener('keydown', onEscapeUnhandled)
+    return () => { window.removeEventListener('keydown', onEscape, true); window.removeEventListener('keydown', onEscapeUnhandled) }
+  }, [panel, showFind])
   const onLayout = useCallback((rows: OutlineRowLayout[], height: number) => {
     setLayout(current => current.height === height && JSON.stringify(current.rows) === JSON.stringify(rows) ? current : { rows, height })
   }, [])
@@ -272,6 +294,13 @@ export function WorkOutlinePage() {
     const scroll = grid.current ? { top: grid.current.scrollTop, left: grid.current.scrollLeft } : null
     restoreAfterClose.current = { rowId, scroll }
     setPanel(CLOSED)
+  }
+  // Clicking the tree dismisses the task/day panel; task chips still switch it and the create form is left alone.
+  function closeReadOnlyPanelOnTreeClick(event: React.PointerEvent) {
+    if (panel.mode !== 'view' && panel.mode !== 'day') return
+    if ((event.target as Element).closest('[data-outline-task]')) return
+    closePanel()
+    restoreAfterClose.current = null
   }
   async function openTask(taskId: string, rowId: string) {
     if (!canSwitchPanel()) return
@@ -328,6 +357,9 @@ export function WorkOutlinePage() {
     {status === 'conflict' && <div className="outline-conflict" role="alert"><span>{t('outline.conflict.message')}</span><button onClick={() => setShowConflict(value => !value)}>{t('outline.conflict.view')}</button><button onClick={exportLocal}>{t('outline.conflict.export')}</button>{showConflict && <div className="outline-conflict-versions"><pre aria-label={t('outline.conflict.serverVersion')}>{outlineState.remote ? outlineDocumentText(outlineState.remote.document) : t('outline.conflict.reading')}</pre><div><button onClick={() => void outlineState.reloadRemote().then(() => setShowConflict(false))}>{t('outline.conflict.useServer')}</button><button onClick={() => void outlineState.keepLocal().then(() => setShowConflict(false)).catch(() => {})}>{t('outline.conflict.keepLocal')}</button></div></div>}</div>}
     {(error || dataError || notice) && <div className="outline-feedback" role="alert">{notice || error || t('outline.dataError', { message: dataError })}<button onClick={() => { setNotice(''); void refreshDays(); if (status === 'error') void outlineState.save().catch(() => {}) }}>{t('outline.retryClose')}</button></div>}
     <div className="outline-workspace">
+      <div className="pointer-events-none absolute left-0 top-0 z-30 [&>*]:pointer-events-auto" style={{ width: TOTAL_WIDTH + editorWidth }}>
+        <FindBar open={showFind} closeSignal={findCloseSignal} onClose={() => { setShowFind(false); setFindTokens([]); setFindIndex(-1) }} containerRef={grid} onTokensChange={setFindTokens} onCurrentMatchChange={setFindIndex} />
+      </div>
       <div ref={grid} className="outline-grid-scroll" data-testid="outline-grid-scroll">
         <div className="outline-grid-header" style={{ minWidth: TOTAL_WIDTH + editorWidth + Math.max(1, columns.length) * DAY_WIDTH }}>
           <div className="outline-total-heading" style={{ width: TOTAL_WIDTH }}>{t('outline.col.total')}</div><div className="outline-text-heading" style={{ left: TOTAL_WIDTH, width: editorWidth }}>{t('outline.col.text')}</div>
@@ -335,15 +367,15 @@ export function WorkOutlinePage() {
         </div>
         <div className="outline-grid-body" style={{ minWidth: TOTAL_WIDTH + editorWidth + Math.max(1, columns.length) * DAY_WIDTH, minHeight: layout.height }}>
           <div className="outline-total-column" style={{ width: TOTAL_WIDTH, height: layout.height }}>
-            {layout.rows.map(row => { const source = byRow.get(row.id); const taskId = source && outlineTaskId(source.line); return <div key={row.id} className={`outline-total-cell ${source?.dimmed ? 'is-dimmed' : ''}`} style={{ top: row.top, height: row.height }} data-testid="outline-total" data-row-id={row.id}>{taskId ? duration(t, taskStats.get(taskId)?.totalRecordedMs) : ''}</div> })}
+            {layout.rows.map(row => { const source = byRow.get(row.id); const taskId = source && outlineTaskId(source.line); return <div key={row.id} className="outline-total-cell" style={{ top: row.top, height: row.height }} data-testid="outline-total" data-row-id={row.id}>{taskId ? duration(t, taskStats.get(taskId)?.totalRecordedMs) : ''}</div> })}
           </div>
-          <div className="outline-text-column" style={{ width: editorWidth, left: TOTAL_WIDTH }}>
-            {outlineDocument ? <OutlineEditor value={outlineDocument} tasks={knownTasks} statuses={statuses} collapsed={collapsed} activeOnly={activeOnly} onChange={outlineState.edit} onSave={() => void outlineState.save().catch(() => {})} onOpenTask={(id, rowId) => void openTask(id, rowId)} onCreateTask={(rowId, title) => switchPanel({ mode: 'create', rowId, title, requestKey: crypto.randomUUID() })} onLayout={onLayout} onActiveRow={setActiveRow} handleRef={editorHandle} /> : <div className="outline-initial">{status === 'error' ? <button onClick={() => void outlineState.load()}>{t('outline.reload')}</button> : t('outline.loadingOutline')}</div>}
-            {layout.rows.map(row => { const source = byRow.get(row.id); return source?.hasChildren ? <button key={row.id} className="outline-fold" aria-label={collapsed.has(row.id) ? t('outline.expand') : t('outline.collapse')} data-testid="outline-fold" data-row-id={row.id} style={{ top: row.top + 2, left: source.line.attrs.depth * 22 + 3 }} onMouseDown={event => event.preventDefault()} onClick={() => setCollapsed(current => { const next = new Set(current); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next })}>{collapsed.has(row.id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button> : null })}
+          <div className="outline-text-column" style={{ width: editorWidth, left: TOTAL_WIDTH }} onPointerDownCapture={closeReadOnlyPanelOnTreeClick}>
+            {outlineDocument ? <OutlineEditor value={outlineDocument} tasks={knownTasks} statuses={statuses} collapsed={effectiveCollapsed} activeOnly={activeOnly} searchTokens={findTokens} searchCurrentMatchIndex={findIndex} onChange={outlineState.edit} onSave={() => void outlineState.save().catch(() => {})} onOpenTask={(id, rowId) => void openTask(id, rowId)} onCreateTask={(rowId, title) => switchPanel({ mode: 'create', rowId, title, requestKey: crypto.randomUUID() })} onLayout={onLayout} onActiveRow={setActiveRow} handleRef={editorHandle} /> : <div className="outline-initial">{status === 'error' ? <button onClick={() => void outlineState.load()}>{t('outline.reload')}</button> : t('outline.loadingOutline')}</div>}
+            {layout.rows.map(row => { const source = byRow.get(row.id); return source?.hasChildren ? <button key={row.id} className="outline-fold" aria-label={effectiveCollapsed.has(row.id) ? t('outline.expand') : t('outline.collapse')} data-testid="outline-fold" data-row-id={row.id} style={{ top: row.top + 2, left: source.line.attrs.depth * 22 + 3 }} onMouseDown={event => event.preventDefault()} onClick={() => setCollapsed(current => { const next = new Set(current); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next })}>{effectiveCollapsed.has(row.id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button> : null })}
             <div className="outline-resize" role="separator" aria-label={t('outline.resize')} onPointerDown={resize} />
           </div>
           <div className="outline-dates-body" style={{ width: Math.max(1, columns.length) * DAY_WIDTH, height: layout.height }} aria-busy={dayLoading}>
-            {layout.rows.map(row => { const source = byRow.get(row.id); const taskId = source && outlineTaskId(source.line); return <div key={row.id} className={`outline-date-row ${source?.dimmed ? 'is-dimmed' : ''}`} style={{ top: row.top, height: row.height }} data-testid="outline-date-row" data-row-id={row.id}>
+            {layout.rows.map(row => { const source = byRow.get(row.id); const taskId = source && outlineTaskId(source.line); return <div key={row.id} className="outline-date-row" style={{ top: row.top, height: row.height }} data-testid="outline-date-row" data-row-id={row.id}>
               {columns.map(column => { const cell = taskId ? cells.get(`${taskId}:${column.date}`) : null; const summary = !column.isCurrent && cell?.summary.availability === 'historical' ? cell.summary : null; const missing = taskId && taskStats.get(taskId)?.missing; return <button key={column.date} disabled={!taskId || !!missing || !!dataError} style={{ width: DAY_WIDTH }} className={`outline-day-cell ${column.isCurrent ? 'is-current' : ''}`} data-testid="outline-day-cell" data-date={column.date} data-task-id={taskId || ''} onClick={() => taskId && switchPanel({ mode: 'day', taskId, rowId: row.id, date: column.date })}>
                 {taskId && !missing && <><span className="outline-cell-summary">{dataError ? t('outline.cell.failed') : column.isCurrent ? '' : cellSummaryText(t, summary)}</span><span className="outline-cell-time">{cell ? `${cell.running ? '● ' : ''}${duration(t, cell.recordedMs)}` : days ? '—' : '…'}{summary?.freshness === 'stale' && !summary.outsideBackfill && <small>{t('outline.cell.stale')}</small>}</span></>}
               </button> })}

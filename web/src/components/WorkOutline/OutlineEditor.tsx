@@ -97,6 +97,47 @@ const OutlineProjection = Extension.create({
   })],
 })
 
+const searchKey = new PluginKey<{ tokens: string[]; current: number }>('outline-search')
+const OutlineSearch = Extension.create({
+  name: 'outlineSearch',
+  addProseMirrorPlugins: () => [new Plugin<{ tokens: string[]; current: number }>({
+    key: searchKey,
+    state: { init: () => ({ tokens: [], current: -1 }), apply: (tr, value) => tr.getMeta(searchKey) ?? value },
+    props: { decorations: state => {
+      const { tokens, current } = searchKey.getState(state)!
+      const needles = [...new Set(tokens.map(token => token.trim().toLowerCase()).filter(Boolean))].sort((a, b) => b.length - a.length)
+      if (!needles.length) return DecorationSet.empty
+      const projection = projectionKey.getState(state)!
+      const visible = new Set(visibleOutlineRows(normalizeOutlineDocument(state.doc.toJSON()), projection.collapsed, projection.statuses, projection.activeOnly).map(row => row.line.attrs.id))
+      const decorations: Decoration[] = []
+      let match = 0
+      const mark = () => match++ === current ? 'search-highlight search-highlight-current' : 'search-highlight'
+      state.doc.forEach((row, rowPos) => {
+        if (!visible.has(row.attrs.id)) return
+        row.forEach((child, offset) => {
+          const from = rowPos + 1 + offset
+          if (child.type.name === 'taskRef') {
+            const label = `@${child.attrs.label}`.toLowerCase()
+            if (needles.some(needle => label.includes(needle))) decorations.push(Decoration.node(from, from + child.nodeSize, { class: mark() }))
+            return
+          }
+          if (!child.isText || !child.text) return
+          const lower = child.text.toLowerCase()
+          const ranges: Array<{ from: number; to: number }> = []
+          for (const needle of needles) {
+            for (let index = lower.indexOf(needle); index >= 0; index = lower.indexOf(needle, index + needle.length)) {
+              const start = from + index, end = start + needle.length
+              if (!ranges.some(range => start < range.to && end > range.from)) ranges.push({ from: start, to: end })
+            }
+          }
+          ranges.sort((a, b) => a.from - b.from).forEach(range => decorations.push(Decoration.inline(range.from, range.to, { class: mark() })))
+        })
+      })
+      return DecorationSet.create(state.doc, decorations)
+    } },
+  })],
+})
+
 export interface OutlineRowLayout { id: string; top: number; height: number }
 export interface OutlineEditorHandle { focusRow: (id: string) => void; restoreFocus: (fallbackId: string) => void; move: (id: string, direction: 1 | -1) => void; unlink: (id: string) => void }
 interface Props {
@@ -105,6 +146,8 @@ interface Props {
   statuses: Record<string, string>
   collapsed: Set<string>
   activeOnly: boolean
+  searchTokens?: string[]
+  searchCurrentMatchIndex?: number
   onChange: (document: OutlineDocument) => void
   onSave: () => void
   onOpenTask: (id: string, rowId: string) => void
@@ -211,7 +254,7 @@ export function OutlineEditor(props: Props) {
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ document: false, paragraph: false, bulletList: false, orderedList: false, listItem: false, listKeymap: false, blockquote: false, heading: false, horizontalRule: false, codeBlock: false, bold: false, italic: false, strike: false, code: false, underline: false, link: false, hardBreak: false, trailingNode: false }),
-      OutlineRoot, OutlineLineNode, TaskReference, OutlineProjection,
+      OutlineRoot, OutlineLineNode, TaskReference, OutlineProjection, OutlineSearch,
     ],
     content: props.value,
     onUpdate: ({ editor: ed }) => {
@@ -468,6 +511,11 @@ export function OutlineEditor(props: Props) {
     if (item.top < top) menu.scrollTop -= top - item.top
     else if (item.bottom > bottom) menu.scrollTop += item.bottom - bottom
   }, [mention, selected, matches.length, props.tasks])
+
+  useEffect(() => {
+    if (!editor) return
+    editor.view.dispatch(editor.state.tr.setMeta(searchKey, { tokens: props.searchTokens ?? [], current: props.searchCurrentMatchIndex ?? -1 }).setMeta('addToHistory', false))
+  }, [editor, props.searchTokens, props.searchCurrentMatchIndex, props.collapsed, props.activeOnly, props.statuses, props.value])
 
   return <div ref={container} className="outline-editor-host">
     <EditorContent editor={editor} />

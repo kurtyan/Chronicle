@@ -249,7 +249,7 @@ test.describe('Notes', () => {
 
     await page.getByTitle('New note').click()
     await page.waitForURL(/\/notes\?id=N\d{10}/)
-    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Untitled note')
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('')
     await page.getByPlaceholder('Untitled note').fill(`UiNote-${unique}`)
     const editor = page.locator('[data-rich-editor="true"] .ProseMirror')
     await editor.click()
@@ -274,7 +274,7 @@ test.describe('Notes', () => {
 
     await page.getByTitle('New note').click()
     await page.waitForURL(/\/notes\?id=N\d{10}/)
-    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Untitled note')
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('')
     await page.getByPlaceholder('Untitled note').fill(`UiRenameA-${unique}`)
     const editor = page.locator('[data-rich-editor="true"] .ProseMirror')
     await editor.click()
@@ -302,7 +302,7 @@ test.describe('Notes', () => {
 
     await page.getByTitle('New note').click()
     await page.waitForURL(/\/notes\?id=N\d{10}/)
-    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('Untitled note')
+    await expect(page.getByPlaceholder('Untitled note')).toHaveValue('')
 
     const titleInput = page.getByPlaceholder('Untitled note')
     await titleInput.fill(`UiFastA-${unique}`)
