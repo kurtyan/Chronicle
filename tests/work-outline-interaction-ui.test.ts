@@ -411,12 +411,12 @@ async function draftTitle(page: Page, id: string) {
   return form.getByTestId('outline-create-title')
 }
 
-test('Cmd+N titles the draft "<nearest linked ancestor Task> - <row text>", skipping unlinked ancestors', async ({ page, request }) => {
+test('Cmd+N uses the direct parent row title even when it is not linked to a Task', async ({ page, request }) => {
   const goal = await createTask(request, 'Goal'), sibling = await createTask(request, 'Sibling')
   const rows = [line('', 0, goal), line('unlinked middle', 1), line('Write spec', 2), line('', 1, sibling), line('Review it', 1)]
   await saveDocument(request, rows)
   await page.goto('/work-outline')
-  await expect(await draftTitle(page, rows[2].attrs.id)).toHaveValue(`${goal.title} - Write spec`)
+  await expect(await draftTitle(page, rows[2].attrs.id)).toHaveValue('unlinked middle - Write spec')
 })
 
 test('Cmd+N prefers the direct linked parent, and a linked sibling is not an ancestor', async ({ page, request }) => {
@@ -429,14 +429,23 @@ test('Cmd+N prefers the direct linked parent, and a linked sibling is not an anc
   await expect(await draftTitle(page, rows[4].attrs.id)).toHaveValue(`${grand.title} - next to a linked sibling`)
 })
 
-test('Cmd+N falls back to the row text without a linked ancestor, and to the ancestor title for an empty row', async ({ page, request }) => {
+test('Cmd+N uses plain parent text, falls back to root text, and uses the parent title for an empty row', async ({ page, request }) => {
   const goal = await createTask(request, 'Goal')
   const rows = [line('plain root'), line('plain child', 1), line('', 0, goal), line('', 1)]
   await saveDocument(request, rows)
   await page.goto('/work-outline')
-  await expect(await draftTitle(page, rows[1].attrs.id)).toHaveValue('plain child')
+  await expect(await draftTitle(page, rows[0].attrs.id)).toHaveValue('plain root')
+  await page.getByTestId('outline-create-form').getByRole('button', { name: '取消', exact: true }).click()
+  await expect(await draftTitle(page, rows[1].attrs.id)).toHaveValue('plain root - plain child')
   await page.getByTestId('outline-create-form').getByRole('button', { name: '取消', exact: true }).click()
   await expect(await draftTitle(page, rows[3].attrs.id)).toHaveValue(goal.title)
+})
+
+test('Cmd+N skips empty parents and unrelated sibling branches to find a non-empty ancestor', async ({ page, request }) => {
+  const rows = [line('Project A'), line('Module B', 1), line('Unrelated sibling', 2), line('Its child', 3), line('   ', 2), line('', 3), line('Fix login', 4)]
+  await saveDocument(request, rows)
+  await page.goto('/work-outline')
+  await expect(await draftTitle(page, rows[6].attrs.id)).toHaveValue('Module B - Fix login')
 })
 
 test('Cmd+N ignores an open @ query, and on a row that already has a Task only shows the notice', async ({ page, request }) => {

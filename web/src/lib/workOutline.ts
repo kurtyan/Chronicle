@@ -121,9 +121,9 @@ export function moveOutlineBranch(doc: OutlineDocument, rowId: string, direction
 }
 
 /**
- * Draft title for a Task created from a row: the Task title of the nearest ancestor
- * row that is linked to a Task, then " - ", then the row's own text. `resolve` returns
- * null for a link that should not count (for example a deleted Task).
+ * Draft title for a Task created from a row: the nearest non-empty parent row's
+ * title, then " - ", then the row's own text. Task references contribute their
+ * current title (or saved label), without the display-only @ prefix.
  */
 export function outlineDraftTitle(doc: OutlineDocument, rowId: string, resolve: (taskId: string, label: string) => string | null): string {
   const lines = doc.content
@@ -134,8 +134,9 @@ export function outlineDraftTitle(doc: OutlineDocument, rowId: string, resolve: 
   for (let i = index - 1; i >= 0 && depth > 0 && !parent; i--) {
     if (lines[i].attrs.depth >= depth) continue
     depth = lines[i].attrs.depth
-    const link = lines[i].content?.find(node => node.type === 'taskRef')
-    if (link?.type === 'taskRef') parent = resolve(link.attrs.taskId, link.attrs.label)?.trim() ?? ''
+    parent = (lines[i].content ?? []).map(node => node.type === 'text'
+      ? node.text
+      : resolve(node.attrs.taskId, node.attrs.label) ?? node.attrs.label).join('').trim()
   }
   const own = outlineLineText(lines[index]).trim()
   return outlineLabel(parent && own ? `${parent} - ${own}` : parent || own, '')

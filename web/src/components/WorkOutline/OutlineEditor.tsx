@@ -205,7 +205,7 @@ export function OutlineEditor(props: Props) {
     ed.state.doc.forEach((node, pos) => { if (pos < to && pos + node.nodeSize > from) ids.push(node.attrs.id) })
     return ids
   }
-  /** Cmd+N: opens the create-Task panel for the cursor row, titled "<nearest linked ancestor's Task> - <row text>". */
+  /** Cmd+N: opens the create-Task panel, titled "<nearest non-empty parent row> - <row text>". */
   function createTaskFromRow() {
     const ed = editorRef.current
     if (!ed) return
@@ -219,8 +219,8 @@ export function OutlineEditor(props: Props) {
     if (outlineTaskId(row)) { setNotice(tRef.current('outline.editor.alreadyLinked')); return }
     // An open @ query is not part of the title; drop it as choosing a Task would.
     if (active && active.rowId === rowId) ed.view.dispatch(ed.state.tr.delete(active.from, active.to))
-    const { tasks, statuses } = latest.current
-    const title = outlineDraftTitle(currentDocument(), rowId, (id, label) => statuses[id] === 'MISSING' ? null : tasks.find(task => task.id === id)?.title ?? label)
+    const { tasks } = latest.current
+    const title = outlineDraftTitle(currentDocument(), rowId, (id, label) => tasks.find(task => task.id === id)?.title ?? label)
     latest.current.onCreateTask(rowId, title)
   }
   function updateMention(ed: Editor) {

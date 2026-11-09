@@ -1,11 +1,41 @@
 import { test, expect } from '@playwright/test'
-import { normalizeOutlineDocument, normalizePastedOutline, visibleOutlineRows, outlineTaskIds, outlineTaskId, outlineLineText, indentOutlineRows, moveOutlineBranch, splitOutlineLine, parseOutlineText, parseOutlineClipboardNodes, bindOutlineTask, rankOutlineTasks, outlineLabel, type OutlineClipboardNode } from '../web/src/lib/workOutline'
+import { normalizeOutlineDocument, normalizePastedOutline, visibleOutlineRows, outlineTaskIds, outlineTaskId, outlineLineText, outlineDraftTitle, indentOutlineRows, moveOutlineBranch, splitOutlineLine, parseOutlineText, parseOutlineClipboardNodes, bindOutlineTask, rankOutlineTasks, outlineLabel, type OutlineClipboardNode } from '../web/src/lib/workOutline'
 import type { OutlineDocument, OutlineLine } from '../shared/workOutlineTypes'
 
 function line(id: string, depth: number, text: string, taskId?: string): OutlineLine {
   return { type: 'outlineLine', attrs: { id, depth }, content: [{ type: 'text', text }, ...(taskId ? [{ type: 'taskRef' as const, attrs: { taskId, label: taskId } }] : [])] }
 }
 const document = (...content: OutlineLine[]): OutlineDocument => ({ type: 'doc', schemaVersion: 1, content })
+
+test('draft titles use the nearest non-empty parent row regardless of Task links', () => {
+  const doc = document(line('root', 0, '', 'project'), line('parent', 1, ' Module B '), line('child', 2, ' Fix login '))
+  expect(outlineDraftTitle(doc, 'child', () => 'Project A')).toBe('Module B - Fix login')
+  expect(outlineDraftTitle(doc, 'parent', () => 'Project A')).toBe('Project A - Module B')
+})
+
+test('draft titles skip blank parents without taking titles from siblings or their descendants', () => {
+  const doc = document(line('root', 0, 'Project A'), line('parent', 1, 'Module B'), line('sibling', 2, 'Other'), line('cousin', 3, 'Other detail'), line('blank', 2, '  '), line('empty', 3, ''), line('child', 4, 'Fix login'))
+  expect(outlineDraftTitle(doc, 'child', () => null)).toBe('Module B - Fix login')
+  doc.content[1].content = []
+  expect(outlineDraftTitle(doc, 'child', () => null)).toBe('Project A - Fix login')
+})
+
+test('draft titles resolve parent Task references without @ and preserve surrounding row text', () => {
+  const parent = line('parent', 0, 'Review ', 'task')
+  parent.content!.push({ type: 'text', text: ' today' })
+  const doc = document(parent, line('child', 1, 'Write spec'))
+  expect(outlineDraftTitle(doc, 'child', () => 'Current title')).toBe('Review Current title today - Write spec')
+  expect(outlineDraftTitle(doc, 'child', () => null)).toBe('Review task today - Write spec')
+})
+
+test('draft titles handle roots, empty ancestors and empty current rows without extra separators', () => {
+  const doc = document(line('root', 0, 'Project A'), line('empty', 1, ''), line('blank-root', 0, '  '), line('blank-parent', 1, ''), line('child', 2, 'Fix login'), line('blank-child', 2, ''))
+  expect(outlineDraftTitle(doc, 'root', () => null)).toBe('Project A')
+  expect(outlineDraftTitle(doc, 'empty', () => null)).toBe('Project A')
+  expect(outlineDraftTitle(doc, 'child', () => null)).toBe('Fix login')
+  expect(outlineDraftTitle(doc, 'blank-child', () => null)).toBe('')
+  expect(outlineDraftTitle(doc, 'missing', () => null)).toBe('')
+})
 
 test('completion inheritance stops at the nearest independently active task', () => {
   const doc = document(line('a', 0, 'A', 'A'), line('b', 1, '说明'), line('c', 2, '细节'), line('d', 1, 'B', 'B'), line('e', 2, 'B细节'))
