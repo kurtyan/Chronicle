@@ -299,6 +299,8 @@ Most Playwright tests start their own isolated server/database fixtures. For man
 
 ## Repository Layout
 
+The standalone Python Claude Agent SDK CLI is documented in [apps/claude_cli/README.md](apps/claude_cli/README.md). It installs through pip and runs independently of Chronicle.
+
 ```text
 .
 ├── dev.sh                    Development launcher

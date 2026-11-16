@@ -1,0 +1,10 @@
+{
+  "model": "sonnet",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://claude-gateway.example.internal"
+  },
+  "permissions": {
+    "defaultMode": "default",
+    "deny": ["Read(.env)", "Read(.env.*)"]
+  }
+}

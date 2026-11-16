@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chronicle-claude-harness"
+version = "0.1.0"
+description = "Standalone interactive Claude Agent SDK harness for intranet testing"
+requires-python = ">=3.11"
+dependencies = ["claude-agent-sdk==0.2.182", "prompt-toolkit>=3.0.51,<4"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pytest-asyncio>=1,<2"]
+
+[project.scripts]
+claude-harness = "claude_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
