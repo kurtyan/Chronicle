@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
+import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import path from 'node:path'
 import type { OutlineDocument, OutlineLine } from '../shared/workOutlineTypes'
 
@@ -47,6 +47,217 @@ async function paste(page: Page, value: { raw: string; text: string }) {
 
 test.beforeEach(async ({ request }) => { await request.post('/api/afk'); await saveDocument(request, [line('')]) })
 test.afterEach(async ({ request }) => { await request.post('/api/afk'); for (const id of createdTasks.splice(0)) await request.delete(`/api/tasks/${id}`) })
+
+async function expectBlankLines(content: Locator) {
+  await expect(content).toBeVisible()
+  const layout = await content.locator(':scope > p').evaluateAll(paragraphs => {
+    const rows = paragraphs.map(p => p.getBoundingClientRect())
+    return { heights: rows.slice(1, -1).map(row => row.height), distance: rows.at(-1)!.top - rows[0].top, lineHeight: rows[0].height }
+  })
+  expect(layout.heights).toEqual([layout.lineHeight, layout.lineHeight])
+  expect(layout.distance).toBeCloseTo(3 * layout.lineHeight, 0)
+}
+
+test('task body and log display blank lines and trailing soft breaks after save and reload', async ({ page, request }) => {
+  const linked = await createTask(request, 'Task with blank lines')
+  const initial = await request.post(`/api/tasks/${linked.id}/logs`, { data: { type: 'body', content: '<p>Body before</p>' } })
+  expect(initial.ok()).toBe(true)
+  await saveDocument(request, [line('Task ', 0, linked)])
+  await page.goto('/work-outline?lang=en')
+  const openTask = () => editor(page).locator(`[data-outline-task="${linked.id}"]`).click()
+  await openTask()
+  const panel = page.getByTestId('outline-side-panel')
+  const entryEditor = panel.locator('[data-rich-editor="true"] .ProseMirror')
+  const display = (text: string) => panel.getByTestId('entry-content').filter({ hasText: text })
+  const expectEntryBreaks = async (text: string) => {
+    const content = display(text)
+    await expectBlankLines(content)
+    const paragraph = content.locator(':scope > p').last()
+    await expect(paragraph.locator('br')).toHaveCount(3)
+    const lines = await paragraph.evaluate(p => p.getBoundingClientRect().height / parseFloat(getComputedStyle(p).lineHeight))
+    expect(lines).toBeCloseTo(4)
+  }
+  await display('Body before').click()
+  await entryEditor.locator('p').first().evaluate(p => {
+    p.closest<HTMLElement>('[contenteditable="true"]')!.focus()
+    window.getSelection()!.collapse(p.firstChild, p.textContent!.length)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+  for (let index = 0; index < 3; index++) await page.keyboard.press('Enter')
+  await page.keyboard.type('Body after')
+  for (let index = 0; index < 3; index++) await page.keyboard.press('Shift+Enter')
+  await panel.getByRole('button', { name: 'Save', exact: true }).click()
+  await expectEntryBreaks('Body after')
+
+  await entryEditor.click()
+  await page.keyboard.type('Log before')
+  for (let index = 0; index < 3; index++) await page.keyboard.press('Enter')
+  await page.keyboard.type('Log after')
+  for (let index = 0; index < 3; index++) await page.keyboard.press('Shift+Enter')
+  await panel.getByRole('button', { name: 'Submit Log', exact: true }).click()
+  await expectEntryBreaks('Log after')
+  for (const [type, first, last] of [['body', 'Body before', 'Body after'], ['log', 'Log before', 'Log after']]) {
+    expect(await entries(request, linked.id)).toContainEqual(expect.objectContaining({ type, content: `<p>${first}</p><p></p><p></p><p>${last}<br><br><br></p>` }))
+  }
+
+  await page.reload()
+  await openTask()
+  await expectEntryBreaks('Body after')
+  await expectEntryBreaks('Log after')
+})
+
+test('pinned and Report entries preserve blank lines alongside normal and soft breaks', async ({ page, request }) => {
+  const linked = await createTask(request, 'Preview blank lines')
+  const formatted = (label: string) => `<p>${label} before</p><p></p><p></p><p>${label} after</p>`
+  const logPath = `/api/tasks/${linked.id}/logs`
+  const body = await request.post(logPath, { data: { type: 'body', content: formatted('Preview body') } })
+  const log = await request.post(logPath, { data: { type: 'log', content: formatted('Preview log') } })
+  const breaks = await request.post(logPath, { data: {
+    type: 'log',
+    content: '<p>One line</p><p>Next line<br><br>Soft break</p>'
+      + '<ol><li><pre><code>code in list</code></pre></li><li><p></p><pre><code>code after placeholder</code></pre></li></ol>'
+      + `<blockquote>${formatted('Quoted text')}</blockquote>`,
+  } })
+  const pinned = await request.post(`/api/tasks/${linked.id}/pinned/append`, { data: { content: formatted('Pinned log') } })
+  for (const response of [body, log, breaks, pinned]) expect(response.ok(), await response.text()).toBe(true)
+
+  await saveDocument(request, [line('Task ', 0, linked)])
+  await page.goto('/work-outline?lang=en')
+  await editor(page).locator(`[data-outline-task="${linked.id}"]`).click()
+  await expectBlankLines(page.locator('.prose-mirror-display').filter({ hasText: 'Pinned log before' }))
+  const normal = page.getByTestId('entry-content').filter({ hasText: 'Soft break' })
+  await expect(normal).toBeVisible()
+  const layout = await normal.locator(':scope > p').evaluateAll(([first, second]) => ({
+    line: first.getBoundingClientRect().height,
+    paragraphDistance: second.getBoundingClientRect().top - first.getBoundingClientRect().top,
+    softBreakHeight: second.getBoundingClientRect().height,
+  }))
+  expect(layout.paragraphDistance).toBeCloseTo(layout.line, 0)
+  expect(layout.softBreakHeight).toBeCloseTo(3 * layout.line, 0)
+  await expect(normal.locator('ol > li > .chronicle-code-list-marker')).toHaveText('1.')
+  await expect(normal.locator('ol > li > pre > code')).toHaveText(['code in list', 'code after placeholder'])
+  expect(await normal.locator('ol > li > p:empty').evaluate(p => p.getBoundingClientRect().height)).toBe(0)
+  await expectBlankLines(normal.locator('blockquote'))
+
+  await page.goto('/report?lang=en')
+  await page.getByText('All Tasks', { exact: true }).first().click()
+  await page.getByText(linked.title, { exact: true }).click()
+  await expectBlankLines(page.locator('.prose-mirror-display').filter({ hasText: 'Preview body before' }))
+  await expectBlankLines(page.locator('.prose-mirror-display').filter({ hasText: 'Preview log before' }))
+})
+
+test('Cmd+Shift minus and plus fold only the current tree branch and preserve nested folds', async ({ page, request }) => {
+  const linked = await createTask(request, 'Fold scope')
+  const parent = line('Parent ', 0, linked), child = line('Child', 1), grandchild = line('Grandchild', 2), sibling = line('Sibling')
+  await saveDocument(request, [parent, child, grandchild, sibling])
+  await page.goto('/work-outline')
+  const fold = (id: string) => page.locator(`[data-testid="outline-fold"][data-row-id="${id}"]`)
+  const collapse = () => page.keyboard.press('Meta+Shift+Minus')
+  const expand = () => page.keyboard.press('Meta+Shift+Equal')
+  await fold(child.attrs.id).click()
+  await expect(row(page, grandchild.attrs.id)).toBeHidden()
+  await cursor(page, parent.attrs.id, 'start')
+  await page.evaluate(() => {
+    window.addEventListener('keydown', event => {
+      if (event.metaKey && event.shiftKey && ['Minus', 'Equal'].includes(event.code)) document.body.dataset.unhandledFoldKey = event.code
+    })
+  })
+  await collapse()
+  await expect(fold(parent.attrs.id)).toHaveAttribute('aria-expanded', 'false')
+  await expect(row(page, child.attrs.id)).toBeHidden()
+  await expect(row(page, sibling.attrs.id)).toBeVisible()
+  await expect(editor(page)).toBeFocused()
+  expect(await page.evaluate(() => {
+    const anchor = window.getSelection()?.anchorNode
+    const element = anchor instanceof Element ? anchor : anchor?.parentElement
+    return element?.closest<HTMLElement>('[data-outline-row]')?.dataset.outlineRow
+  })).toBe(parent.attrs.id)
+  await expand()
+  await expect(fold(parent.attrs.id)).toHaveAttribute('aria-expanded', 'true')
+  await expect(row(page, child.attrs.id)).toBeVisible()
+  await expect(row(page, grandchild.attrs.id)).toBeHidden()
+  await expect(page.locator('body')).not.toHaveAttribute('data-unhandled-fold-key', /./)
+
+  await cursor(page, sibling.attrs.id)
+  await collapse()
+  await expect(page.locator('body')).toHaveAttribute('data-unhandled-fold-key', 'Minus')
+  await editor(page).locator(`[data-outline-task="${linked.id}"]`).click()
+  const detailEditor = page.getByTestId('outline-side-panel').locator('[data-rich-editor="true"] .ProseMirror')
+  await detailEditor.click()
+  await collapse()
+  await expect(fold(parent.attrs.id)).toHaveAttribute('aria-expanded', 'true')
+  await page.getByRole('button', { name: '关闭任务详情', exact: true }).click()
+
+  await cursor(page, parent.attrs.id, 'start')
+  await editor(page).dispatchEvent('keydown', { key: '_', code: 'Minus', metaKey: true, shiftKey: true, isComposing: true })
+  await expect(fold(parent.attrs.id)).toHaveAttribute('aria-expanded', 'true')
+  await page.keyboard.press('ControlOrMeta+f')
+  const find = page.locator('[data-find-bar="true"] input')
+  await find.fill('Grandchild')
+  await expect(row(page, grandchild.attrs.id)).toBeVisible()
+  await cursor(page, parent.attrs.id, 'start')
+  await collapse()
+  await find.press('Escape')
+  await expect(row(page, grandchild.attrs.id)).toBeHidden()
+  await expect(fold(parent.attrs.id)).toHaveAttribute('aria-expanded', 'true')
+
+  await cursor(page, parent.attrs.id, 'start')
+  await collapse()
+  await expect(fold(parent.attrs.id)).toHaveAttribute('aria-expanded', 'false')
+  await page.reload()
+  await expect(fold(parent.attrs.id)).toHaveAttribute('aria-expanded', 'false')
+  await fold(parent.attrs.id).click()
+  await expect(row(page, child.attrs.id)).toBeVisible()
+  await expect(row(page, grandchild.attrs.id)).toBeHidden()
+})
+
+test('holding a handled fold shortcut keeps desktop zoom idle until the next press', async ({ page, request }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'platform', { value: 'MacIntel' })
+    const zoomCalls: number[] = []
+    Object.assign(window, {
+      __TAURI__: {},
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: { scale: number }) => {
+          if (command === 'set_zoom') {
+            zoomCalls.push(args.scale)
+            document.documentElement.dataset.zoomCalls = JSON.stringify(zoomCalls)
+          }
+          return null
+        },
+        transformCallback: () => 0,
+      },
+    })
+  })
+  const parent = line('Parent'), child = line('Child', 1)
+  await saveDocument(request, [parent, child])
+  await page.goto('/work-outline')
+  const fold = page.getByTestId('outline-fold')
+  const zoom = page.locator('html')
+  await cursor(page, parent.attrs.id, 'start')
+  await page.keyboard.press('Meta+Shift+Minus')
+  await expect(fold).toHaveAttribute('aria-expanded', 'false')
+  await page.keyboard.down('Meta')
+  await page.keyboard.down('Shift')
+  await page.keyboard.down('Equal')
+  await expect(fold).toHaveAttribute('aria-expanded', 'true')
+  await page.keyboard.down('Equal')
+  await page.keyboard.down('Equal')
+  await page.keyboard.up('Equal')
+  await page.keyboard.up('Shift')
+  await page.keyboard.up('Meta')
+  await expect(zoom).not.toHaveAttribute('data-zoom-calls', /./)
+
+  await page.keyboard.press('Meta+Shift+Equal')
+  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1]')
+  await cursor(page, child.attrs.id)
+  await page.keyboard.press('Meta+Shift+Equal')
+  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1,1.2]')
+  await fold.focus()
+  await page.keyboard.press('Meta+Minus')
+  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1,1.2,1.1]')
+  await expect(fold).toHaveAttribute('aria-expanded', 'true')
+})
 
 test('Ctrl+Enter in the outline preserves the detail log draft; the detail editor submits it once', async ({ page, request }) => {
   const linked = await createTask(request, 'Draft scope')

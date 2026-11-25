@@ -610,7 +610,7 @@ export function TaskEntryBlock({ entry, onSave, onDelete, editing: externalEditi
         <div
           ref={contentRef}
           data-testid="entry-content"
-          className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display"
+          className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 opacity-90 group-hover:opacity-100 transition prose-mirror-display task-entry-prose"
           dangerouslySetInnerHTML={{ __html: withCodeBlockWrapButtons(withCodeFirstListMarkers(DOMPurify.sanitize(highlightTokens?.length ? highlightHtml(convertImageSrcs(entry.content), highlightTokens) : convertImageSrcs(entry.content), { ALLOW_UNKNOWN_PROTOCOLS: true }))) }}
         />
       </div>

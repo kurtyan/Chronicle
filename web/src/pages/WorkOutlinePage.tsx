@@ -177,6 +177,23 @@ export function WorkOutlinePage() {
   const taskStats = useMemo(() => new Map(days?.tasks.map(task => [task.taskId, task])), [days])
   const cells = useMemo(() => new Map(days?.cells.map(cell => [`${cell.taskId}:${cell.date}`, cell])), [days])
   const columns = days?.columns ?? []
+
+  function setBranchCollapsed(rowId: string, collapse: boolean) {
+    setCollapsed(current => {
+      if (current.has(rowId) === collapse) return current
+      const next = new Set(current)
+      if (collapse) next.add(rowId)
+      else next.delete(rowId)
+      return next
+    })
+  }
+
+  function foldWithShortcut(rowId: string, collapse: boolean) {
+    if (searching || !byRow.get(rowId)?.hasChildren || collapsed.has(rowId) === collapse) return false
+    setBranchCollapsed(rowId, collapse)
+    return true
+  }
+
   // Keep the preferred width, but leave usable detail space when a saved wide
   // outline is opened in a smaller window. Both panes share this actual boundary.
   const editorWidth = Math.min(width, Math.max(80, pageWidth - TOTAL_WIDTH - Math.min(340, pageWidth / 2)))
@@ -370,15 +387,29 @@ export function WorkOutlinePage() {
             {layout.rows.map(row => { const source = byRow.get(row.id); const taskId = source && outlineTaskId(source.line); return <div key={row.id} className="outline-total-cell" style={{ top: row.top, height: row.height }} data-testid="outline-total" data-row-id={row.id}>{taskId ? duration(t, taskStats.get(taskId)?.totalRecordedMs) : ''}</div> })}
           </div>
           <div className="outline-text-column" style={{ width: editorWidth, left: TOTAL_WIDTH }} onPointerDownCapture={closeReadOnlyPanelOnTreeClick}>
-            {outlineDocument ? <OutlineEditor value={outlineDocument} tasks={knownTasks} statuses={statuses} collapsed={effectiveCollapsed} activeOnly={activeOnly} searchTokens={findTokens} searchCurrentMatchIndex={findIndex} onChange={outlineState.edit} onSave={() => void outlineState.save().catch(() => {})} onOpenTask={(id, rowId) => void openTask(id, rowId)} onCreateTask={(rowId, title) => switchPanel({ mode: 'create', rowId, title, requestKey: crypto.randomUUID() })} onLayout={onLayout} onActiveRow={setActiveRow} handleRef={editorHandle} /> : <div className="outline-initial">{status === 'error' ? <button onClick={() => void outlineState.load()}>{t('outline.reload')}</button> : t('outline.loadingOutline')}</div>}
-            {layout.rows.map(row => { const source = byRow.get(row.id); return source?.hasChildren ? <button key={row.id} className="outline-fold" aria-label={effectiveCollapsed.has(row.id) ? t('outline.expand') : t('outline.collapse')} data-testid="outline-fold" data-row-id={row.id} style={{ top: row.top + 2, left: source.line.attrs.depth * 22 + 3 }} onMouseDown={event => event.preventDefault()} onClick={() => setCollapsed(current => { const next = new Set(current); next.has(row.id) ? next.delete(row.id) : next.add(row.id); return next })}>{effectiveCollapsed.has(row.id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button> : null })}
+            {outlineDocument ? <OutlineEditor value={outlineDocument} tasks={knownTasks} statuses={statuses} collapsed={effectiveCollapsed} activeOnly={activeOnly} searchTokens={findTokens} searchCurrentMatchIndex={findIndex} onChange={outlineState.edit} onSave={() => void outlineState.save().catch(() => {})} onOpenTask={(id, rowId) => void openTask(id, rowId)} onCreateTask={(rowId, title) => switchPanel({ mode: 'create', rowId, title, requestKey: crypto.randomUUID() })} onLayout={onLayout} onActiveRow={setActiveRow} onFoldShortcut={foldWithShortcut} handleRef={editorHandle} /> : <div className="outline-initial">{status === 'error' ? <button onClick={() => void outlineState.load()}>{t('outline.reload')}</button> : t('outline.loadingOutline')}</div>}
+            {layout.rows.map(row => {
+              const source = byRow.get(row.id)
+              if (!source?.hasChildren) return null
+              const isCollapsed = effectiveCollapsed.has(row.id)
+              return <button key={row.id} className="outline-fold" aria-label={t(isCollapsed ? 'outline.expand' : 'outline.collapse')} aria-expanded={!isCollapsed} data-testid="outline-fold" data-row-id={row.id} style={{ top: row.top + 2, left: source.line.attrs.depth * 22 + 3 }} onMouseDown={event => event.preventDefault()} onClick={() => setBranchCollapsed(row.id, !collapsed.has(row.id))}>{isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button>
+            })}
             <div className="outline-resize" role="separator" aria-label={t('outline.resize')} onPointerDown={resize} />
           </div>
           <div className="outline-dates-body" style={{ width: Math.max(1, columns.length) * DAY_WIDTH, height: layout.height }} aria-busy={dayLoading}>
             {layout.rows.map(row => { const source = byRow.get(row.id); const taskId = source && outlineTaskId(source.line); return <div key={row.id} className="outline-date-row" style={{ top: row.top, height: row.height }} data-testid="outline-date-row" data-row-id={row.id}>
-              {columns.map(column => { const cell = taskId ? cells.get(`${taskId}:${column.date}`) : null; const summary = !column.isCurrent && cell?.summary.availability === 'historical' ? cell.summary : null; const missing = taskId && taskStats.get(taskId)?.missing; return <button key={column.date} disabled={!taskId || !!missing || !!dataError} style={{ width: DAY_WIDTH }} className={`outline-day-cell ${column.isCurrent ? 'is-current' : ''}`} data-testid="outline-day-cell" data-date={column.date} data-task-id={taskId || ''} onClick={() => taskId && switchPanel({ mode: 'day', taskId, rowId: row.id, date: column.date })}>
-                {taskId && !missing && <><span className="outline-cell-summary">{dataError ? t('outline.cell.failed') : column.isCurrent ? '' : cellSummaryText(t, summary)}</span><span className="outline-cell-time">{cell ? `${cell.running ? '● ' : ''}${duration(t, cell.recordedMs)}` : days ? '—' : '…'}{summary?.freshness === 'stale' && !summary.outsideBackfill && <small>{t('outline.cell.stale')}</small>}</span></>}
-              </button> })}
+              {columns.map(column => {
+                const cell = taskId ? cells.get(`${taskId}:${column.date}`) : null
+                const summary = !column.isCurrent && cell?.summary.availability === 'historical' ? cell.summary : null
+                const stats = taskId ? taskStats.get(taskId) : undefined
+                const summaryText = dataError ? t('outline.cell.failed') : cellSummaryText(t, summary)
+                const stale = summary?.freshness === 'stale' && !summary.outsideBackfill
+                const time = cell ? (cell.running || cell.recordedMs !== 0 ? duration(t, cell.recordedMs) : '') : days ? '—' : '…'
+                const emptyLabel = taskId && !summaryText && !time && !stale ? t('outline.cell.openDay', { title: stats?.title || taskId, date: column.date }) : undefined
+                return <button key={column.date} disabled={!taskId || !!stats?.missing || !!dataError} aria-label={emptyLabel} style={{ width: DAY_WIDTH }} className={`outline-day-cell ${column.isCurrent ? 'is-current' : ''}`} data-testid="outline-day-cell" data-date={column.date} data-task-id={taskId || ''} onClick={() => taskId && switchPanel({ mode: 'day', taskId, rowId: row.id, date: column.date })}>
+                  {taskId && !stats?.missing && <><span className="outline-cell-summary">{summaryText}</span><span className="outline-cell-time">{cell?.running && '● '}{time}{stale && <small>{t('outline.cell.stale')}</small>}</span></>}
+                </button>
+              })}
             </div> })}
           </div>
         </div>

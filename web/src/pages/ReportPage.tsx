@@ -848,7 +848,7 @@ export function ReportPage() {
             {selectedTask.body && (
               <div>
                 <span className="text-xs text-muted-foreground">Body</span>
-                <div className="mt-1 prose prose-sm max-w-none prose-mirror-display" dangerouslySetInnerHTML={{ __html: sanitizeProseHtml(selectedTask.body) }} />
+                <div className="mt-1 prose prose-sm max-w-none prose-mirror-display task-entry-prose" dangerouslySetInnerHTML={{ __html: sanitizeProseHtml(selectedTask.body) }} />
               </div>
             )}
             {taskEntries.length > 0 && (
@@ -858,7 +858,7 @@ export function ReportPage() {
                   {taskEntries.filter(e => e.type === 'log').map(entry => (
                     <div key={entry.id} className="border-l-2 border-muted pl-3 py-1">
                       <div className="text-xs text-muted-foreground">{format(new Date(entry.createdAt), 'MM-dd HH:mm')}</div>
-                      <div className="text-sm prose-mirror-display" dangerouslySetInnerHTML={{ __html: sanitizeProseHtml(entry.content) }} />
+                      <div className="text-sm prose-mirror-display task-entry-prose" dangerouslySetInnerHTML={{ __html: sanitizeProseHtml(entry.content) }} />
                     </div>
                   ))}
                 </div>

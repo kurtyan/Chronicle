@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import type { OutlineDocument, OutlineLine } from '../shared/workOutlineTypes'
+import type { TaskDaysResponse } from '../shared/taskDailySummaryTypes'
 
 const uid = () => crypto.randomUUID()
 const line = (text: string, depth = 0, task?: { id: string; title: string }): OutlineLine => ({ type: 'outlineLine', attrs: { id: uid(), depth }, content: [{ type: 'text', text }, ...(task ? [{ type: 'taskRef' as const, attrs: { taskId: task.id, label: task.title } }] : [])] })
@@ -281,6 +282,40 @@ test('folding, width changes and date navigation keep outline rows aligned with 
   await page.screenshot({ path: path.join(process.env.CHRONICLE_TEST_DATA_DIR!, 'work-outline.png'), fullPage: true })
 })
 
+test('day cells hide unworked time, keep summaries and positive time, and open empty days', async ({ page, request }) => {
+  const linked = await task(request, 'Date grid durations')
+  const { calendar } = await (await request.get('/api/settings/task-daily-summary')).json()
+  const previousDay = (days: number) => new Date(Date.parse(calendar.lastClosedWorkDate) - days * 86400000).toISOString().slice(0, 10)
+  const [summaryDay, shortDay, workedDay, emptyDay] = [0, 1, 2, 3].map(previousDay)
+  await page.route('**/api/task-days/query', async route => {
+    const response = await route.fetch()
+    const result: TaskDaysResponse = await response.json()
+    for (const cell of result.cells) {
+      if (cell.taskId !== linked.id) continue
+      if (cell.date === summaryDay && cell.summary.availability === 'historical') {
+        cell.summary = { ...cell.summary, kind: 'llm', freshness: 'fresh', text: 'Log evidence without a timer' }
+      }
+      if (cell.date === shortDay) cell.recordedMs = 30000
+      if (cell.date === workedDay) cell.recordedMs = 180000
+      if (cell.date === calendar.currentWorkDate) { cell.recordedMs = 30000; cell.running = true }
+    }
+    await route.fulfill({ response, json: result })
+  })
+  const target = line('Time ', 0, linked)
+  await saveDocument(request, [target])
+  await page.goto('/work-outline?lang=en')
+  const cell = (date: string) => page.locator(`[data-testid="outline-day-cell"][data-task-id="${linked.id}"][data-date="${date}"]`)
+  await expect(cell(shortDay).locator('.outline-cell-time')).toHaveText('<1 min')
+  await expect(cell(workedDay).locator('.outline-cell-time')).toHaveText('3 min')
+  await expect(cell(calendar.currentWorkDate).locator('.outline-cell-time')).toHaveText('● <1 min')
+  await expect(cell(summaryDay)).toHaveText('Log evidence without a timer')
+  await expect(cell(emptyDay)).toBeEmpty()
+  await expect(cell(emptyDay)).toHaveAccessibleName(`View daily record for ${linked.title} on ${emptyDay}`)
+  await expect(page.locator(`[data-testid="outline-total"][data-row-id="${target.attrs.id}"]`)).toHaveText('0 min')
+  await cell(emptyDay).click()
+  await expect(page.getByTestId('outline-day-details')).toContainText('No records')
+})
+
 test('historical cells expose evidence and refresh; source failures remain visible and recoverable', async ({ page, request }) => {
   const linked = await task(request, 'Evidence')
   const entry = await (await request.post(`/api/tasks/${linked.id}/logs`, { data: { content: '<p>Historical evidence content</p>', type: 'log' } })).json()
@@ -295,9 +330,20 @@ test('historical cells expose evidence and refresh; source failures remain visib
   await page.getByRole('button', { name: '重新检查摘要', exact: true }).click()
   await expect(page.getByTestId('outline-day-details')).toContainText('等待生成')
   await page.getByRole('button', { name: '关闭任务详情', exact: true }).click()
-  await page.route('**/api/task-days/query', route => route.fulfill({ status: 503, json: { error: 'Daily data unavailable' } }))
-  await page.getByRole('button', { name: '今天', exact: true }).click()
+  let finishRequest!: () => void
+  const pending = new Promise<void>(resolve => { finishRequest = resolve })
+  await page.route('**/api/task-days/query', async route => {
+    await pending
+    await route.fulfill({ status: 503, json: { error: 'Daily data unavailable' } })
+  })
+  try {
+    await page.getByRole('button', { name: '今天', exact: true }).click()
+    await expect(page.locator('.outline-dates-body')).toHaveAttribute('aria-busy', 'true')
+  } finally { finishRequest() }
   await expect(page.getByRole('alert').filter({ hasText: 'Daily data unavailable' })).toBeVisible()
+  await expect(page.locator('.outline-dates-body')).toHaveAttribute('aria-busy', 'false')
+  await expect(cell).toBeDisabled()
+  await expect(cell).toContainText('加载失败')
   await page.unroute('**/api/task-days/query')
   await page.getByRole('button', { name: '重试 / 关闭', exact: true }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'Daily data unavailable' })).not.toBeVisible()

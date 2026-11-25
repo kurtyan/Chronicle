@@ -154,6 +154,7 @@ interface Props {
   onCreateTask: (rowId: string, title: string) => void
   onLayout: (rows: OutlineRowLayout[], height: number) => void
   onActiveRow: (id: string) => void
+  onFoldShortcut: (id: string, collapse: boolean) => boolean
   handleRef: React.MutableRefObject<OutlineEditorHandle | null>
 }
 type Mention = { rowId: string; from: number; to: number; query: string; left: number; top: number }
@@ -176,6 +177,7 @@ export function OutlineEditor(props: Props) {
   // Text of the IME composition in progress, as last reported by compositionupdate.
   const compositionText = useRef('')
   const cutIds = useRef<Set<string>>(new Set())
+  const handledFoldKeys = useRef(new Set<string>())
   const savedSelection = useRef<{ anchorId: string; anchorOffset: number; headId: string; headOffset: number } | null>(null)
   // Ranked and capped at MENTION_LIMIT; `total` says how many matches the cap hid.
   const mentionRanking = (query: string) => rankOutlineTasks(latest.current.tasks, query, MENTION_LIMIT)
@@ -288,12 +290,30 @@ export function OutlineEditor(props: Props) {
         }
         if (event.isComposing || event.keyCode === 229) return event.key === 'Enter' || event.key === 'Tab'
         const ed = editorRef.current!
-        const { $from } = ed.state.selection
+        const { $from, empty } = ed.state.selection
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.stopPropagation(); latest.current.onSave(); return true }
         if (event.ctrlKey && event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); return true }
         // Ctrl+N is cursor-down in macOS text fields, so only Cmd+N counts there.
         if ((event.metaKey || (event.ctrlKey && !/Mac/i.test(navigator.platform))) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'n') { event.preventDefault(); event.stopPropagation(); createTaskFromRow(); return true }
         const currentMention = mentionRef.current
+        const foldKey = event.code || event.key
+        if (!event.repeat) handledFoldKeys.current.delete(foldKey)
+        if (event.metaKey && event.shiftKey && !event.ctrlKey && !event.altKey) {
+          // Shift turns the main keyboard's minus key into an underscore.
+          const collapse = event.key === '-' || event.code === 'Minus'
+          const expand = event.key === '+' || event.code === 'Equal'
+          if (collapse || expand) {
+            const handled = event.repeat
+              ? handledFoldKeys.current.has(foldKey)
+              : !currentMention && !_view.composing && empty && latest.current.onFoldShortcut($from.parent.attrs.id, collapse)
+            if (handled) {
+              handledFoldKeys.current.add(foldKey)
+              event.preventDefault()
+              event.stopPropagation()
+              return true
+            }
+          }
+        }
         if (currentMention) {
           const matches = mentionTasks(currentMention.query)
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -385,7 +405,12 @@ export function OutlineEditor(props: Props) {
         compositionstart: () => { compositionText.current = ''; return false },
         compositionupdate: (_view, event) => { compositionText.current = (event as CompositionEvent).data ?? ''; return false },
         compositionend: () => { compositionText.current = ''; return false },
+        keyup: (_view, event) => {
+          handledFoldKeys.current.delete(event.code || event.key)
+          return false
+        },
         blur: view => {
+          handledFoldKeys.current.clear()
           const { $anchor, $head } = view.state.selection
           savedSelection.current = { anchorId: $anchor.parent.attrs.id, anchorOffset: $anchor.parentOffset, headId: $head.parent.attrs.id, headOffset: $head.parentOffset }
           return false

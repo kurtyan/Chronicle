@@ -7,6 +7,16 @@
   user-select: none;
 }
 
+/* Keep the structural paragraph before a code block or nested list compact. */
+.task-entry-prose p:empty:not(li > p:first-child:has(+ :is(pre, ol, ul))) {
+  min-height: 1lh;
+}
+
+/* Give the line after a trailing hard break the same space as in the editor. */
+.task-entry-prose :is(p, h1, h2, h3, h4, h5, h6):has(br:last-child)::after {
+  content: '\200b';
+}
+
 .prose-mirror-display a {
   color: hsl(var(--primary));
   text-decoration: underline;

@@ -92,7 +92,7 @@ export function PinnedSection({ entry, taskId, onUpdate, onUnpin, highlightToken
             />
           ) : (
             <div
-              className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 text-foreground prose-mirror-display"
+              className="text-sm prose prose-sm max-w-none prose-p:my-1 prose-headings:my-2 prose-pre:my-2 text-foreground prose-mirror-display task-entry-prose"
               dangerouslySetInnerHTML={{
                 __html: withCodeFirstListMarkers(DOMPurify.sanitize(
                   highlightTokens?.length ? highlightHtml(entry.content, highlightTokens) : entry.content,
