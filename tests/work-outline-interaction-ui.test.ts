@@ -211,7 +211,7 @@ test('Cmd+Shift minus and plus fold only the current tree branch and preserve ne
   await expect(row(page, grandchild.attrs.id)).toBeHidden()
 })
 
-test('holding a handled fold shortcut keeps desktop zoom idle until the next press', async ({ page, request }) => {
+test('holding or repeatedly pressing a fold shortcut keeps desktop zoom idle on a branch', async ({ page, request }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'platform', { value: 'MacIntel' })
     const zoomCalls: number[] = []
@@ -243,19 +243,28 @@ test('holding a handled fold shortcut keeps desktop zoom idle until the next pre
   await expect(fold).toHaveAttribute('aria-expanded', 'true')
   await page.keyboard.down('Equal')
   await page.keyboard.down('Equal')
+  const dispatchResults = await page.evaluate(() => {
+    const options = { bubbles: true, cancelable: true, metaKey: true }
+    return [
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { ...options, key: '+', shiftKey: true })),
+      window.dispatchEvent(new KeyboardEvent('keydown', { ...options, key: '=' })),
+    ]
+  })
+  expect(dispatchResults).toEqual([false, false])
   await page.keyboard.up('Equal')
   await page.keyboard.up('Shift')
   await page.keyboard.up('Meta')
+
+  for (let press = 0; press < 3; press++) await page.keyboard.press('Meta+Shift+Equal')
+  await expect(fold).toHaveAttribute('aria-expanded', 'true')
   await expect(zoom).not.toHaveAttribute('data-zoom-calls', /./)
 
-  await page.keyboard.press('Meta+Shift+Equal')
-  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1]')
   await cursor(page, child.attrs.id)
   await page.keyboard.press('Meta+Shift+Equal')
-  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1,1.2]')
+  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1]')
   await fold.focus()
   await page.keyboard.press('Meta+Minus')
-  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1,1.2,1.1]')
+  await expect(zoom).toHaveAttribute('data-zoom-calls', '[1.1,1]')
   await expect(fold).toHaveAttribute('aria-expanded', 'true')
 })
 

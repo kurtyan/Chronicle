@@ -189,7 +189,8 @@ export function WorkOutlinePage() {
   }
 
   function foldWithShortcut(rowId: string, collapse: boolean) {
-    if (searching || !byRow.get(rowId)?.hasChildren || collapsed.has(rowId) === collapse) return false
+    if (searching || !byRow.get(rowId)?.hasChildren) return false
+    // An already expanded or collapsed branch still owns its shortcut.
     setBranchCollapsed(rowId, collapse)
     return true
   }

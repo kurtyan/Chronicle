@@ -106,7 +106,7 @@ function useTauriZoom() {
     const handler = async (e: KeyboardEvent) => {
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0
       const mod = isMac ? e.metaKey : e.ctrlKey
-      if (!mod) return
+      if (!mod || e.defaultPrevented) return
       const { invoke } = await import('@tauri-apps/api/core')
       let newZoom = zoomLevelRef.current
       if (e.key === '+' || e.key === '=') {
@@ -125,8 +125,9 @@ function useTauriZoom() {
       zoomLevelRef.current = newZoom
       localStorage.setItem('chronicle_zoom_level', String(newZoom))
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    // Let window-level shortcuts claim the key before page zoom handles it.
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
   }, [])
 }
 
